@@ -27,28 +27,35 @@ def fetch(ticker: str) -> pd.DataFrame:
     return df.drop(columns=["Adj Close"], errors="ignore")
 
 
-def _open_trade(df: pd.DataFrame) -> dict | None:
-    """Run the engine with and without finalize_trades; the extra row is the open position."""
+def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[float]]:
+    """Run the engine with and without finalize_trades; the extra row (if any) is the
+    open position. Returns (open_trade, avg_trade_days, last_5_closed_tp_pct)."""
     runs = {}
     for fin in (False, True):
         bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
                       trade_on_close=True, finalize_trades=fin)
         runs[fin] = bt.run()["_trades"]
     closed, forced = runs[False], runs[True]
-    if len(forced) <= len(closed):
-        return None
-    tr = forced.iloc[-1]
-    basis = df.Close.rolling(E.bb_len).mean()
-    target = basis.loc[tr.EntryTime]
-    last_close = float(df.Close.iloc[-1])
-    bars_held = int(df.index.get_loc(df.index[-1]) - df.index.get_loc(tr.EntryTime))
-    return {
-        "entry_date": str(tr.EntryTime.date()),
-        "entry_price": round(float(tr.EntryPrice), 4),
-        "target": round(float(target), 4),
-        "bars_held": bars_held,
-        "unrealized_pct": round(100 * (last_close / float(tr.EntryPrice) - 1), 2),
-    }
+
+    avg_trade_days = (round(float(closed.Duration.dt.days.mean()), 1)
+                       if len(closed) else None)
+    last5_tp_pct = [round(100 * x, 2) for x in closed.ReturnPct.tail(5).tolist()]
+
+    open_trade = None
+    if len(forced) > len(closed):
+        tr = forced.iloc[-1]
+        basis = df.Close.rolling(E.bb_len).mean()
+        target = basis.loc[tr.EntryTime]
+        last_close = float(df.Close.iloc[-1])
+        bars_held = int(df.index.get_loc(df.index[-1]) - df.index.get_loc(tr.EntryTime))
+        open_trade = {
+            "entry_date": str(tr.EntryTime.date()),
+            "entry_price": round(float(tr.EntryPrice), 4),
+            "target": round(float(target), 4),
+            "bars_held": bars_held,
+            "unrealized_pct": round(100 * (last_close / float(tr.EntryPrice) - 1), 2),
+        }
+    return open_trade, avg_trade_days, last5_tp_pct
 
 
 def evaluate(ticker: str) -> dict:
@@ -95,6 +102,8 @@ def evaluate(ticker: str) -> dict:
         },
     }
 
+    open_trade, avg_trade_days, last5_tp_pct = _trade_history(df)
+
     return {
         "ticker": ticker,
         "price": round(price, 4),
@@ -102,5 +111,7 @@ def evaluate(ticker: str) -> dict:
         "score": sum(1 for v in conditions.values() if v["pass"]),
         "conditions": conditions,
         "to_tp_pct": round(100 * (basis / price - 1), 2),
-        "open_trade": _open_trade(df),
+        "open_trade": open_trade,
+        "avg_trade_days": avg_trade_days,
+        "last5_tp_pct": last5_tp_pct,
     }
