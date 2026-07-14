@@ -20,7 +20,7 @@ kamaFastLen   = 2
 kamaSlowLen   = 30
 slowErMult       = 3
 extensionLookback = 10
-extensionAtrMult  = 1.0
+extensionAtrMult  = 1.5
 
 // ---------------- Indicators ----------------
 // Kaufman's Adaptive Moving Average (no built-in ta.kama in Pine v6)
