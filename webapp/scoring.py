@@ -27,9 +27,9 @@ def fetch(ticker: str) -> pd.DataFrame:
     return df.drop(columns=["Adj Close"], errors="ignore")
 
 
-def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[float]]:
+def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict]]:
     """Run the engine with and without finalize_trades; the extra row (if any) is the
-    open position. Returns (open_trade, avg_trade_days, last_5_closed_tp_pct)."""
+    open position. Returns (open_trade, avg_trade_days, last_5_closed_trades)."""
     runs = {}
     for fin in (False, True):
         bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
@@ -39,7 +39,11 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[fl
 
     avg_trade_days = (round(float(closed.Duration.dt.days.mean()), 1)
                        if len(closed) else None)
-    last5_tp_pct = [round(100 * x, 2) for x in closed.ReturnPct.tail(5).tolist()]
+    last5 = closed.tail(5)
+    last5_trades = [
+        {"tp_pct": round(100 * row.ReturnPct, 2), "days": int(row.Duration.days)}
+        for row in last5.itertuples()
+    ]
 
     open_trade = None
     if len(forced) > len(closed):
@@ -55,7 +59,7 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[fl
             "bars_held": bars_held,
             "unrealized_pct": round(100 * (last_close / float(tr.EntryPrice) - 1), 2),
         }
-    return open_trade, avg_trade_days, last5_tp_pct
+    return open_trade, avg_trade_days, last5_trades
 
 
 def evaluate(ticker: str) -> dict:
@@ -102,7 +106,7 @@ def evaluate(ticker: str) -> dict:
         },
     }
 
-    open_trade, avg_trade_days, last5_tp_pct = _trade_history(df)
+    open_trade, avg_trade_days, last5_trades = _trade_history(df)
 
     return {
         "ticker": ticker,
@@ -113,5 +117,5 @@ def evaluate(ticker: str) -> dict:
         "to_tp_pct": round(100 * (basis / price - 1), 2),
         "open_trade": open_trade,
         "avg_trade_days": avg_trade_days,
-        "last5_tp_pct": last5_tp_pct,
+        "last5_trades": last5_trades,
     }
