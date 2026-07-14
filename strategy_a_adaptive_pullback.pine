@@ -1,0 +1,85 @@
+//@version=6
+strategy("Adaptive Pullback A (Fixed Trail)", overlay = true, initial_capital = 10000,
+     process_orders_on_close = false)
+
+// ---------------- Inputs (minimal by design) ----------------
+erPeriod = input.int(10, "KAMA Efficiency Ratio Period", minval = 2, group = "Trend")
+riskPct  = input.float(1.0, "Risk % of Equity per Trade", minval = 0.1, group = "Risk")
+
+// ---------------- Hardcoded, research-backed constants ----------------
+adxLen        = 14
+adxThreshold  = 20.0
+rsiLen        = 14
+rsiSignalLen  = 9
+atrLen        = 14
+stopAtrMult   = 1.5
+trailAtrMult  = 3.0
+trailActivateAtrMult = 1.0
+pullbackAtrBuffer    = 0.5
+kamaFastLen   = 2
+kamaSlowLen   = 30
+
+// ---------------- Indicators ----------------
+// Kaufman's Adaptive Moving Average (no built-in ta.kama in Pine v6)
+kamaFastSC = 2.0 / (kamaFastLen + 1)
+kamaSlowSC = 2.0 / (kamaSlowLen + 1)
+kamaChange = math.abs(close - close[erPeriod])
+kamaVolatility = math.sum(math.abs(close - close[1]), erPeriod)
+kamaER = kamaVolatility != 0 ? kamaChange / kamaVolatility : 0.0
+kamaSC = math.pow(kamaER * (kamaFastSC - kamaSlowSC) + kamaSlowSC, 2)
+var float kama = na
+kama := na(kama[1]) ? close : kama[1] + kamaSC * (close - kama[1])
+
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+rsi       = ta.rsi(close, rsiLen)
+rsiSignal = ta.sma(rsi, rsiSignalLen)
+atr       = ta.atr(atrLen)
+
+// ---------------- Regime gate ----------------
+regimeOk = adx > adxThreshold and diPlus > diMinus
+
+// ---------------- Entry trigger: adaptive pullback + RSI resume ----------------
+pulledBack = low <= kama and close > (kama - pullbackAtrBuffer * atr)
+rsiResume  = ta.crossover(rsi, rsiSignal)
+longSignal = regimeOk and pulledBack and rsiResume
+
+// ---------------- Position sizing (risk-based) ----------------
+stopDistance = stopAtrMult * atr
+riskQty = stopDistance > 0 ? (strategy.equity * riskPct / 100) / stopDistance : na
+
+if longSignal and not na(riskQty)
+    strategy.entry("Long", strategy.long, qty = riskQty)
+
+// ---------------- Exit logic ----------------
+var float stopPrice      = na
+var float highSinceEntry = na
+
+if strategy.position_size > 0 and strategy.position_size[1] == 0
+    stopPrice := close - stopAtrMult * atr
+    highSinceEntry := high
+
+if strategy.position_size > 0
+    highSinceEntry := math.max(nz(highSinceEntry), high)
+    entryPrice = strategy.position_avg_price
+    inProfitForTrail = (close - entryPrice) >= trailActivateAtrMult * atr
+    if inProfitForTrail
+        chandelier = highSinceEntry - trailAtrMult * atr
+        stopPrice := math.max(stopPrice, chandelier)
+else
+    stopPrice := na
+    highSinceEntry := na
+
+trendBreak = strategy.position_size > 0 and close < kama
+
+if strategy.position_size > 0
+    strategy.exit("Exit", "Long", stop = stopPrice)
+    if trendBreak
+        strategy.close("Long", comment = "Trend break")
+
+// ---------------- Plots ----------------
+plot(kama, "KAMA", color = color.new(color.blue, 0), linewidth = 2)
+plot(strategy.position_size > 0 ? stopPrice : na, "Stop", color = color.new(color.purple, 0),
+     style = plot.style_circles, linewidth = 1)
+
+plotshape(longSignal, title = "Long Signal", style = shape.triangleup,
+     location = location.belowbar, color = color.new(color.green, 0), size = size.small)
