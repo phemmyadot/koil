@@ -52,6 +52,7 @@ class ExhaustionEngine(Strategy):
     atr_stop_mult = None      # hard stop at entry - k*ATR14
     time_stop_bars = None     # exit if TP not reached within N bars
     min_sma_dist_atr = None   # require close >= sma + d*ATR14 at entry
+    max_atr_pct = None        # skip entries when ATR14/close > this (volatility ceiling)
 
     # Entry window gating for train/test slicing
     entry_start = None
@@ -98,6 +99,10 @@ class ExhaustionEngine(Strategy):
 
         # Entry filter: skip exhaustion sitting right on the macro floor
         if self.min_sma_dist_atr is not None and price < self.macro_ma[-1] + self.min_sma_dist_atr * self.atr[-1]:
+            return
+
+        # Volatility ceiling: exhaustion in hyper-volatile regimes is a falling knife
+        if self.max_atr_pct is not None and self.atr[-1] / price > self.max_atr_pct:
             return
 
         sl = None

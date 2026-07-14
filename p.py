@@ -28,7 +28,9 @@ class PortfolioSizedEngine(Strategy):
     rsi_lower = 40.0
     time_stop_bars = 20      # Pine: timeStopBars (0 = off)
     min_sma_dist_atr = 0.5   # Pine: smaDistAtr (0 = off)
+    max_atr_pct = 0.12       # Pine: atrPctMax=12 (0 = off)
     alloc = 0.15             # Pine: default_qty_value=15
+    entry_start = pd.Timestamp("2022-01-01")  # Pine: startDate default
 
     def init(self):
         self.macro_ma = self.I(SMA, self.data.Close, self.sma_slow_len)
@@ -56,14 +58,18 @@ class PortfolioSizedEngine(Strategy):
             self.trades[0].close()
             return
 
+        if self.entry_start is not None and self.data.index[-1] < self.entry_start:
+            return
+
         macro_bullish = current_price > self.macro_ma[-1]
         bb_exhaustion = current_price < self.bb_lower[-1]
         rsi_washed_out = self.rsi[-1] <= self.rsi_lower
         sma_dist_ok = self.min_sma_dist_atr == 0 or current_price >= self.macro_ma[-1] + self.min_sma_dist_atr * self.atr[-1]
+        vol_ceil_ok = self.max_atr_pct == 0 or self.atr[-1] / current_price <= self.max_atr_pct
 
         # Pine block 3 — Entry fills at signal bar close (trade_on_close=True);
         # tp= is the resting limit at the frozen mid-band (strategy.exit limit=targetMid)
-        if not self.trades and macro_bullish and bb_exhaustion and rsi_washed_out and sma_dist_ok:
+        if not self.trades and macro_bullish and bb_exhaustion and rsi_washed_out and sma_dist_ok and vol_ceil_ok:
             self.buy(size=self.alloc, tp=self.bb_basis[-1])
 
 if __name__ == "__main__":
@@ -73,7 +79,8 @@ if __name__ == "__main__":
     
     for ticker in target_universe:
         # auto_adjust=False: TradingView uses split-adjusted, NOT dividend-adjusted prices
-        df = yf.download(ticker, start="2020-01-01", end="2026-06-01", interval="1d", progress=False, auto_adjust=False)
+        # start 2020 gives the 150-bar warm-up lead-in ahead of the 2022 entry window
+        df = yf.download(ticker, start="2020-01-01", interval="1d", progress=False, auto_adjust=False)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df.drop(columns=["Adj Close"], errors="ignore")

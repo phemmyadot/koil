@@ -16,6 +16,7 @@ rsiLen     = input.int(14, title="RSI Length")
 rsiLower   = input.float(40.0, title="RSI Exhaustion Threshold")
 timeStopBars = input.int(20, title="Time Stop (bars, 0 = off)", minval=0)
 smaDistAtr   = input.float(0.5, title="Entry: Min ATR Distance Above SMA (0 = off)", step=0.25, minval=0)
+atrPctMax    = input.float(12.0, title="Entry: Max ATR as % of Price (0 = off)", step=1.0, minval=0)
 startDate  = input.time(timestamp("1 Jan 2022 00:00 +0000"), title="Backtest Start")
 endDate    = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="Backtest End")
 
@@ -40,9 +41,10 @@ macroBullish   = close > macroSma
 bbExhaustion   = close < bbLower
 rsiWashedOut   = rsiVal <= rsiLower
 smaDistOk      = smaDistAtr == 0 or close >= macroSma + smaDistAtr * atrVal
+volCeilOk      = atrPctMax == 0 or (atrVal / close) * 100 <= atrPctMax
 inWindow       = time >= startDate and time <= endDate
 
-entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOut and smaDistOk and inWindow
+entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOut and smaDistOk and volCeilOk and inWindow
 
 // --- State Machine Tracking ---
 var float targetMid = na
