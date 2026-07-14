@@ -49,17 +49,33 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
     if len(forced) > len(closed):
         tr = forced.iloc[-1]
         basis = df.Close.rolling(E.bb_len).mean()
-        target = basis.loc[tr.EntryTime]
+        target = float(basis.loc[tr.EntryTime])
         last_close = float(df.Close.iloc[-1])
         bars_held = int(df.index.get_loc(df.index[-1]) - df.index.get_loc(tr.EntryTime))
+        advice, advice_reason = _trade_advice(target, last_close, bars_held)
         open_trade = {
             "entry_date": str(tr.EntryTime.date()),
             "entry_price": round(float(tr.EntryPrice), 4),
-            "target": round(float(target), 4),
+            "target": round(target, 4),
             "bars_held": bars_held,
             "unrealized_pct": round(100 * (last_close / float(tr.EntryPrice) - 1), 2),
+            "advice": advice,
+            "advice_reason": advice_reason,
         }
     return open_trade, avg_trade_days, last5_trades
+
+
+def _trade_advice(target: float, last_close: float, bars_held: int) -> tuple[str, str]:
+    """TAKE/SKIP call for someone considering entering *now* on an already-open
+    signal, based on the same time stop (time_stop_bars) the engine itself uses
+    to force-close stale trades, plus whether the mean-reversion target is
+    already spent."""
+    bars_left = E.time_stop_bars - bars_held
+    if last_close >= target:
+        return "SKIP", "already at/above target -- upside spent"
+    if bars_left <= 3:
+        return "SKIP", f"time stop in {bars_left}d -- thesis running out of room"
+    return "TAKE", f"{bars_left}d left before time stop, target not yet hit"
 
 
 def evaluate(ticker: str) -> dict:
