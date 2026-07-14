@@ -23,13 +23,13 @@ def ATR(high, low, close, n=14):
 class PortfolioSizedEngine(Strategy):
     sma_slow_len = 150  
     bb_len = 20
-    bb_mult = 1.75      
+    bb_mult = 1.5
     rsi_len = 14
     rsi_lower = 40.0
     time_stop_bars = 20      # Pine: timeStopBars (0 = off)
     min_sma_dist_atr = 0.5   # Pine: smaDistAtr (0 = off)
     max_atr_pct = 0.12       # Pine: atrPctMax=12 (0 = off)
-    alloc = 0.15             # Pine: default_qty_value=15
+    alloc = 0.35             # Pine: default_qty_value=35
     entry_start = pd.Timestamp("2022-01-01")  # Pine: startDate default
 
     def init(self):
@@ -73,7 +73,11 @@ class PortfolioSizedEngine(Strategy):
             self.buy(size=self.alloc, tp=self.bb_basis[-1])
 
 if __name__ == "__main__":
-    target_universe = ['NVTS', 'MX', 'SKYT', 'MRAM', 'ATOM', 'LAR', 'ALOY', 'AXGN', 'UFO', 'NEBX']
+    # Curated via Finviz screen + double-gated backtest (select 2022-2024, confirm 2025-2026):
+    # cap 300M+, avg vol >500K, price >$5, above SMA200, SMA50>SMA200, weekly volatility >5%
+    target_universe = ['VTRS', 'SGHC', 'SLDE', 'BOC', 'JBGS', 'ABX', 'TAL',           # original 7
+                       'WULF', 'DFTX', 'EWTX', 'ADPT', 'AUR', 'TRVI', 'SNDX',         # +13 via Finviz <$50
+                       'ACHV', 'DSGN', 'ALM', 'SKE', 'SG', 'AGIO']                    #  double-gated 22-24/25-26
     
     print("Executing Low-Allocation Unconstrained Portfolio Run:\n")
     

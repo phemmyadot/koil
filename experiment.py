@@ -13,7 +13,9 @@ from backtesting import Backtest, Strategy
 
 warnings.filterwarnings("ignore", message="Some trades remain open")
 
-TICKERS = ['NVTS', 'MX', 'SKYT', 'MRAM', 'ATOM', 'LAR', 'ALOY', 'AXGN', 'UFO', 'NEBX']
+TICKERS = ['VTRS', 'SGHC', 'SLDE', 'BOC', 'JBGS', 'ABX', 'TAL',
+           'WULF', 'DFTX', 'EWTX', 'ADPT', 'AUR', 'TRVI', 'SNDX',
+           'ACHV', 'DSGN', 'ALM', 'SKE', 'SG', 'AGIO']
 DATA_START = "2019-01-01"  # lead-in so 2020 entries have full indicator warm-up
 DATA_END = "2026-06-01"
 TRAIN = (pd.Timestamp("2020-01-01"), pd.Timestamp("2023-12-31"))
