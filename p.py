@@ -29,6 +29,7 @@ class PortfolioSizedEngine(Strategy):
     time_stop_bars = 20      # Pine: timeStopBars (0 = off)
     min_sma_dist_atr = 0.5   # Pine: smaDistAtr (0 = off)
     max_atr_pct = 0.12       # Pine: atrPctMax=12 (0 = off)
+    min_atr_pct = 0.04       # Pine: atrPctMin=4 (0 = off) — payoff floor from top-50 trade analysis
     alloc = 0.35             # Pine: default_qty_value=35
     entry_start = pd.Timestamp("2022-01-01")  # Pine: startDate default
 
@@ -66,10 +67,11 @@ class PortfolioSizedEngine(Strategy):
         rsi_washed_out = self.rsi[-1] <= self.rsi_lower
         sma_dist_ok = self.min_sma_dist_atr == 0 or current_price >= self.macro_ma[-1] + self.min_sma_dist_atr * self.atr[-1]
         vol_ceil_ok = self.max_atr_pct == 0 or self.atr[-1] / current_price <= self.max_atr_pct
+        vol_floor_ok = self.min_atr_pct == 0 or self.atr[-1] / current_price >= self.min_atr_pct
 
         # Pine block 3 — Entry fills at signal bar close (trade_on_close=True);
         # tp= is the resting limit at the frozen mid-band (strategy.exit limit=targetMid)
-        if not self.trades and macro_bullish and bb_exhaustion and rsi_washed_out and sma_dist_ok and vol_ceil_ok:
+        if not self.trades and macro_bullish and bb_exhaustion and rsi_washed_out and sma_dist_ok and vol_ceil_ok and vol_floor_ok:
             self.buy(size=self.alloc, tp=self.bb_basis[-1])
 
 if __name__ == "__main__":

@@ -8,15 +8,18 @@ strategy("Hardened Exhaustion Engine - Production 5% Sized",
      commission_value=0.1,
      process_orders_on_close=true)
 
-// --- Strategy Inputs (High-Yield Parameters) ---
-smaSlowLen = input.int(150, title="Macro SMA Length")
-bbLen      = input.int(20, title="Bollinger Band Length")
-bbMult     = input.float(1.5, title="Bollinger Band Multiplier")
-rsiLen     = input.int(14, title="RSI Length")
-rsiLower   = input.float(40.0, title="RSI Exhaustion Threshold")
-timeStopBars = input.int(20, title="Time Stop (bars, 0 = off)", minval=0)
-smaDistAtr   = input.float(0.5, title="Entry: Min ATR Distance Above SMA (0 = off)", step=0.25, minval=0)
-atrPctMax    = input.float(12.0, title="Entry: Max ATR as % of Price (0 = off)", step=1.0, minval=0)
+// --- Strategy Inputs ---
+// Bounds reflect the validated ranges from the 2022-2024 / 2025-2026 train-test sweeps;
+// defaults are the best gate-passing values as of 2026-07.
+smaSlowLen = input.int(150, title="Macro SMA Length", minval=100, maxval=200, step=25)
+bbLen      = input.int(20, title="Bollinger Band Length", minval=15, maxval=25)
+bbMult     = input.float(1.5, title="Bollinger Band Multiplier", minval=1.25, maxval=2.0, step=0.25)
+rsiLen     = input.int(14, title="RSI Length", minval=7, maxval=21)
+rsiLower   = input.float(40.0, title="RSI Exhaustion Threshold", minval=35, maxval=45, step=1)
+timeStopBars = input.int(20, title="Time Stop (bars, 0 = off)", minval=0, maxval=30)
+smaDistAtr   = input.float(0.5, title="Entry: Min ATR Distance Above SMA (0 = off)", minval=0, maxval=1.0, step=0.25)
+atrPctMax    = input.float(12.0, title="Entry: Max ATR as % of Price (0 = off)", minval=0, maxval=16, step=1.0)
+atrPctMin    = input.float(4.0, title="Entry: Min ATR as % of Price (0 = off)", minval=0, maxval=8, step=1.0)
 startDate  = input.time(timestamp("1 Jan 2022 00:00 +0000"), title="Backtest Start")
 endDate    = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="Backtest End")
 
@@ -42,9 +45,10 @@ bbExhaustion   = close < bbLower
 rsiWashedOut   = rsiVal <= rsiLower
 smaDistOk      = smaDistAtr == 0 or close >= macroSma + smaDistAtr * atrVal
 volCeilOk      = atrPctMax == 0 or (atrVal / close) * 100 <= atrPctMax
+volFloorOk     = atrPctMin == 0 or (atrVal / close) * 100 >= atrPctMin
 inWindow       = time >= startDate and time <= endDate
 
-entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOut and smaDistOk and volCeilOk and inWindow
+entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOut and smaDistOk and volCeilOk and volFloorOk and inWindow
 
 // --- State Machine Tracking ---
 var float targetMid = na

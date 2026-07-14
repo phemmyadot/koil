@@ -55,6 +55,7 @@ class ExhaustionEngine(Strategy):
     time_stop_bars = None     # exit if TP not reached within N bars
     min_sma_dist_atr = None   # require close >= sma + d*ATR14 at entry
     max_atr_pct = None        # skip entries when ATR14/close > this (volatility ceiling)
+    min_atr_pct = None        # skip entries when ATR14/close < this (payoff floor: low ATR = tiny TP gap)
 
     # Entry window gating for train/test slicing
     entry_start = None
@@ -105,6 +106,10 @@ class ExhaustionEngine(Strategy):
 
         # Volatility ceiling: exhaustion in hyper-volatile regimes is a falling knife
         if self.max_atr_pct is not None and self.atr[-1] / price > self.max_atr_pct:
+            return
+
+        # Payoff floor: low-ATR entries offer small TP gaps with the same downside
+        if self.min_atr_pct is not None and self.atr[-1] / price < self.min_atr_pct:
             return
 
         sl = None
