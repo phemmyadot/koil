@@ -12,11 +12,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from webapp.scoring import evaluate
-
-# Universe: edit here (mirrors p.py target_universe)
-TICKERS = ['VTRS', 'SGHC', 'SLDE', 'BOC', 'JBGS', 'ABX', 'TAL',
-           'WULF', 'DFTX', 'EWTX', 'ADPT', 'AUR', 'TRVI', 'SNDX',
-           'ACHV', 'DSGN', 'ALM', 'SKE', 'SG', 'AGIO']
+from webapp.tickers import TICKERS
 
 CACHE_TTL = 15 * 60  # seconds
 _cache: dict[str, tuple[float, dict]] = {}
@@ -41,7 +37,7 @@ def _get_one(ticker: str, refresh: bool) -> tuple[str, dict | None, str | None]:
 def tickers(refresh: int = 0):
     all_cached = not refresh and all(
         t in _cache and time.time() - _cache[t][0] < CACHE_TTL for t in TICKERS)
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=20) as pool:
         results = list(pool.map(lambda t: _get_one(t, bool(refresh)), TICKERS))
     payloads = [p for _, p, _ in results if p is not None]
     errors = {t: e for t, _, e in results if e is not None}
