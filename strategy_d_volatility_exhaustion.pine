@@ -39,20 +39,20 @@ entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOu
 
 // --- State Machine Tracking (Unconstrained Time Horizon) ---
 var float targetMid = na
-var int lastExitBar = -1
 
-// 1. Process Intraday Take-Profit Exit Natively at Middle Band
-if (strategy.position_size > 0 and high >= targetMid)
-    strategy.close("Exhaustion_Long", comment="TP Reversion")
-    lastExitBar := bar_index
+// 1. Invalidation Stop: trend break below the macro floor closes the trade
+if (strategy.position_size > 0 and close < macroSma)
+    strategy.close("Exhaustion_Long", comment="Stop: Trend Break")
 
-// 2. Process Entry Condition on Close (with Same-Bar Lockout)
-if (strategy.position_size == 0 and entryCondition and bar_index > lastExitBar)
-    strategy.entry("Exhaustion_Long", strategy.long, comment="Enter Position")
+// 2. Entry on Close; take-profit as a resting limit at the frozen mid-band
+if (strategy.position_size == 0 and entryCondition)
     targetMid := bbBasis
+    strategy.entry("Exhaustion_Long", strategy.long, comment="Enter Position")
+    strategy.exit("TP Reversion", "Exhaustion_Long", limit=targetMid)
 
 // --- Visual Chart Layout ---
 plot(macroSma, color=color.blue, linewidth=2, title="150 SMA Macro floor")
 plot(bbBasis, color=color.orange, title="BB Basis Mean Line")
 plot(bbLower, color=color.red, title="BB Lower Boundary")
+plot(strategy.position_size > 0 ? targetMid : na, color=color.green, style=plot.style_linebr, linewidth=2, title="Active TP Target")
 bgcolor(entryCondition ? color.new(color.green, 85) : na, title="Trigger Zone")
