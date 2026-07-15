@@ -31,7 +31,7 @@
   button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
            padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; margin-left: auto; }
   button:disabled { opacity: 0.5; cursor: wait; }
-  .cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .cardgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
   .tickercard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
                 padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
   .tickercard.fire { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
@@ -54,21 +54,22 @@
   .scorebar i.on { background: var(--green); }
   .tickercard.fire .scorebar i.on { background: var(--gold); }
   .chip { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px;
-          padding: 2px 6px; cursor: default; text-align: center; }
+          padding: 2px 6px; cursor: default; text-align: center; white-space: nowrap; }
   .chip.ok { background: var(--green-bg); color: var(--green); }
   .chip.no { background: var(--red-bg); color: var(--red); }
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
   .chip.neutral { background: var(--line); color: var(--muted); }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .badge { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 6px;
-           padding: 3px 8px; background: var(--accent-bg); color: var(--accent); }
+           padding: 3px 8px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; }
   .pos { color: var(--green); } .neg { color: var(--red); }
   .last5 { font-size: 11px; }
   .advicewhy { color: var(--muted); font-size: 11px; }
   .opentrade { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
   .opentrade .verdict { display: flex; align-items: center; gap: 6px; }
   .firetag { display:inline-block; font-size: 10.5px; font-weight: 700; color: var(--gold);
-             background: var(--gold-bg); border-radius: 5px; padding: 2px 6px; margin-left: 6px; }
+             background: var(--gold-bg); border-radius: 5px; padding: 2px 6px; margin-left: 6px;
+             white-space: nowrap; }
   .firetag.weak { color: var(--muted); background: var(--line); }
   .foot { color: var(--muted); font-size: 12px; margin-top: 12px; }
   .pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; }
@@ -89,6 +90,10 @@
              border: 3px solid var(--line); border-top-color: var(--accent);
              animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 1080px) {
+    .cardgrid { grid-template-columns: repeat(2, 1fr); }
+  }
 
   @media (max-width: 720px) {
     .wrap { padding: 10px 8px 24px; }
