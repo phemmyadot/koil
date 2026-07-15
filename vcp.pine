@@ -1,0 +1,330 @@
+//@version=6
+strategy("VCP Master v9.3 - Production Base Standard", overlay=true, initial_capital=1500, default_qty_type=strategy.percent_of_equity, default_qty_value=66.66, calc_on_every_tick=false)
+
+// ==========================================
+// USER INPUTS & PARAMETERS (Strict Institutional Bounds)
+// ==========================================
+var string G_SYMBOL = "Stage 0: Symbol-Specific Presets"
+var string G_DATE   = "Stage 0b: Backtest Date Range"
+var string G_ENTRY  = "Stage 1: Adaptive Entry Settings"
+var string G_TRAIL  = "Stage 4: Multi-Tier Risk & Protection"
+var string G_TIME   = "Stage 5: Intelligent Time Stop"
+
+// Stage 0 Input - placed first so it's the first thing you see in Settings
+bool use_symbol_presets = input.bool(true, title="Use Symbol-Specific Presets (overrides inputs below)", group=G_SYMBOL)
+
+// Stage 0b Inputs - Date Filter
+bool use_date_filter = input.bool(false, title="Restrict Backtest to Date Range", group=G_DATE)
+int start_date        = input.time(timestamp("2020-01-01 00:00"), title="Start Date", group=G_DATE)
+int end_date           = input.time(timestamp("2069-12-31 00:00"), title="End Date", group=G_DATE)
+bool in_date_range     = not use_date_filter or (time >= start_date and time <= end_date)
+
+// Stage 1 Inputs - Validated Ranges
+int atr_len         = input.int(22, title="ATR Length", group=G_ENTRY, minval=10, maxval=25, step=1)
+float atr_mult      = input.float(3, title="Initial ATR Stop Multiplier", group=G_ENTRY, step=0.1, minval=1.0, maxval=3.0)
+float vol_mult      = input.float(1.4, title="Breakout Volume Multiplier (x 50d avg)", group=G_ENTRY, step=0.1, minval=1.0, maxval=3.0)
+float risk_pct      = input.float(1.0, title="Risk % of Equity per Trade", group=G_ENTRY, step=0.1, minval=0.1, maxval=5.0)
+
+// Stage 4 Inputs - Hardcoded Safety Margins
+float be_trigger    = input.float(7.9, title="Breakeven Activation Tier (%)", group=G_TRAIL, step=0.1, minval=5.0, maxval=10.0)
+float trail_tier    = input.float(13.1, title="Aggressive Trail Tier (%)", group=G_TRAIL, step=0.1, minval=8.0, maxval=15.0)
+float tp_target     = input.float(11, title="Partial Take Profit Target (%)", group=G_TRAIL, step=1.0, minval=10.0, maxval=20.0)
+string stop_style   = input.string("Dynamic ATR", title="Stop Style Profile", options=["Dynamic ATR", "Static %"], group=G_TRAIL)
+
+// Stage 5 Inputs - Inactivity Parameters
+bool use_time       = input.bool(true, title="Enable Inactivity Time Stop", group=G_TIME)
+int max_bars        = input.int(20, title="Max Bars to Stagnancy Check", group=G_TIME, step=1, minval=5, maxval=20)
+int rolling_window  = input.int(20, title="Rolling Trade Window for Analytics", group=G_TIME, minval=5, maxval=100, step=5)
+
+// ==========================================
+// STAGE 0: PER-SYMBOL PRESET OVERRIDES
+// Add one line per ticker below. Anything not listed keeps the
+// manual input values above (untouched fallback behavior).
+// ==========================================
+bool preset_applied = false
+if use_symbol_presets
+    switch syminfo.ticker
+        "MSFT" =>
+            atr_len      := 20
+            atr_mult     := 2.2
+            be_trigger   := 6.0
+            trail_tier   := 12.0
+            tp_target    := 10.0
+            stop_style   := "Dynamic ATR"
+            max_bars     := 15
+            preset_applied := true
+        "TSLA" =>
+            atr_len      := 25
+            atr_mult     := 2.8
+            be_trigger   := 8.5
+            trail_tier   := 15.0
+            tp_target    := 15.0
+            stop_style   := "Static %"
+            max_bars     := 20
+            preset_applied := true
+        // =>
+            // No preset for this symbol: keep manual input values as-is
+
+
+// ==========================================
+// SYSTEM INDICATORS & RE-SCALING ENGINE
+// ==========================================
+float atr_value          = ta.atr(atr_len)
+float historical_atr_avg = ta.sma(atr_value, 100)
+
+// Macro trend filter to preserve trades building institutional launchpads
+float macro_base_filter  = ta.ema(close, 50)
+bool macro_trend_bullish = close > macro_base_filter
+
+
+// ==========================================
+// STAGE 1: ADAPTIVE VCP BREAKOUT DETECTION
+// ==========================================
+bool asset_is_compressed = atr_value <= (historical_atr_avg * 1.15)
+float local_resistance   = ta.highest(high, 20)[1]
+// Volume confirmation: a breakout above the contraction high needs institutional
+// participation behind it (Minervini's standard: 1.4x-2.0x the 50-day average
+// volume), otherwise it's much more prone to failing/reversing.
+float vol_avg_50         = ta.sma(volume, 50)
+bool volume_confirmed    = volume >= vol_mult * vol_avg_50
+bool breakout_triggered  = close > local_resistance and asset_is_compressed and volume_confirmed
+
+
+// ==========================================
+// EXECUTION & POSITION TRACKING STATE
+// ==========================================
+var float entry_price  = na
+var float stop_price   = na
+var bool be_activated  = false
+var bool tp_half_hit   = false
+var int bars_in_trade  = 0
+var float entry_qty    = na
+
+// Persistent arrays to track metrics across history
+var float[] trade_r_multiples = array.new_float(0)
+var int[] trade_durations     = array.new_int(0) // Tracks bars per closed trade
+var float initial_risk_series = na
+var int last_closed_count     = 0
+
+// Real (complete round-trip) trade stats -- a partial-TP fill and the final
+// exit both post as separate entries in strategy.closedtrades/wintrades/
+// grossprofit/grossloss (Pine's native trade model splits a partially-closed
+// position into multiple trade records). That inflates the matrix's Trade
+// Count and Win Rate versus what a trader actually experiences, since a
+// partial-TP leg is always a "win" by construction. These accumulate every
+// closed-trade leg's dollar profit and only finalize into one real trade once
+// the position is fully flat, so the matrix reflects real trades, not legs.
+var float real_trade_pnl    = 0.0
+var float real_gross_win    = 0.0
+var float real_gross_loss   = 0.0
+var int   real_total_trades = 0
+var int   real_win_trades   = 0
+
+// Accumulate every newly-closed leg's dollar profit into the current real trade.
+if strategy.closedtrades > last_closed_count
+    for i = last_closed_count to strategy.closedtrades - 1
+        real_trade_pnl := real_trade_pnl + strategy.closedtrades.profit(i)
+    last_closed_count := strategy.closedtrades
+
+if (strategy.position_size > 0)
+    bars_in_trade := bars_in_trade + 1
+    if na(entry_price)
+        entry_price := strategy.opentrades.entry_price(0)
+        stop_price  := entry_price - (atr_value * atr_mult)
+        initial_risk_series := atr_value * atr_mult
+        entry_qty    := strategy.position_size
+else
+    // Finalize the real trade the bar the position actually goes flat
+    // (entry_price is still non-na here, from before this branch resets it).
+    if not na(entry_price)
+        float total_dollar_risk = initial_risk_series * entry_qty
+        float trade_r_output    = total_dollar_risk > 0 ? real_trade_pnl / total_dollar_risk : 0.0
+        array.push(trade_r_multiples, trade_r_output)
+        array.push(trade_durations, bars_in_trade)
+
+        real_total_trades := real_total_trades + 1
+        if real_trade_pnl > 0
+            real_win_trades := real_win_trades + 1
+            real_gross_win  := real_gross_win + real_trade_pnl
+        else
+            real_gross_loss := real_gross_loss + math.abs(real_trade_pnl)
+        real_trade_pnl := 0.0
+
+    entry_price      := na
+    stop_price       := na
+    be_activated     := false
+    tp_half_hit      := false
+    bars_in_trade    := 0
+    entry_qty        := na
+
+// Fire Strategy Entry Leg -- risk-based sizing: position size is derived from
+// the actual stop distance (atr_value * atr_mult) so every trade risks the
+// same % of equity regardless of how tight or wide that stock's ATR stop is,
+// instead of a flat 66.66%-of-equity allocation that let a tight-stop trade
+// and a wide-stop trade carry very different dollar risk for the same size.
+float stop_distance = atr_value * atr_mult
+float risk_qty       = stop_distance > 0 ? (strategy.equity * risk_pct / 100) / stop_distance : na
+
+if (breakout_triggered and strategy.position_size == 0 and in_date_range and not na(risk_qty))
+    strategy.entry("Long", strategy.long, qty=risk_qty, comment="Long")
+
+
+// ==========================================
+// STAGE 4: UPGRADED MULTI-TIER TRADE MANAGEMENT
+// ==========================================
+var float high_since_entry = na
+if (strategy.position_size > 0)
+    if na(high_since_entry)
+        high_since_entry := high
+    else
+        high_since_entry := math.max(high_since_entry, high)
+        
+    float max_gain_pct = ((high_since_entry - entry_price) / entry_price) * 100
+    
+    // Tier 1: Early Breakeven Protection
+    if (max_gain_pct >= be_trigger and not be_activated)
+        stop_price   := entry_price
+        be_activated := true
+
+    // Tier 2: Dynamic Scaling Stop Floor
+    if (stop_style == "Dynamic ATR")
+        if (tp_half_hit or max_gain_pct >= trail_tier)
+            stop_price := math.max(stop_price, close - (atr_value * 2.5))
+        else if (be_activated)
+            stop_price := math.max(stop_price, math.max(entry_price, close - (atr_value * 4.5)))
+        else
+            stop_price := math.max(stop_price, entry_price - (atr_value * atr_mult))
+    else
+        if (max_gain_pct >= trail_tier or tp_half_hit)
+            stop_price := math.max(stop_price, entry_price * (1 + (trail_tier * 0.005)))
+
+    // Partial Take Profit Execution
+    if (max_gain_pct >= tp_target and not tp_half_hit)
+        strategy.order("TP Half", strategy.short, qty=strategy.position_size * 0.5, comment="TP Half")
+        tp_half_hit := true
+
+    // Capital Exit Trigger
+    if (close < stop_price or low < stop_price)
+        strategy.close("Long", comment="Ladder Floor Hit")
+else
+    high_since_entry := na
+
+
+// ==========================================
+// STAGE 5: MACRO TREND INACTIVITY OVERRIDE
+// ==========================================
+if (use_time and (bars_in_trade >= max_bars))
+    if (close <= entry_price and not macro_trend_bullish)
+        strategy.close("Long", comment="Time Stop: Stagnant")
+
+
+// ==========================================
+// VISUAL DIAGNOSTICS & GRADED DISPLAY MATRIX
+// ==========================================
+plot(strategy.position_size > 0 ? stop_price : na, color=color.green, style=plot.style_linebr, linewidth=2, title="Dynamic Tracking Floor")
+plot(strategy.position_size > 0 ? entry_price : na, color=color.blue, style=plot.style_circles, linewidth=1, title="Execution Baseline")
+
+// Expanded Matrix to 2 columns by 16 rows to include new duration stats + live settings readout
+var table matrix = table.new(position.bottom_right, 2, 16, bgcolor=color.new(color.black, 15), border_color=color.gray, border_width=1)
+
+if barstate.islast
+    int total_trades    = real_total_trades
+    int win_trades      = real_win_trades
+
+    float win_rate      = total_trades > 0 ? (float(win_trades) / float(total_trades)) * 100.0 : 0.0
+    float profit_factor = real_gross_loss > 0 ? real_gross_win / real_gross_loss : (real_gross_win > 0 ? 99.99 : 0.0)
+    float recovery_fact = strategy.max_drawdown > 0 ? strategy.netprofit / strategy.max_drawdown : (strategy.netprofit > 0 ? 99.99 : 0.0)
+    
+    float total_r_sum = 0.0
+    int r_count       = array.size(trade_r_multiples)
+    if r_count > 0
+        for i = 0 to r_count - 1
+            total_r_sum := total_r_sum + array.get(trade_r_multiples, i)
+    
+    float expectancy = r_count > 0 ? total_r_sum / r_count : 0.0
+
+    // Rolling Sample Window Calculation for Avg Trading Days
+    float total_days_sum = 0.0
+    int duration_count   = array.size(trade_durations)
+    
+    int start_index = math.max(0, duration_count - rolling_window)
+    int actual_sampled_trades = duration_count - start_index
+
+    if actual_sampled_trades > 0
+        for i = start_index to duration_count - 1
+            total_days_sum := total_days_sum + array.get(trade_durations, i)
+    
+    float avg_trading_days = actual_sampled_trades > 0 ? total_days_sum / actual_sampled_trades : 0.0
+
+    // Extract Last 5 Closed Trading Days String
+    string last_5_string = "N/A"
+    if duration_count >= 5
+        last_5_string := str.tostring(array.get(trade_durations, duration_count - 1)) + ", " +
+                         str.tostring(array.get(trade_durations, duration_count - 2)) + ", " +
+                         str.tostring(array.get(trade_durations, duration_count - 3)) + ", " +
+                         str.tostring(array.get(trade_durations, duration_count - 4)) + ", " +
+                         str.tostring(array.get(trade_durations, duration_count - 5))
+    else if duration_count > 0
+        last_5_string := ""
+        for i = duration_count - 1 to 0
+            last_5_string := last_5_string + str.tostring(array.get(trade_durations, i)) + (i > 0 ? ", " : "")
+
+    // Graded UI Matrix Coloring Rules
+    color pf_color = profit_factor >= 1.40 ? color.green : (profit_factor >= 1.00 ? color.orange : color.red)
+    color wr_color = win_rate >= 55.0 ? color.green : (win_rate >= 45.0 ? color.orange : color.red)
+    color exp_color = expectancy >= 0.35 ? color.green : (expectancy >= 0.00 ? color.orange : color.red)
+    color rf_color = recovery_fact >= 2.0 ? color.green : (recovery_fact >= 0.0 ? color.orange : color.red)
+
+    // Render Matrix Cells
+    table.cell(matrix, 0, 0, "Collation Matrix V9.3", bgcolor=color.purple, text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 0, "[" + stop_style + "]", bgcolor=color.purple, text_color=color.white, text_size=size.small)
+    
+    table.cell(matrix, 0, 1, "Total Trades", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 1, str.tostring(total_trades), text_color=color.white, text_size=size.small)
+    
+    table.cell(matrix, 0, 2, "Profit Factor (PF)", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 2, str.tostring(profit_factor, "#.##"), text_color=pf_color, text_size=size.small)
+    
+    table.cell(matrix, 0, 3, "Win Rate", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 3, str.tostring(win_rate, "#.#") + "%", text_color=wr_color, text_size=size.small)
+    
+    table.cell(matrix, 0, 4, "Expectancy (R-Mult)", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 4, str.tostring(expectancy, "#.##") + "x", text_color=exp_color, text_size=size.small)
+    
+    table.cell(matrix, 0, 5, "Recovery Factor", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 5, str.tostring(recovery_fact, "#.##"), text_color=rf_color, text_size=size.small)
+
+    // Dynamically tracking label updates based on target pool bounds
+    table.cell(matrix, 0, 6, "Avg Days (Last " + str.tostring(actual_sampled_trades) + ")", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 6, str.tostring(avg_trading_days, "#.#") + " d", text_color=color.white, text_size=size.small)
+
+    table.cell(matrix, 0, 7, "Last 5 Trades (Days)", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 7, last_5_string, text_color=color.white, text_size=size.small)
+
+    // Live Active Settings Readout (reflects preset overrides if applied)
+    color preset_color = use_symbol_presets ? color.aqua : color.gray
+    table.cell(matrix, 0, 8, "Active Settings" + (use_symbol_presets ? " [Preset]" : " [Manual]"), bgcolor=color.purple, text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 8, syminfo.ticker, bgcolor=color.purple, text_color=color.white, text_size=size.small)
+
+    table.cell(matrix, 0, 9, "ATR Length", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 9, str.tostring(atr_len), text_color=preset_color, text_size=size.small)
+
+    table.cell(matrix, 0, 10, "ATR Stop Mult", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 10, str.tostring(atr_mult, "#.##"), text_color=preset_color, text_size=size.small)
+
+    table.cell(matrix, 0, 11, "Breakeven Tier", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 11, str.tostring(be_trigger, "#.#") + "%", text_color=preset_color, text_size=size.small)
+
+    table.cell(matrix, 0, 12, "Trail Tier", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 12, str.tostring(trail_tier, "#.#") + "%", text_color=preset_color, text_size=size.small)
+
+    table.cell(matrix, 0, 13, "TP Target", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 13, str.tostring(tp_target, "#.#") + "%", text_color=preset_color, text_size=size.small)
+
+    table.cell(matrix, 0, 14, "Stop Style", text_color=color.white, text_size=size.small)
+    table.cell(matrix, 1, 14, stop_style, text_color=preset_color, text_size=size.small)
+
+    bool max_bars_disabled = preset_applied ? (max_bars == 0) : not use_time
+    color max_bars_color = max_bars_disabled ? color.gray : preset_color
+    table.cell(matrix, 0, 15, "Max Bars (Time Stop)", text_color=max_bars_disabled ? color.gray : color.white, text_size=size.small)
+    table.cell(matrix, 1, 15, str.tostring(max_bars), text_color=max_bars_color, text_size=size.small)
