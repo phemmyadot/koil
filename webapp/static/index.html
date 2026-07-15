@@ -58,6 +58,7 @@
   .chip.ok { background: var(--green-bg); color: var(--green); }
   .chip.no { background: var(--red-bg); color: var(--red); }
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
+  .chip.neutral { background: var(--line); color: var(--muted); }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .badge { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 6px;
            padding: 3px 8px; background: var(--accent-bg); color: var(--accent); }
@@ -79,6 +80,15 @@
   .progressfill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px;
                   transition: width 0.3s ease-out; }
   .progresslabel { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .pageoverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1000;
+                 display: flex; align-items: center; justify-content: center; }
+  .pageoverlaybox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                     padding: 22px 28px; display: flex; flex-direction: column; align-items: center;
+                     gap: 12px; color: var(--text); font-size: 13.5px; }
+  .spinner { width: 28px; height: 28px; border-radius: 50%;
+             border: 3px solid var(--line); border-top-color: var(--accent);
+             animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   @media (max-width: 720px) {
     .wrap { padding: 10px 8px 24px; }
@@ -105,6 +115,12 @@
   <div class="progresswrap" id="progresswrap" style="display:none">
     <div class="progressbar"><div class="progressfill" id="progressfill"></div></div>
     <span class="progresslabel" id="progresslabel"></span>
+  </div>
+  <div class="pageoverlay" id="pageoverlay" style="display:none">
+    <div class="pageoverlaybox">
+      <div class="spinner"></div>
+      <span id="pageoverlaytext">Loading page&hellip;</span>
+    </div>
   </div>
   <div class="filterbar">
     <label for="scoreFilter">Min score</label>
@@ -177,33 +193,37 @@ function last5(trades) {
     return `<span class="${cls}">${sign}${t.tp_pct}% - ${t.days}D</span>`;
   }).join(", ") + `</span>`;
 }
-const RATING_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
+const VERDICT_CLASS = { TAKE: "ok", SKIP: "no", "IN TRADE": "mid", "TP HIT": "ok", "NO SIGNAL": "neutral" };
 function otherStrategy(s) {
   if (!s) return '<span style="color:var(--muted)">—</span>';
-  const title = `${s.n_trades} trades &middot; WR ${s.win_rate}% &middot; PF ${s.profit_factor}`;
-  let stateTag = "";
-  if (s.in_position) stateTag = '<span class="chip mid">IN TRADE</span>';
-  else if (s.signal_today) stateTag = '<span class="chip ok">SIGNAL</span>';
+  const cls = VERDICT_CLASS[s.verdict] || "no";
+  const since = s.first_trade_date ? ` &middot; since ${s.first_trade_date}` : "";
+  const statLine = `${s.n_trades}t &middot; ${s.win_rate}% WR &middot; PF ${s.profit_factor}${since}`;
+  // NO SIGNAL / IN TRADE / TP HIT are self-explanatory; only TAKE/SKIP need the reason spelled out.
+  const showReason = s.verdict === "TAKE" || s.verdict === "SKIP";
   return `<span class="opentrade">` +
-         `<span class="chip ${RATING_CLASS[s.rating]}" title="${title}">${s.rating} BUCKET</span>` +
-         `<span class="verdict">${stateTag}` +
-         `<span class="advicewhy">${s.n_trades}t &middot; ${s.win_rate}% WR &middot; PF ${s.profit_factor}</span></span></span>`;
+         `<span class="verdict"><span class="chip ${cls}">${s.verdict}</span></span>` +
+         (showReason ? `<span class="advicewhy">${s.verdict_reason}</span>` : "") +
+         `<hr class="divider">` +
+         `<span class="advicewhy">${statLine}</span></span>`;
 }
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 8;
 let lastData = null;
 let currentPage = 1;
 
+// Backend-paginated: the server only evaluates this page's tickers, so
+// sort/filter can only apply within the currently-loaded page (a ticker's
+// score isn't known until the server actually evaluates it).
 function render(data) {
   lastData = data;
+  currentPage = data.page || 1;
   const minScore = Number(document.getElementById("scoreFilter").value);
   const allRows = data.tickers.slice()
     .filter(r => r.score >= minScore)
     .sort((a, b) =>
       (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct));
 
-  const pageCount = Math.max(1, Math.ceil(allRows.length / PAGE_SIZE));
-  currentPage = Math.min(Math.max(1, currentPage), pageCount);
-  const rows = allRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const rows = allRows;
 
   let html = "";
   for (const r of rows) {
@@ -246,31 +266,31 @@ function render(data) {
       </div>
     </div>`;
   }
-  if (currentPage === pageCount)
-    for (const [tk, err] of Object.entries(data.errors || {}))
-      html += `<div class="tickercard err"><div class="cardhead"><span class="tk">${tk}</span></div><span>${err}</span></div>`;
+  for (const [tk, err] of Object.entries(data.errors || {}))
+    html += `<div class="tickercard err"><div class="cardhead"><span class="tk">${tk}</span></div><span>${err}</span></div>`;
   if (!rows.length && !Object.keys(data.errors || {}).length)
-    html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
+    html = `<p style="color:var(--muted)">No tickers on this page match the filter -- try Next/Prev or All</p>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
   const countText = minScore > 0
-    ? `${allRows.length} of ${data.tickers.length} tickers (score &ge; ${minScore})`
-    : `${data.tickers.length} tickers`;
+    ? `${allRows.length} of ${data.tickers.length} shown on this page (score &ge; ${minScore})`
+    : `${data.tickers.length} tickers on this page`;
   document.getElementById("meta").innerHTML =
-    `as of ${new Date(data.asof).toLocaleString()} &middot; ${countText} &middot; ${open} open trade${open === 1 ? "" : "s"}` +
+    `as of ${new Date(data.asof).toLocaleString()} &middot; ${countText} of ${data.total_tickers} total` +
+    ` &middot; ${open} open trade${open === 1 ? "" : "s"}` +
     (data.cached ? " &middot; cached" : " &middot; live");
-  renderPager(pageCount);
+  renderPager(data.page, data.total_pages);
 }
 
-function renderPager(pageCount) {
+function renderPager(page, pageCount) {
   const el = document.getElementById("pager");
   if (pageCount <= 1) { el.innerHTML = ""; return; }
   el.innerHTML = `
-    <button id="prevPage" ${currentPage === 1 ? "disabled" : ""}>&larr; Prev</button>
-    <span>Page ${currentPage} of ${pageCount}</span>
-    <button id="nextPage" ${currentPage === pageCount ? "disabled" : ""}>Next &rarr;</button>`;
-  document.getElementById("prevPage").addEventListener("click", () => { currentPage--; render(lastData); });
-  document.getElementById("nextPage").addEventListener("click", () => { currentPage++; render(lastData); });
+    <button id="prevPage" ${page === 1 ? "disabled" : ""}>&larr; Prev</button>
+    <span>Page ${page} of ${pageCount}</span>
+    <button id="nextPage" ${page === pageCount ? "disabled" : ""}>Next &rarr;</button>`;
+  document.getElementById("prevPage").addEventListener("click", () => load(false, page - 1, true));
+  document.getElementById("nextPage").addEventListener("click", () => load(false, page + 1, true));
 }
 // Progress bar is an ESTIMATE, not a real per-ticker completion signal --
 // /api/tickers blocks server-side until every ticker (and its 4 strategy
@@ -324,32 +344,38 @@ function finishProgress() {
   setTimeout(() => { wrap.style.display = "none"; }, 500);
 }
 
-async function load(refresh) {
+function showPageOverlay(text) {
+  document.getElementById("pageoverlaytext").textContent = text;
+  document.getElementById("pageoverlay").style.display = "flex";
+}
+function hidePageOverlay() {
+  document.getElementById("pageoverlay").style.display = "none";
+}
+
+async function load(refresh, page, isNav) {
+  page = page || currentPage || 1;
   const btn = document.getElementById("refresh");
   btn.disabled = true;
-  let tickerCount = lastData ? lastData.tickers.length : null;
-  if (tickerCount === null) {
-    try {
-      const metaRes = await fetch("/api/meta");
-      tickerCount = (await metaRes.json()).total_tickers;
-    } catch (e) { tickerCount = 20; }
-  }
-  const t0 = startProgress(tickerCount);
+  if (isNav) showPageOverlay(`Loading page ${page}…`);
+  else if (refresh) showPageOverlay("Refreshing…");
+  const t0 = startProgress(PAGE_SIZE);
   try {
-    const res = await fetch("/api/tickers" + (refresh ? "?refresh=1" : ""));
+    const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+    if (refresh) params.set("refresh", "1");
+    const res = await fetch("/api/tickers?" + params.toString());
     const data = await res.json();
-    if (!data.cached) updateAvgMsPerTicker(Date.now() - t0, tickerCount);
+    if (!data.cached) updateAvgMsPerTicker(Date.now() - t0, PAGE_SIZE);
     render(data);
   } catch (e) {
     document.getElementById("meta").textContent = "failed to load: " + e;
   } finally {
+    hidePageOverlay();
     btn.disabled = false;
     finishProgress();
   }
 }
-document.getElementById("refresh").addEventListener("click", () => load(true));
+document.getElementById("refresh").addEventListener("click", () => load(true, currentPage));
 document.getElementById("scoreFilter").addEventListener("change", () => {
-  currentPage = 1;
   if (lastData) render(lastData);
 });
 load(false);

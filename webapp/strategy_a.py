@@ -22,7 +22,7 @@ def fetch_bars(ticker: str, period: str = "10y") -> list[dict]:
     bars = []
     for idx, row in df.iterrows():
         bars.append({"o": float(row.Open), "h": float(row.High), "l": float(row.Low),
-                      "c": float(row.Close), "v": float(row.Volume)})
+                      "c": float(row.Close), "v": float(row.Volume), "d": idx.strftime("%Y-%m")})
     return bars
 
 
@@ -184,14 +184,19 @@ def run(bars, ind):
     return trades, pending_entry, position is not None
 
 
-def _rating(n_trades: int, win_rate: float, pf: float) -> str:
+def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: float, pf: float) -> tuple[str, str]:
+    """A real TAKE/SKIP call, not a vague confidence bucket -- based on whether
+    THIS ticker's own backtested history with THIS strategy actually shows an
+    edge, not just whether a signal fired."""
+    if in_position:
+        return "IN TRADE", "a position from a prior signal is still open"
+    if not signal_today:
+        return "NO SIGNAL", "no entry signal on the latest close"
     if n_trades < 5:
-        return "LOW"
-    if pf >= 2.0 and win_rate >= 45:
-        return "HIGH"
-    if pf >= 1.0:
-        return "MEDIUM"
-    return "LOW"
+        return "SKIP", f"only {n_trades} historical trades on this ticker -- not enough data to trust the signal"
+    if pf >= 1.5 and win_rate >= 40:
+        return "TAKE", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- real edge on this ticker"
+    return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
 def evaluate(ticker: str) -> dict:
@@ -207,12 +212,16 @@ def evaluate(ticker: str) -> dict:
     gross_loss = -sum(t["pnl"] for t in losses)
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
+    verdict, verdict_reason = _verdict(signal_today, in_position, len(trades), wr, pf)
+    first_trade_date = bars[trades[0]["entry_i"]]["d"] if trades else None
 
     return {
         "signal_today": signal_today,
         "in_position": in_position,
+        "verdict": verdict,
+        "verdict_reason": verdict_reason,
         "n_trades": len(trades),
         "win_rate": round(wr, 1),
         "profit_factor": round(pf, 2),
-        "rating": _rating(len(trades), wr, pf),
+        "first_trade_date": first_trade_date,
     }

@@ -38,14 +38,22 @@ def wilder_atr(h, l, c, length):
     return atr
 
 
-def _rating(n_trades: int, win_rate: float, pf: float) -> str:
+def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: float, pf: float,
+             tp_hit: bool = False) -> tuple[str, str]:
+    """A real TAKE/SKIP call, not a vague confidence bucket -- based on whether
+    THIS ticker's own backtested history with THIS strategy actually shows an
+    edge, not just whether a signal fired."""
+    if in_position:
+        if tp_hit:
+            return "TP HIT", "partial take-profit already triggered on the open position"
+        return "IN TRADE", "a position from a prior signal is still open"
+    if not signal_today:
+        return "NO SIGNAL", "no entry signal on the latest close"
     if n_trades < 5:
-        return "LOW"
-    if pf >= 2.0 and win_rate >= 45:
-        return "HIGH"
-    if pf >= 1.0:
-        return "MEDIUM"
-    return "LOW"
+        return "SKIP", f"only {n_trades} historical trades on this ticker -- not enough data to trust the signal"
+    if pf >= 1.5 and win_rate >= 40:
+        return "TAKE", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- real edge on this ticker"
+    return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
 def evaluate(ticker: str) -> dict:
@@ -82,7 +90,7 @@ def evaluate(ticker: str) -> dict:
             final_pnl_pct = (exit_price - entry_price) / entry_price * 100
             blended = (0.5 * position["half_pnl_pct"] + 0.5 * final_pnl_pct
                        if position["tp_half_hit"] else final_pnl_pct)
-            trades.append({"pnl_pct": round(float(blended), 2)})
+            trades.append({"pnl_pct": round(float(blended), 2), "entry_i": position["entry_i"]})
             position = None
             pending_exit_at = None
             continue
@@ -133,12 +141,17 @@ def evaluate(ticker: str) -> dict:
 
     signal_today = bool(breakout.iloc[-1]) and position is None
     in_position = position is not None
+    tp_hit = bool(position["tp_half_hit"]) if position is not None else False
+    verdict, verdict_reason = _verdict(signal_today, in_position, len(trades), wr, pf, tp_hit)
+    first_trade_date = df.index[trades[0]["entry_i"]].strftime("%Y-%m") if trades else None
 
     return {
         "signal_today": signal_today,
         "in_position": in_position,
+        "verdict": verdict,
+        "verdict_reason": verdict_reason,
         "n_trades": len(trades),
         "win_rate": round(wr, 1),
         "profit_factor": round(pf, 2),
-        "rating": _rating(len(trades), wr, pf),
+        "first_trade_date": first_trade_date,
     }

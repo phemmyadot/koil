@@ -3,6 +3,7 @@
 Run from the project root:
     .\\.venv\\Scripts\\python.exe -m uvicorn webapp.app:app --port 8123
 """
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -57,11 +58,22 @@ def meta():
 
 
 @app.get("/api/tickers")
-def tickers(refresh: int = 0):
+def tickers(refresh: int = 0, page: int = 1, page_size: int = 8):
+    """Backend-paginated: only the requested page's tickers are evaluated (and
+    fetched from Yahoo), not the full universe -- this is what makes paging
+    fast. The trade-off: sort/filter only apply within the loaded page, since
+    a ticker's score/signal isn't known until it's actually evaluated."""
+    page_size = max(1, min(page_size, 50))
+    total = len(TICKERS)
+    total_pages = max(1, math.ceil(total / page_size))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    page_tickers = TICKERS[start:start + page_size]
+
     all_cached = not refresh and all(
-        t in _cache and time.time() - _cache[t][0] < CACHE_TTL for t in TICKERS)
-    with ThreadPoolExecutor(max_workers=30) as pool:
-        results = list(pool.map(lambda t: _get_one(t, bool(refresh)), TICKERS))
+        t in _cache and time.time() - _cache[t][0] < CACHE_TTL for t in page_tickers)
+    with ThreadPoolExecutor(max_workers=page_size) as pool:
+        results = list(pool.map(lambda t: _get_one(t, bool(refresh)), page_tickers))
     payloads = [p for _, p, _ in results if p is not None]
     errors = {t: e for t, _, e in results if e is not None}
     return {
@@ -69,6 +81,10 @@ def tickers(refresh: int = 0):
         "cached": all_cached,
         "tickers": payloads,
         "errors": errors,
+        "page": page,
+        "page_size": page_size,
+        "total_tickers": total,
+        "total_pages": total_pages,
     }
 
 
