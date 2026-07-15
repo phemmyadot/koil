@@ -26,8 +26,14 @@
   .meta { color: var(--muted); font-size: 12.5px; }
   .filterbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
   .filterbar label { color: var(--muted); font-size: 12.5px; }
+  .filterbar .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+  .filterbar .checklabel { display: flex; align-items: center; gap: 6px; color: var(--text);
+                            font-size: 12.5px; cursor: pointer; }
+  .filterbar .checklabel input { cursor: pointer; }
   select { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; }
+  input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+           border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; width: 140px; }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
            padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; margin-left: auto; }
   button:disabled { opacity: 0.5; cursor: wait; }
@@ -142,6 +148,8 @@
     </div>
   </div>
   <div class="filterbar">
+    <input type="text" id="tickerSearch" placeholder="Search ticker&hellip;" autocomplete="off">
+    <span class="sep"></span>
     <label for="scoreFilter">Min score</label>
     <select id="scoreFilter">
       <option value="0">All</option>
@@ -152,6 +160,43 @@
       <option value="5">&ge; 5/6</option>
       <option value="6">6/6 (entry only)</option>
     </select>
+    <label for="exhaustionFilter">Exhaustion</label>
+    <select id="exhaustionFilter" class="stratFilter">
+      <option value="">Any</option>
+      <option value="active">Active trade</option>
+      <option value="take">TAKE advice</option>
+      <option value="skip">SKIP advice</option>
+    </select>
+    <span class="sep"></span>
+    <label for="stratAFilter">Strategy A</label>
+    <select id="stratAFilter" class="stratFilter">
+      <option value="">Any</option>
+      <option value="active">Active trade</option>
+      <option value="good">Good</option>
+      <option value="fair">Fair</option>
+      <option value="bad">Bad</option>
+    </select>
+    <label for="stratDFilter">Strategy D</label>
+    <select id="stratDFilter" class="stratFilter">
+      <option value="">Any</option>
+      <option value="active">Active trade</option>
+      <option value="good">Good</option>
+      <option value="fair">Fair</option>
+      <option value="bad">Bad</option>
+    </select>
+    <label for="stratVcpFilter">VCP Master</label>
+    <select id="stratVcpFilter" class="stratFilter">
+      <option value="">Any</option>
+      <option value="active">Active trade</option>
+      <option value="good">Good</option>
+      <option value="fair">Fair</option>
+      <option value="bad">Bad</option>
+    </select>
+    <span class="sep"></span>
+    <label class="checklabel" for="anyOpenTradeFilter">
+      <input type="checkbox" id="anyOpenTradeFilter">
+      Open trade in any of the 4
+    </label>
   </div>
   <div id="rows" class="cardgrid">
     <p style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</p>
@@ -225,14 +270,40 @@ function fmtConfig(cfg) {
 
 // Color coding: blue = an active/open trade right now, otherwise green/yellow/red
 // by how good the historical result actually is (independent of live status).
-function qualityClass(pf, wr) {
-  if (pf >= 2.0 && wr >= 45) return "ok";   // green -- good
-  if (pf >= 1.0) return "mid";              // yellow -- fair
-  return "no";                              // red -- bad
+// qualityLabel is the single source of truth for the good/fair/bad thresholds --
+// both the chip color (via QUALITY_CSS) and the strategy score filter read it.
+function qualityLabel(pf, wr) {
+  if (pf >= 2.0 && wr >= 45) return "good";
+  if (pf >= 1.0) return "fair";
+  return "bad";
 }
+const QUALITY_CSS = { good: "ok", fair: "mid", bad: "no" };
 function scoreChip(pf, wr, isActive) {
-  const cls = isActive ? "active" : qualityClass(pf, wr);
+  const cls = isActive ? "active" : QUALITY_CSS[qualityLabel(pf, wr)];
   return `<span class="chip ${cls}">PF ${pf} &middot; ${wr}% WR</span>`;
+}
+
+// State of a single strategy's baseline result, for the per-strategy filters:
+// "active" (in trade now), "good"/"fair"/"bad" (historical quality), or null
+// (no data on this ticker for this strategy).
+function strategyState(s) {
+  if (!s || !s.baseline) return null;
+  if (s.baseline.in_position) return "active";
+  return qualityLabel(s.baseline.profit_factor, s.baseline.win_rate);
+}
+// "Open trade in any of the 4" -- Exhaustion's own open_trade plus in_position
+// on each of the other three strategies' baseline result.
+function hasAnyOpenTrade(r) {
+  return !!r.open_trade
+    || strategyState(r.strategy_a) === "active"
+    || strategyState(r.strategy_d) === "active"
+    || strategyState(r.strategy_vcp) === "active";
+}
+// Exhaustion has no baseline PF/WR like the other three -- its only per-ticker
+// signal is the open trade's TAKE/SKIP advice, so "state" is scoped to that.
+function exhaustionState(r) {
+  if (!r.open_trade) return null;
+  return r.open_trade.advice === "TAKE" ? "take" : "skip";
 }
 
 function renderBaseline(b, cfg) {
@@ -291,8 +362,22 @@ let currentPage = 1;
 function render(data) {
   lastData = data;
   const minScore = Number(document.getElementById("scoreFilter").value);
+  const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
+  const exhaustionWant = document.getElementById("exhaustionFilter").value;
+  const stratAWant = document.getElementById("stratAFilter").value;
+  const stratDWant = document.getElementById("stratDFilter").value;
+  const stratVcpWant = document.getElementById("stratVcpFilter").value;
+  const anyOpenTradeOnly = document.getElementById("anyOpenTradeFilter").checked;
+  // Each per-strategy select is AND-ed together, so picking a state on more
+  // than one strategy at once is how "filter by a combination of strategies" works.
   const allRows = data.tickers.slice()
+    .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => r.score >= minScore)
+    .filter(r => !exhaustionWant || (exhaustionWant === "active" ? !!r.open_trade : exhaustionState(r) === exhaustionWant))
+    .filter(r => !stratAWant || strategyState(r.strategy_a) === stratAWant)
+    .filter(r => !stratDWant || strategyState(r.strategy_d) === stratDWant)
+    .filter(r => !stratVcpWant || strategyState(r.strategy_vcp) === stratVcpWant)
+    .filter(r => !anyOpenTradeOnly || hasAnyOpenTrade(r))
     .sort((a, b) =>
       (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct));
 
@@ -339,15 +424,19 @@ function render(data) {
       </div>
     </div>`;
   }
+  // "insufficient history" isn't a real error (usually a recent IPO/listing
+  // that hasn't accumulated enough bars yet) -- not worth a card of its own.
+  const realErrors = Object.entries(data.errors || {}).filter(([, err]) => err !== "insufficient history");
   if (currentPage === pageCount)
-    for (const [tk, err] of Object.entries(data.errors || {}))
+    for (const [tk, err] of realErrors)
       html += `<div class="tickercard err"><div class="cardhead"><span class="tk">${tk}</span></div><span>${err}</span></div>`;
-  if (!rows.length && !Object.keys(data.errors || {}).length)
+  if (!rows.length && !realErrors.length)
     html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
-  const countText = minScore > 0
-    ? `${allRows.length} of ${data.tickers.length} tickers (score &ge; ${minScore})`
+  const filtered = minScore > 0 || tickerQuery || exhaustionWant || stratAWant || stratDWant || stratVcpWant || anyOpenTradeOnly;
+  const countText = filtered
+    ? `${allRows.length} of ${data.tickers.length} tickers (filtered)`
     : `${data.tickers.length} tickers`;
   document.getElementById("meta").innerHTML =
     `as of ${new Date(data.asof).toLocaleString()} &middot; ${countText} &middot; ${open} open trade${open === 1 ? "" : "s"}` +
@@ -458,7 +547,13 @@ async function load(refresh) {
   }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));
-document.getElementById("scoreFilter").addEventListener("change", () => {
+for (const id of ["scoreFilter", "exhaustionFilter", "stratAFilter", "stratDFilter", "stratVcpFilter", "anyOpenTradeFilter"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    currentPage = 1;
+    if (lastData) render(lastData);
+  });
+}
+document.getElementById("tickerSearch").addEventListener("input", () => {
   currentPage = 1;
   if (lastData) render(lastData);
 });
