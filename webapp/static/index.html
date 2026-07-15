@@ -9,12 +9,14 @@
     --bg: #f6f7f9; --panel: #ffffff; --text: #1a2333; --muted: #67718a;
     --line: #e3e7ee; --green: #157f3d; --green-bg: #e5f4ea; --red: #b3261e;
     --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb; --gold-bg: #fdf3d8; --gold: #8a6d1a;
+    --blue: #0d6efd; --blue-bg: #e3f0ff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
       --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
       --red-bg: #391513; --accent: #7ba3f7; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
+      --blue: #4d9dff; --blue-bg: #0f2c52;
     }
   }
   * { box-sizing: border-box; }
@@ -66,7 +68,7 @@
      modal (click a chip). */
   .strategygrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
   .strategycell { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; }
-  .strategyname { flex: 0 0 14px; font-size: 11px; font-weight: 700; color: var(--text); }
+  .strategyname { flex: 0 0 32px; font-size: 10px; font-weight: 700; color: var(--text); }
   .strategybody { flex: 1; min-width: 0; }
   /* Baseline/Training/Holdout chips side by side within a strategy's cell. */
   .splitrow { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -85,7 +87,7 @@
   .chip.no { background: var(--red-bg); color: var(--red); }
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
   .chip.neutral { background: var(--line); color: var(--muted); }
-  .chip.active { background: var(--accent-bg); color: var(--accent); }
+  .chip.active { background: var(--blue-bg); color: var(--blue); }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .pos { color: var(--green); } .neg { color: var(--red); }
   .last5 { font-size: 11px; }
@@ -492,13 +494,13 @@ function render(data) {
       <hr class="divider">
       <div class="scoresections">
         <div class="scorebox"><div class="strategygrid2">
-          <div class="strategycell"><span class="strategyname">E</span>
+          <div class="strategycell"><span class="strategyname">VEXH</span>
             <div class="strategybody">${exhaustionChip(r)}</div></div>
-          <div class="strategycell"><span class="strategyname">A</span>
+          <div class="strategycell"><span class="strategyname">ADX</span>
             <div class="strategybody">${strategyChips(r.strategy_a, "Strategy A")}</div></div>
-          <div class="strategycell"><span class="strategyname">D</span>
+          <div class="strategycell"><span class="strategyname">VCPF</span>
             <div class="strategybody">${strategyChips(r.strategy_d, "Strategy D")}</div></div>
-          <div class="strategycell"><span class="strategyname">V</span>
+          <div class="strategycell"><span class="strategyname">VCP</span>
             <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
         </div></div>
       </div>
