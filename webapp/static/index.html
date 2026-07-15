@@ -41,10 +41,23 @@
   .cardsection { display: flex; flex-direction: column; gap: 4px; }
   .cardsection .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
   .cardpair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .stratrow { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-  .stratrow .cardsection .lbl { text-align: center; }
-  .stratrow .opentrade { align-items: center; }
   .divider { border: 0; border-top: 1px solid var(--line); margin: 0; }
+  /* The 4 "scoring" sections -- Open Trade + Strategy A/D/VCP Master -- get
+     equal, consistent treatment: one full-width box per line, not squeezed
+     into a multi-column grid. */
+  .scoresections { display: flex; flex-direction: column; gap: 8px; }
+  .scorebox { background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+              padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .scorebox-name { font-size: 11px; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: 0.05em; color: var(--text); }
+  .subrow { background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+            padding: 7px 9px; display: flex; flex-direction: column; gap: 3px; }
+  .sublabel { font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+              letter-spacing: 0.05em; color: var(--muted); }
+  /* All 3 strategies (A/D/VCP Master) side by side in one card, 3 columns x 1 row. */
+  .strategygrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .strategycol { display: flex; flex-direction: column; gap: 6px; }
+  .strategycol > .sublabel { font-size: 10.5px; color: var(--text); text-align: center; }
   .num { font-variant-numeric: tabular-nums; }
   .tk { font-weight: 700; font-size: 15px; }
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
@@ -59,6 +72,7 @@
   .chip.no { background: var(--red-bg); color: var(--red); }
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
   .chip.neutral { background: var(--line); color: var(--muted); }
+  .chip.active { background: var(--accent-bg); color: var(--accent); }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .badge { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 6px;
            padding: 3px 8px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; }
@@ -106,7 +120,7 @@
     .foot { font-size: 11px; }
     .pager { flex-wrap: wrap; gap: 8px; }
     .cardgrid { grid-template-columns: 1fr; gap: 10px; }
-    .stratrow { grid-template-columns: 1fr; gap: 10px; }
+    .strategygrid { grid-template-columns: 1fr; gap: 10px; }
   }
 </style>
 </head>
@@ -159,8 +173,14 @@ function chip(key, c) {
   }
   return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
 }
-function scorebar(n, distTier, earningsRisk) {
-  let s = '<span class="scorebar">';
+function scorebar(n, distTier, earningsRisk, conditions) {
+  // Combined tooltip so the score values are visible without hovering each
+  // individual condition chip separately.
+  const tooltip = conditions
+    ? Object.entries(conditions).map(([k, c]) =>
+        `${COND_LABELS[k]}: ${c.pass ? "PASS" : "FAIL"} (${c.value})`).join(" | ")
+    : "";
+  let s = `<span class="scorebar" title="${String(tooltip).replace(/"/g, "&quot;")}">`;
   for (let i = 0; i < 6; i++) s += `<i class="${i < n ? "on" : ""}"></i>`;
   s += `</span>${n}/6`;
   if (n === 6) {
@@ -198,45 +218,66 @@ function last5(trades) {
     return `<span class="${cls}">${sign}${t.tp_pct}% - ${t.days}D</span>`;
   }).join(", ") + `</span>`;
 }
-const VERDICT_CLASS = { TAKE: "ok", SKIP: "no", "IN TRADE": "mid", "TP HIT": "ok", "NO SIGNAL": "neutral" };
-
 function fmtConfig(cfg) {
   if (!cfg) return "no config";
   return Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
-function renderBaseline(b, cfg) {
-  if (!b) return '<span style="color:var(--muted)">—</span>';
-  const cls = VERDICT_CLASS[b.verdict] || "no";
-  const since = b.first_trade_date ? ` &middot; since ${b.first_trade_date}` : "";
-  const statLine = `${b.n_trades}t &middot; ${b.win_rate}% WR &middot; PF ${b.profit_factor}${since}`;
-  const showReason = b.verdict === "TAKE" || b.verdict === "SKIP";
-  return `<span class="opentrade" title="${fmtConfig(cfg)}">` +
-         `<span class="verdict"><span class="chip ${cls}">${b.verdict}</span></span>` +
-         (showReason ? `<span class="advicewhy">${b.verdict_reason}</span>` : "") +
-         `<span class="advicewhy">${statLine}</span></span>`;
+// Color coding: blue = an active/open trade right now, otherwise green/yellow/red
+// by how good the historical result actually is (independent of live status).
+function qualityClass(pf, wr) {
+  if (pf >= 2.0 && wr >= 45) return "ok";   // green -- good
+  if (pf >= 1.0) return "mid";              // yellow -- fair
+  return "no";                              // red -- bad
+}
+function scoreChip(pf, wr, isActive) {
+  const cls = isActive ? "active" : qualityClass(pf, wr);
+  return `<span class="chip ${cls}">PF ${pf} &middot; ${wr}% WR</span>`;
 }
 
-function renderOptimized(o, baseline) {
-  if (!o) return '<span style="color:var(--muted)">—</span>';
-  const t = o.train_stats, h = o.holdout_stats;
+function renderBaseline(b, cfg) {
+  if (!b) return '<span style="color:var(--muted)">—</span>';
+  const since = b.first_trade_date ? ` &middot; since ${b.first_trade_date}` : "";
+  const tooltip = `${fmtConfig(cfg)}\n${b.n_trades}t &middot; ${b.verdict}: ${b.verdict_reason}${since}`
+    .replace(/"/g, "&quot;");
+  return `<span class="opentrade" title="${tooltip}">${scoreChip(b.profit_factor, b.win_rate, b.in_position)}</span>`;
+}
+
+function optimizedBeatsBaseline(o, baseline) {
+  if (!o || !baseline) return false;
   // Robust = worst-of-both-splits, same discipline used to pick the config in
   // the first place -- only worth showing if it actually beats baseline.
-  const robustPf = Math.min(t.profit_factor, h.profit_factor);
-  const robustWr = Math.min(t.win_rate, h.win_rate);
-  const better = baseline && (robustPf > baseline.profit_factor || robustWr > baseline.win_rate);
-  if (!better) return '<span style="color:var(--muted)">—</span>';
-  const statLine = `train ${t.n_trades}t/${t.win_rate}%WR/PF${t.profit_factor}` +
-                   ` &middot; holdout ${h.n_trades}t/${h.win_rate}%WR/PF${h.profit_factor}`;
-  return `<span class="opentrade" title="${fmtConfig(o.config)}">` +
-         `<span class="advicewhy">${statLine}</span></span>`;
+  const robustPf = Math.min(o.train_stats.profit_factor, o.holdout_stats.profit_factor);
+  const robustWr = Math.min(o.train_stats.win_rate, o.holdout_stats.win_rate);
+  return robustPf > baseline.profit_factor || robustWr > baseline.win_rate;
+}
+
+function renderSplit(stats, cfg) {
+  // Each split gets its own badge, colored by its OWN quality -- collapsing
+  // train+holdout into a single number hides exactly the case (good train,
+  // bad holdout, or vice versa) this split exists to catch.
+  const tooltip = `${fmtConfig(cfg)}\n${stats.n_trades}t`.replace(/"/g, "&quot;");
+  return `<span class="opentrade" title="${tooltip}">${scoreChip(stats.profit_factor, stats.win_rate, false)}</span>`;
+}
+
+function scorebox(title, bodyHtml) {
+  return `<div class="scorebox"><span class="scorebox-name">${title}</span>${bodyHtml}</div>`;
+}
+function subrow(label, html) {
+  return `<div class="subrow"><span class="sublabel">${label}</span>${html}</div>`;
 }
 
 function otherStrategy(s) {
-  if (!s) return '<span style="color:var(--muted)">—</span>';
-  return `<div class="cardsection"><span class="lbl">Baseline</span>${renderBaseline(s.baseline, s.baseline_config)}</div>` +
-         `<hr class="divider">` +
-         `<div class="cardsection"><span class="lbl">Optimized</span>${renderOptimized(s.optimized, s.baseline)}</div>`;
+  if (!s) return subrow("Baseline", '<span style="color:var(--muted)">—</span>');
+  let html = subrow("Baseline", renderBaseline(s.baseline, s.baseline_config));
+  // No Training/Holdout subrows at all when there's nothing worth showing --
+  // no empty/dash card taking up space.
+  if (optimizedBeatsBaseline(s.optimized, s.baseline)) {
+    const o = s.optimized;
+    html += subrow("Training", renderSplit(o.train_stats, o.config));
+    html += subrow("Holdout", renderSplit(o.holdout_stats, o.config));
+  }
+  return html;
 }
 const PAGE_SIZE = 9;
 let lastData = null;
@@ -267,7 +308,7 @@ function render(data) {
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
-        ${scorebar(r.score, distTier, r.earnings_risk)}
+        ${scorebar(r.score, distTier, r.earnings_risk, r.conditions)}
       </div>
       <div class="cardsection">
         <span class="lbl">Conditions</span>
@@ -288,15 +329,13 @@ function render(data) {
         ${last5(r.last5_trades)}
       </div>
       <hr class="divider">
-      <div class="cardsection">
-        <span class="lbl">Open Trade</span>
-        ${badge(r.open_trade)}
-      </div>
-      <hr class="divider">
-      <div class="stratrow">
-        <div class="cardsection"><span class="lbl">Strat A</span>${otherStrategy(r.strategy_a)}</div>
-        <div class="cardsection"><span class="lbl">Strat D</span>${otherStrategy(r.strategy_d)}</div>
-        <div class="cardsection"><span class="lbl">VCP Master</span>${otherStrategy(r.strategy_vcp)}</div>
+      <div class="scoresections">
+        ${scorebox("Open Trade (Exhaustion)", subrow("Status", badge(r.open_trade)))}
+        ${scorebox("Strategies", `<div class="strategygrid">
+          <div class="strategycol"><span class="sublabel">Strategy A</span>${otherStrategy(r.strategy_a)}</div>
+          <div class="strategycol"><span class="sublabel">Strategy D</span>${otherStrategy(r.strategy_d)}</div>
+          <div class="strategycol"><span class="sublabel">VCP Master</span>${otherStrategy(r.strategy_vcp)}</div>
+        </div>`)}
       </div>
     </div>`;
   }
