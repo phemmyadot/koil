@@ -5,6 +5,8 @@ volume confirmation, multi-tier stop/breakeven/trail, partial TP, time stop.
 Reads from the shared raw-data cache (webapp/data.py) and extends it with a
 "signal today" / TAKE-SKIP verdict evaluator.
 """
+import itertools
+
 import numpy as np
 import pandas as pd
 
@@ -49,20 +51,33 @@ def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: flo
     return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
-def evaluate(ticker: str, df: pd.DataFrame) -> dict:
-    if len(df) < 250:
-        raise ValueError("insufficient history")
-
-    c, h, l, o, v = df.Close, df.High, df.Low, df.Open, df.Volume
+def compute_indicators(df: pd.DataFrame) -> dict:
+    """Series independent of the swept params (compression_mult stays fixed,
+    not part of the sweep grid, same as this session's earlier sweep_vcp.py)."""
+    c, h, l, v = df.Close, df.High, df.Low, df.Volume
     atr = wilder_atr(h, l, c, ATR_LEN)
-    atr_avg = atr.rolling(100).mean()
-    ema50 = c.ewm(span=EMA_LEN, adjust=False).mean()
-    resistance = h.rolling(RESISTANCE_LEN).max().shift(1)
-    vol_avg = v.rolling(VOL_AVG_LEN).mean()
+    return dict(
+        atr=atr,
+        atr_avg=atr.rolling(100).mean(),
+        ema50=c.ewm(span=EMA_LEN, adjust=False).mean(),
+        resistance=h.rolling(RESISTANCE_LEN).max().shift(1),
+        vol_avg=v.rolling(VOL_AVG_LEN).mean(),
+    )
+
+
+def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGER_PCT,
+        trail_tier_pct=TRAIL_TIER_PCT, tp_target_pct=TP_TARGET_PCT, vol_mult=VOL_MULT,
+        max_bars=MAX_BARS):
+    """Returns (trades, signal_today, in_position). Parameters default to the
+    validated baseline but can be overridden -- used by optimize() to sweep
+    configs without mutating shared module state."""
+    c, h, l, o, v = df.Close, df.High, df.Low, df.Open, df.Volume
+    atr, atr_avg, ema50, resistance, vol_avg = (ind["atr"], ind["atr_avg"], ind["ema50"],
+                                                  ind["resistance"], ind["vol_avg"])
 
     compressed = atr <= atr_avg * COMPRESSION_MULT
     macro_bullish = c > ema50
-    volume_confirmed = v >= VOL_MULT * vol_avg
+    volume_confirmed = v >= vol_mult * vol_avg
     breakout = (c > resistance) & compressed & volume_confirmed
 
     trades = []
@@ -91,7 +106,7 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
             entry_price = o.iloc[i]
             entry_atr = atr.iloc[i]
             position = {"entry_i": i, "entry_price": entry_price,
-                        "stop": entry_price - entry_atr * ATR_MULT,
+                        "stop": entry_price - entry_atr * atr_mult,
                         "high_since": h.iloc[i], "be_activated": False, "tp_half_hit": False,
                         "half_pnl_pct": None}
             continue
@@ -106,34 +121,90 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
         close_i = c.iloc[i]
         bars_in_trade = i - position["entry_i"]
 
-        if max_gain_pct >= BE_TRIGGER_PCT and not position["be_activated"]:
+        if max_gain_pct >= be_trigger_pct and not position["be_activated"]:
             position["stop"] = entry_price
             position["be_activated"] = True
-        if position["tp_half_hit"] or max_gain_pct >= TRAIL_TIER_PCT:
+        if position["tp_half_hit"] or max_gain_pct >= trail_tier_pct:
             position["stop"] = max(position["stop"], close_i - cur_atr * 2.5)
         elif position["be_activated"]:
             position["stop"] = max(position["stop"], max(entry_price, close_i - cur_atr * 4.5))
         else:
-            position["stop"] = max(position["stop"], entry_price - cur_atr * ATR_MULT)
+            position["stop"] = max(position["stop"], entry_price - cur_atr * atr_mult)
 
-        if max_gain_pct >= TP_TARGET_PCT and not position["tp_half_hit"] and pending_tp_at is None:
+        if max_gain_pct >= tp_target_pct and not position["tp_half_hit"] and pending_tp_at is None:
             pending_tp_at = i + 1
 
         stopped = close_i < position["stop"] or l.iloc[i] < position["stop"]
-        time_stop = (bars_in_trade >= MAX_BARS and close_i <= entry_price and not macro_bullish.iloc[i])
+        time_stop = (bars_in_trade >= max_bars and close_i <= entry_price and not macro_bullish.iloc[i])
         if (stopped or time_stop) and pending_exit_at is None:
             pending_exit_at = i + 1
 
+    signal_today = bool(breakout.iloc[-1]) and position is None
+    in_position = position is not None
+    tp_hit = bool(position["tp_half_hit"]) if position is not None else False
+    return trades, signal_today, in_position, tp_hit
+
+
+BASELINE_CONFIG = dict(atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGER_PCT,
+                       trail_tier_pct=TRAIL_TIER_PCT, vol_mult=VOL_MULT)
+
+OPTIMIZE_GRID = dict(
+    atr_mult=[2.0, 2.5, 3.0],
+    be_trigger_pct=[5.0, 7.9, 10.0],
+    trail_tier_pct=[10.0, 13.1, 16.0],
+    vol_mult=[1.0, 1.4, 1.8],
+)
+
+
+def _summarize(trades: list[dict]) -> dict:
     wins = [t for t in trades if t["pnl_pct"] > 0]
     losses = [t for t in trades if t["pnl_pct"] <= 0]
     gross_win = sum(t["pnl_pct"] for t in wins)
     gross_loss = -sum(t["pnl_pct"] for t in losses)
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
+    return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
 
-    signal_today = bool(breakout.iloc[-1]) and position is None
-    in_position = position is not None
-    tp_hit = bool(position["tp_half_hit"]) if position is not None else False
+
+def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_per_split: int = 3) -> dict | None:
+    """Per-ticker parameter sweep, time-split train/holdout. Returns None if
+    no config clears the minimum trade count on both slices."""
+    if len(df) < 300:
+        return None
+    ind = compute_indicators(df)
+    split_i = int(len(df) * train_frac)
+
+    keys = list(OPTIMIZE_GRID.keys())
+    best = None
+    for combo in itertools.product(*OPTIMIZE_GRID.values()):
+        cfg = dict(zip(keys, combo))
+        trades, _, _, _ = run(df, ind, **cfg)
+        train_trades = [t for t in trades if t["entry_i"] < split_i]
+        holdout_trades = [t for t in trades if t["entry_i"] >= split_i]
+        if len(train_trades) < min_trades_per_split or len(holdout_trades) < min_trades_per_split:
+            continue
+        st, sh = _summarize(train_trades), _summarize(holdout_trades)
+        robust_pf = min(st["profit_factor"], sh["profit_factor"])
+        robust_wr = min(st["win_rate"], sh["win_rate"])
+        score = robust_pf * robust_wr
+        if best is None or score > best["_score"]:
+            best = {"config": cfg, "train_stats": st, "holdout_stats": sh, "_score": score}
+
+    if best is None:
+        return None
+    best.pop("_score")
+    return best
+
+
+def evaluate(ticker: str, df: pd.DataFrame) -> dict:
+    if len(df) < 250:
+        raise ValueError("insufficient history")
+
+    ind = compute_indicators(df)
+    trades, signal_today, in_position, tp_hit = run(df, ind)
+
+    wr_stats = _summarize(trades)
+    wr, pf = wr_stats["win_rate"], wr_stats["profit_factor"]
     verdict, verdict_reason = _verdict(signal_today, in_position, len(trades), wr, pf, tp_hit)
     first_trade_date = df.index[trades[0]["entry_i"]].strftime("%Y-%m") if trades else None
 
@@ -143,7 +214,7 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
         "verdict": verdict,
         "verdict_reason": verdict_reason,
         "n_trades": len(trades),
-        "win_rate": round(wr, 1),
-        "profit_factor": round(pf, 2),
+        "win_rate": wr,
+        "profit_factor": pf,
         "first_trade_date": first_trade_date,
     }

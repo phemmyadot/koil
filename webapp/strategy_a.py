@@ -4,6 +4,8 @@ Reads from the shared raw-data cache (webapp/data.py) instead of fetching its
 own data, and extends it with a "signal today" / TAKE-SKIP verdict evaluator
 for the dashboard.
 """
+import itertools
+
 import pandas as pd
 
 ADX_THRESHOLD = 20.0
@@ -124,8 +126,13 @@ def compute_indicators(bars, er_period=10, adx_len=14, rsi_len=14, rsi_sig_len=9
                 rsi=rsi, rsi_sig=rsi_sig)
 
 
-def run(bars, ind):
-    """Returns (trades, signal_today, in_position) using the validated defaults."""
+def run(bars, ind, adx_threshold=ADX_THRESHOLD, extension_mult=EXTENSION_MULT,
+        extension_lookback=EXTENSION_LOOKBACK, pullback_atr_buf=PULLBACK_ATR_BUF,
+        stop_atr_mult=STOP_ATR_MULT, trail_atr_mult=TRAIL_ATR_MULT,
+        trail_activate_atr_mult=TRAIL_ACTIVATE_ATR_MULT):
+    """Returns (trades, signal_today, in_position). Parameters default to the
+    validated baseline but can be overridden -- used by optimize() to sweep
+    configs without mutating shared module state (thread/process safe)."""
     n = len(bars)
     c = [b["c"] for b in bars]
     h = [b["h"] for b in bars]
@@ -146,14 +153,14 @@ def run(bars, ind):
         if pending_entry and position is None:
             entry_price = o[i]
             position = {"entry_i": i, "entry_price": entry_price,
-                        "stop": entry_price - STOP_ATR_MULT * atr[i - 1], "high_since": h[i]}
+                        "stop": entry_price - stop_atr_mult * atr[i - 1], "high_since": h[i]}
             pending_entry = False
 
         if position is not None:
             position["high_since"] = max(position["high_since"], h[i])
-            in_profit = (c[i] - position["entry_price"]) >= TRAIL_ACTIVATE_ATR_MULT * atr[i]
+            in_profit = (c[i] - position["entry_price"]) >= trail_activate_atr_mult * atr[i]
             if in_profit:
-                position["stop"] = max(position["stop"], position["high_since"] - TRAIL_ATR_MULT * atr[i])
+                position["stop"] = max(position["stop"], position["high_since"] - trail_atr_mult * atr[i])
             exit_line = slow_kama[i] if slow_kama[i] is not None else kama[i]
             trend_break = c[i] < exit_line
             stopped = l[i] <= position["stop"]
@@ -163,17 +170,16 @@ def run(bars, ind):
                 trades.append(dict(entry_i=position["entry_i"], exit_i=i, pnl=pnl))
                 position = None
 
-        regime_ok = adx[i] > ADX_THRESHOLD and plus_di[i] > minus_di[i]
-        pulled_back = l[i] <= kama[i] and c[i] > (kama[i] - PULLBACK_ATR_BUF * atr[i])
+        regime_ok = adx[i] > adx_threshold and plus_di[i] > minus_di[i]
+        pulled_back = l[i] <= kama[i] and c[i] > (kama[i] - pullback_atr_buf * atr[i])
         rsi_resume = (rsi[i - 1] is not None and rsi_sig[i - 1] is not None
                       and rsi[i - 1] <= rsi_sig[i - 1] and rsi[i] > rsi_sig[i])
-        extended_ok = False
-        lo = max(0, i - EXTENSION_LOOKBACK)
+        lo = max(0, i - extension_lookback)
         best = 0.0
         for j in range(lo, i):
             if kama[j] is not None and atr[j]:
                 best = max(best, (c[j] - kama[j]) / atr[j])
-        extended_ok = best >= EXTENSION_MULT
+        extended_ok = best >= extension_mult
         long_signal = regime_ok and pulled_back and rsi_resume and extended_ok
 
         pending_entry = long_signal and position is None
@@ -194,6 +200,64 @@ def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: flo
     if pf >= 1.5 and win_rate >= 40:
         return "TAKE", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- real edge on this ticker"
     return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
+
+
+BASELINE_CONFIG = dict(adx_threshold=ADX_THRESHOLD, extension_mult=EXTENSION_MULT,
+                       stop_atr_mult=STOP_ATR_MULT, trail_atr_mult=TRAIL_ATR_MULT)
+
+# Trimmed grid (81 combos) -- kept small deliberately since this runs per
+# ticker in a background sweep, not on the request path.
+OPTIMIZE_GRID = dict(
+    adx_threshold=[15.0, 20.0, 25.0],
+    extension_mult=[1.0, 1.5, 2.0],
+    stop_atr_mult=[1.0, 1.5, 2.0],
+    trail_atr_mult=[2.5, 3.0, 4.0],
+)
+
+
+def _summarize(trades: list[dict]) -> dict:
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
+    gross_win = sum(t["pnl"] for t in wins)
+    gross_loss = -sum(t["pnl"] for t in losses)
+    pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
+    wr = len(wins) / len(trades) * 100 if trades else 0.0
+    return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
+
+
+def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_per_split: int = 3) -> dict | None:
+    """Per-ticker parameter sweep, time-split train/holdout (not a cross-
+    ticker split -- there's only one ticker here) so a config that only wins
+    on the train slice doesn't get reported as if it were a real edge. Returns
+    None if no config clears the minimum trade count on both slices --
+    common for a single ticker's history with a low-frequency strategy like
+    this one, and a real result, not a bug."""
+    bars = _bars_from_df(df)
+    if len(bars) < 300:
+        return None
+    ind = compute_indicators(bars)
+    split_i = int(len(bars) * train_frac)
+
+    keys = list(OPTIMIZE_GRID.keys())
+    best = None
+    for combo in itertools.product(*OPTIMIZE_GRID.values()):
+        cfg = dict(zip(keys, combo))
+        trades, _, _ = run(bars, ind, **cfg)
+        train_trades = [t for t in trades if t["entry_i"] < split_i]
+        holdout_trades = [t for t in trades if t["entry_i"] >= split_i]
+        if len(train_trades) < min_trades_per_split or len(holdout_trades) < min_trades_per_split:
+            continue
+        st, sh = _summarize(train_trades), _summarize(holdout_trades)
+        robust_pf = min(st["profit_factor"], sh["profit_factor"])
+        robust_wr = min(st["win_rate"], sh["win_rate"])
+        score = robust_pf * robust_wr
+        if best is None or score > best["_score"]:
+            best = {"config": cfg, "train_stats": st, "holdout_stats": sh, "_score": score}
+
+    if best is None:
+        return None
+    best.pop("_score")
+    return best
 
 
 def evaluate(ticker: str, df: pd.DataFrame) -> dict:

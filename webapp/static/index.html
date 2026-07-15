@@ -199,18 +199,44 @@ function last5(trades) {
   }).join(", ") + `</span>`;
 }
 const VERDICT_CLASS = { TAKE: "ok", SKIP: "no", "IN TRADE": "mid", "TP HIT": "ok", "NO SIGNAL": "neutral" };
+
+function fmtConfig(cfg) {
+  if (!cfg) return "no config";
+  return Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join(", ");
+}
+
+function renderBaseline(b, cfg) {
+  if (!b) return '<span style="color:var(--muted)">—</span>';
+  const cls = VERDICT_CLASS[b.verdict] || "no";
+  const since = b.first_trade_date ? ` &middot; since ${b.first_trade_date}` : "";
+  const statLine = `${b.n_trades}t &middot; ${b.win_rate}% WR &middot; PF ${b.profit_factor}${since}`;
+  const showReason = b.verdict === "TAKE" || b.verdict === "SKIP";
+  return `<span class="opentrade" title="${fmtConfig(cfg)}">` +
+         `<span class="verdict"><span class="chip ${cls}">${b.verdict}</span></span>` +
+         (showReason ? `<span class="advicewhy">${b.verdict_reason}</span>` : "") +
+         `<span class="advicewhy">${statLine}</span></span>`;
+}
+
+function renderOptimized(o, baseline) {
+  if (!o) return '<span style="color:var(--muted)">—</span>';
+  const t = o.train_stats, h = o.holdout_stats;
+  // Robust = worst-of-both-splits, same discipline used to pick the config in
+  // the first place -- only worth showing if it actually beats baseline.
+  const robustPf = Math.min(t.profit_factor, h.profit_factor);
+  const robustWr = Math.min(t.win_rate, h.win_rate);
+  const better = baseline && (robustPf > baseline.profit_factor || robustWr > baseline.win_rate);
+  if (!better) return '<span style="color:var(--muted)">—</span>';
+  const statLine = `train ${t.n_trades}t/${t.win_rate}%WR/PF${t.profit_factor}` +
+                   ` &middot; holdout ${h.n_trades}t/${h.win_rate}%WR/PF${h.profit_factor}`;
+  return `<span class="opentrade" title="${fmtConfig(o.config)}">` +
+         `<span class="advicewhy">${statLine}</span></span>`;
+}
+
 function otherStrategy(s) {
   if (!s) return '<span style="color:var(--muted)">—</span>';
-  const cls = VERDICT_CLASS[s.verdict] || "no";
-  const since = s.first_trade_date ? ` &middot; since ${s.first_trade_date}` : "";
-  const statLine = `${s.n_trades}t &middot; ${s.win_rate}% WR &middot; PF ${s.profit_factor}${since}`;
-  // NO SIGNAL / IN TRADE / TP HIT are self-explanatory; only TAKE/SKIP need the reason spelled out.
-  const showReason = s.verdict === "TAKE" || s.verdict === "SKIP";
-  return `<span class="opentrade">` +
-         `<span class="verdict"><span class="chip ${cls}">${s.verdict}</span></span>` +
-         (showReason ? `<span class="advicewhy">${s.verdict_reason}</span>` : "") +
+  return `<div class="cardsection"><span class="lbl">Baseline</span>${renderBaseline(s.baseline, s.baseline_config)}</div>` +
          `<hr class="divider">` +
-         `<span class="advicewhy">${statLine}</span></span>`;
+         `<div class="cardsection"><span class="lbl">Optimized</span>${renderOptimized(s.optimized, s.baseline)}</div>`;
 }
 const PAGE_SIZE = 9;
 let lastData = null;

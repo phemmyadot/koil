@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 import webapp.data as data
+import webapp.optimizer as optimizer
 from webapp.scoring import evaluate
 from webapp.tickers import TICKERS
 import webapp.strategy_a as strategy_a
@@ -34,14 +35,23 @@ _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
 _compute_lock = threading.Lock()
 
+_STRATEGY_MODULES = {"strategy_a": strategy_a, "strategy_d": strategy_d, "strategy_vcp": strategy_vcp}
 
-def _eval_other_strategy(module, ticker: str, bars) -> dict | None:
+
+def _eval_other_strategy(key: str, module, ticker: str, bars) -> dict | None:
     """Independently error-isolated -- one strategy failing on a ticker
-    shouldn't drop the other strategies' results for that same ticker."""
+    shouldn't drop the other strategies' results for that same ticker.
+    Note: "optimized" is NOT looked up here -- it's overlaid fresh at request
+    time (see _with_fresh_optimized below), since this function's result is
+    baked into the static _computed snapshot at compute_all() time, which
+    only reruns every 2h/on refresh. The optimizer finishes on its own,
+    unrelated cadence, so baking its result in here would mean newly-swept
+    configs sit invisible until the next unrelated price refresh."""
     try:
-        return module.evaluate(ticker, bars)
+        baseline = module.evaluate(ticker, bars)
     except Exception:  # noqa: BLE001
         return None
+    return {"baseline": baseline, "baseline_config": module.BASELINE_CONFIG}
 
 
 def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
@@ -50,9 +60,8 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
         return ticker, None, data.get_error(ticker) or "no data"
     try:
         payload = evaluate(ticker, bars)
-        payload["strategy_a"] = _eval_other_strategy(strategy_a, ticker, bars)
-        payload["strategy_d"] = _eval_other_strategy(strategy_d, ticker, bars)
-        payload["strategy_vcp"] = _eval_other_strategy(strategy_vcp, ticker, bars)
+        for key, module in _STRATEGY_MODULES.items():
+            payload[key] = _eval_other_strategy(key, module, ticker, bars)
         return ticker, payload, None
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
         return ticker, None, str(e) or type(e).__name__
@@ -89,10 +98,26 @@ def _on_startup():
                 refresh_and_compute()
     threading.Thread(target=loop, daemon=True).start()
 
+    # Per-ticker parameter optimization runs on its own slow (daily) cadence,
+    # completely decoupled from signal computation above -- see webapp/optimizer.py.
+    optimizer.start_background_optimizer()
+
 
 @app.get("/api/meta")
 def meta():
     return {"total_tickers": len(TICKERS), "last_fetch": data.last_fetch_time()}
+
+
+def _with_fresh_optimized(payload: dict) -> dict:
+    """Cheap dict-lookup overlay, done at request time so a ticker's optimized
+    config shows up as soon as the optimizer finishes it -- not just after the
+    next unrelated price-data refresh rebuilds _computed."""
+    out = dict(payload)
+    for key in _STRATEGY_MODULES:
+        strat = out.get(key)
+        if strat is not None:
+            out[key] = {**strat, "optimized": optimizer.get_optimized(payload["ticker"], key)}
+    return out
 
 
 @app.get("/api/tickers")
@@ -100,12 +125,14 @@ def tickers(refresh: int = 0):
     if refresh:
         refresh_and_compute()
     with _compute_lock:
-        return {
-            "asof": _computed_asof,
-            "cached": not refresh,
-            "tickers": list(_computed),
-            "errors": dict(_computed_errors),
-        }
+        computed_snapshot = list(_computed)
+        asof, errors = _computed_asof, dict(_computed_errors)
+    return {
+        "asof": asof,
+        "cached": not refresh,
+        "tickers": [_with_fresh_optimized(p) for p in computed_snapshot],
+        "errors": errors,
+    }
 
 
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"),
