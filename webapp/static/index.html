@@ -64,6 +64,7 @@
   .opentrade .verdict { display: flex; align-items: center; gap: 6px; }
   .firetag { display:inline-block; font-size: 10.5px; font-weight: 700; color: var(--gold);
              background: var(--gold-bg); border-radius: 5px; padding: 2px 6px; margin-left: 6px; }
+  .firetag.weak { color: var(--muted); background: var(--line); }
   .foot { color: var(--muted); font-size: 12px; margin-top: 12px; }
   .pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; }
   .pager button { margin-left: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); }
@@ -108,17 +109,24 @@
 const COND_LABELS = { trend:"TREND", band:"BAND", rsi:"RSI", sma_dist:"DIST", vol_ceil:"VCEIL", vol_floor:"VFLR" };
 
 const TIER_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
+const TIER_LABEL = { HIGH: "HIGH", MEDIUM: "MID", LOW: "LOW" };
 
 function chip(key, c) {
   if (key === "sma_dist" && c.tier) {
-    return `<span class="chip ${TIER_CLASS[c.tier]}" title="${String(c.value).replace(/"/g,"&quot;")}">DIST-${c.tier}</span>`;
+    return `<span class="chip ${TIER_CLASS[c.tier]}" title="${String(c.value).replace(/"/g,"&quot;")}">DIST-${TIER_LABEL[c.tier]}</span>`;
   }
   return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
 }
-function scorebar(n) {
+function scorebar(n, distTier) {
   let s = '<span class="scorebar">';
   for (let i = 0; i < 6; i++) s += `<i class="${i < n ? "on" : ""}"></i>`;
-  return s + `</span>${n}/6` + (n === 6 ? '<span class="firetag">ENTRY</span>' : "");
+  s += `</span>${n}/6`;
+  if (n === 6) {
+    s += distTier === "LOW"
+      ? '<span class="firetag weak" title="entered at LOW confidence (&lt;1.5 ATR from SMA) -- historically ~41-56% win rate">ENTRY (weak)</span>'
+      : '<span class="firetag">ENTRY</span>';
+  }
+  return s;
 }
 function badge(t) {
   if (!t) return '<span style="color:var(--muted)">—</span>';
@@ -126,7 +134,7 @@ function badge(t) {
   const sign = t.unrealized_pct >= 0 ? "+" : "";
   const adviceCls = t.advice === "TAKE" ? "ok" : "no";
   const entryTierChip = t.entry_confidence
-    ? `<span class="chip ${TIER_CLASS[t.entry_confidence]}">ENTRY-${t.entry_confidence}</span>` : "";
+    ? `<span class="chip ${TIER_CLASS[t.entry_confidence]}">ENTRY-${TIER_LABEL[t.entry_confidence]}</span>` : "";
   return `<span class="opentrade">` +
          `<span class="badge" title="${t.bars_held} bars held">` +
          `OPEN ${t.entry_date} @ ${t.entry_price} &rarr; target ${t.target} <span class="${cls}">${sign}${t.unrealized_pct}%</span></span>` +
@@ -159,10 +167,12 @@ function render(data) {
 
   let html = "";
   for (const r of rows) {
-    html += `<tr class="${r.score === 6 ? "fire" : ""}">
+    const distTier = r.conditions?.sma_dist?.tier;
+    const isFire = r.score === 6 && distTier !== "LOW";
+    html += `<tr class="${isFire ? "fire" : ""}">
       <td class="tk"><a class="tklink" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a></td>
       <td class="num">$${r.price.toFixed(2)}</td>
-      <td class="wrap score">${scorebar(r.score)}</td>
+      <td class="wrap score">${scorebar(r.score, distTier)}</td>
       <td class="wrap"><span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span></td>
       <td class="num">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</td>
       <td class="num">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</td>
