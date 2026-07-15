@@ -117,14 +117,21 @@ function chip(key, c) {
   }
   return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
 }
-function scorebar(n, distTier) {
+function scorebar(n, distTier, earningsRisk) {
   let s = '<span class="scorebar">';
   for (let i = 0; i < 6; i++) s += `<i class="${i < n ? "on" : ""}"></i>`;
   s += `</span>${n}/6`;
   if (n === 6) {
-    s += distTier === "LOW"
-      ? '<span class="firetag weak" title="entered at LOW confidence (&lt;1.5 ATR from SMA) -- historically ~41-56% win rate">ENTRY (weak)</span>'
-      : '<span class="firetag">ENTRY</span>';
+    if (earningsRisk) {
+      // Not a score gate, but a real block on the live engine's entry (see
+      // scoring.py's earnings_risk docstring) -- a 6/6 here would NOT actually
+      // fire a buy in production, so don't show it as a live-fireable signal.
+      s += '<span class="firetag weak" title="earnings report within the entry-avoid window -- engine will not take this entry (validated: holding through earnings drops win rate 62%->51%)">ENTRY (earnings risk)</span>';
+    } else if (distTier === "LOW") {
+      s += '<span class="firetag weak" title="entered at LOW confidence (&lt;1.5 ATR from SMA) -- historically ~41-56% win rate">ENTRY (weak)</span>';
+    } else {
+      s += '<span class="firetag">ENTRY</span>';
+    }
   }
   return s;
 }
@@ -168,11 +175,11 @@ function render(data) {
   let html = "";
   for (const r of rows) {
     const distTier = r.conditions?.sma_dist?.tier;
-    const isFire = r.score === 6 && distTier !== "LOW";
+    const isFire = r.score === 6 && distTier !== "LOW" && !r.earnings_risk;
     html += `<tr class="${isFire ? "fire" : ""}">
       <td class="tk"><a class="tklink" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a></td>
       <td class="num">$${r.price.toFixed(2)}</td>
-      <td class="wrap score">${scorebar(r.score, distTier)}</td>
+      <td class="wrap score">${scorebar(r.score, distTier, r.earnings_risk)}</td>
       <td class="wrap"><span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span></td>
       <td class="num">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</td>
       <td class="num">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</td>

@@ -20,6 +20,40 @@ def ATR(high, low, close, n=14):
     tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     return tr.ewm(alpha=1 / n, adjust=False).mean()
 
+def fetch_earnings_dates(ticker):
+    """Raw fetch, split out from earnings_flags() so callers (e.g. the webapp) can
+    cache this separately -- it's a web-scrape call and earnings dates are known
+    well in advance, so a long-TTL cache is safe unlike the 15-min price cache."""
+    try:
+        ed = yf.Ticker(ticker).get_earnings_dates(limit=40)
+        return pd.to_datetime(ed.index).tz_localize(None) if ed is not None and not ed.empty else pd.DatetimeIndex([])
+    except Exception:
+        return pd.DatetimeIndex([])
+
+def earnings_flags_from_dates(index, dates, avoid_window_days=21, imminent_days=3):
+    """Validated 2026-07-14 on 1,624 closed trades: holding through an earnings date
+    dropped win rate 62.1% -> 51.1%, flipped avg return +2.10% -> -0.46%, and nearly
+    tripled the big-loser (<=-20%) rate (2.90% -> 7.73%) -- consistent in both
+    chronological halves. Returns two boolean Series aligned to `index`:
+      EarningsWithinAvoidWindow -- an earnings date falls within avoid_window_days
+        calendar days ahead (blocks new entries -- a fresh entry would likely still
+        be open when the report hits, given entries can run close to the time stop).
+      EarningsImminent -- an earnings date falls within imminent_days calendar days
+        (forces a preemptive close on any open position, matching the general
+        practice of exiting 2-3 trading days ahead of a report).
+    """
+    avoid = pd.Series(False, index=index)
+    imminent = pd.Series(False, index=index)
+    for d in dates:
+        avoid |= (index >= d - pd.Timedelta(days=avoid_window_days)) & (index < d)
+        imminent |= (index >= d - pd.Timedelta(days=imminent_days)) & (index < d)
+    return avoid, imminent
+
+def earnings_flags(index, ticker, avoid_window_days=21, imminent_days=3):
+    """Convenience wrapper: fetch + compute in one call (no caching -- see
+    fetch_earnings_dates() for the cacheable half)."""
+    return earnings_flags_from_dates(index, fetch_earnings_dates(ticker), avoid_window_days, imminent_days)
+
 class PortfolioSizedEngine(Strategy):
     sma_slow_len = 150  
     bb_len = 20
@@ -32,6 +66,7 @@ class PortfolioSizedEngine(Strategy):
     min_atr_pct = 0.04       # Pine: atrPctMin=4 (0 = off) — payoff floor from top-50 trade analysis
     alloc = 0.35             # Pine: default_qty_value=35
     entry_start = pd.Timestamp("2022-01-01")  # Pine: startDate default
+    avoid_earnings = True    # validated 2026-07-14: see earnings_flags() docstring
 
     def init(self):
         self.macro_ma = self.I(SMA, self.data.Close, self.sma_slow_len)
@@ -54,6 +89,14 @@ class PortfolioSizedEngine(Strategy):
             self.trades[0].close()
             return
 
+        # Pine block 1b — Earnings Preemptive Close: exit ahead of a report rather than
+        # risk an overnight gap through it (validated: earnings-during-hold trades had a
+        # 2.7x higher big-loser rate). Checked before the time stop since it's the more
+        # urgent, gap-risk-driven concern.
+        if self.trades and self.avoid_earnings and bool(self.data.EarningsImminent[-1]):
+            self.trades[0].close()
+            return
+
         # Pine block 2 — Time Stop: reversion thesis dead if TP not reached within N bars
         if self.trades and self.time_stop_bars > 0 and (bar_index - self.trades[0].entry_bar) >= self.time_stop_bars:
             self.trades[0].close()
@@ -68,10 +111,15 @@ class PortfolioSizedEngine(Strategy):
         sma_dist_ok = self.min_sma_dist_atr == 0 or current_price >= self.macro_ma[-1] + self.min_sma_dist_atr * self.atr[-1]
         vol_ceil_ok = self.max_atr_pct == 0 or self.atr[-1] / current_price <= self.max_atr_pct
         vol_floor_ok = self.min_atr_pct == 0 or self.atr[-1] / current_price >= self.min_atr_pct
+        # A fresh entry needs to be blocked if earnings falls within the entry-avoid
+        # window (not just "imminent") -- a new position can run close to the full
+        # time stop, so it would very likely still be open when the report hits.
+        earnings_ok = not self.avoid_earnings or not bool(self.data.EarningsWithinAvoidWindow[-1])
 
         # Pine block 3 — Entry fills at signal bar close (trade_on_close=True);
         # tp= is the resting limit at the frozen mid-band (strategy.exit limit=targetMid)
-        if not self.trades and macro_bullish and bb_exhaustion and rsi_washed_out and sma_dist_ok and vol_ceil_ok and vol_floor_ok:
+        if (not self.trades and macro_bullish and bb_exhaustion and rsi_washed_out and sma_dist_ok
+                and vol_ceil_ok and vol_floor_ok and earnings_ok):
             self.buy(size=self.alloc, tp=self.bb_basis[-1])
 
 if __name__ == "__main__":
@@ -92,7 +140,9 @@ if __name__ == "__main__":
         df = df.drop(columns=["Adj Close"], errors="ignore")
         if df.empty:
             continue
-            
+
+        df["EarningsWithinAvoidWindow"], df["EarningsImminent"] = earnings_flags(df.index, ticker)
+
         # finalize_trades=False: TradingView's closed-trade stats exclude a still-open position
         bt = Backtest(df, PortfolioSizedEngine, cash=10000, commission=0.001, trade_on_close=True, finalize_trades=False)
         stats = bt.run()

@@ -5,6 +5,7 @@ score/open-trade status always matches the validated backtest.
 """
 import os
 import sys
+import time
 import warnings
 
 import pandas as pd
@@ -12,11 +13,26 @@ import yfinance as yf
 from backtesting import Backtest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from p import PortfolioSizedEngine, RSI, ATR  # noqa: E402
+from p import PortfolioSizedEngine, RSI, ATR, fetch_earnings_dates, earnings_flags_from_dates  # noqa: E402
 
 warnings.filterwarnings("ignore", message="Some trades remain open")
 
 E = PortfolioSizedEngine  # production config constants live on the engine class
+
+# Earnings dates are known well in advance and don't change intraday, unlike price
+# data -- a much longer TTL than the 15-min price cache is safe here.
+_EARNINGS_CACHE_TTL = 24 * 60 * 60
+_earnings_cache: dict[str, tuple[float, pd.DatetimeIndex]] = {}
+
+
+def _cached_earnings_dates(ticker: str) -> pd.DatetimeIndex:
+    now = time.time()
+    cached = _earnings_cache.get(ticker)
+    if cached and now - cached[0] < _EARNINGS_CACHE_TTL:
+        return cached[1]
+    dates = fetch_earnings_dates(ticker)
+    _earnings_cache[ticker] = (now, dates)
+    return dates
 
 
 def fetch(ticker: str) -> pd.DataFrame:
@@ -24,7 +40,10 @@ def fetch(ticker: str) -> pd.DataFrame:
                      progress=False, auto_adjust=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    return df.drop(columns=["Adj Close"], errors="ignore")
+    df = df.drop(columns=["Adj Close"], errors="ignore")
+    df["EarningsWithinAvoidWindow"], df["EarningsImminent"] = earnings_flags_from_dates(
+        df.index, _cached_earnings_dates(ticker))
+    return df
 
 
 def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict]]:
@@ -59,8 +78,9 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
         entry_dist_atr = ((float(tr.EntryPrice) - float(macro_ma.loc[tr.EntryTime])) / entry_atr
                            if entry_atr > 0 else 0.0)
         entry_tier = _dist_confidence_tier(entry_dist_atr)
+        earnings_soon = bool(df["EarningsImminent"].iloc[-1])
 
-        advice, advice_reason = _trade_advice(target, last_close, bars_held, entry_tier)
+        advice, advice_reason = _trade_advice(target, last_close, bars_held, entry_tier, earnings_soon)
         open_trade = {
             "entry_date": str(tr.EntryTime.date()),
             "entry_price": round(float(tr.EntryPrice), 4),
@@ -74,17 +94,23 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
     return open_trade, avg_trade_days, last5_trades
 
 
-def _trade_advice(target: float, last_close: float, bars_held: int, entry_tier: str) -> tuple[str, str]:
+def _trade_advice(target: float, last_close: float, bars_held: int, entry_tier: str,
+                   earnings_soon: bool = False) -> tuple[str, str]:
     """TAKE/SKIP call for someone considering entering *now* on an already-open
     signal, based on the same time stop (time_stop_bars) the engine itself uses
     to force-close stale trades, whether the mean-reversion target is already
-    spent, and the confidence tier the trade actually entered at (see
+    spent, the confidence tier the trade actually entered at (see
     _dist_confidence_tier -- LOW-tier entries historically win only ~41-56% of
     the time vs ~73%+ for HIGH-tier, so a LOW-tier open trade is a skip by
-    default even with room left on the clock)."""
+    default even with room left on the clock), and whether an earnings report
+    is imminent (validated: holding through earnings drops win rate 62%->51%
+    and ~triples the big-loser rate -- the live engine would preemptively
+    close this position soon anyway, see PortfolioSizedEngine block 1b)."""
     bars_left = E.time_stop_bars - bars_held
     if last_close >= target:
         return "SKIP", "already at/above target -- upside spent"
+    if earnings_soon:
+        return "SKIP", "earnings report imminent -- engine will preemptively close to avoid gap risk"
     if bars_left <= 3:
         return "SKIP", f"time stop in {bars_left}d -- thesis running out of room"
     if entry_tier == "LOW":
@@ -161,6 +187,11 @@ def evaluate(ticker: str) -> dict:
         "score": sum(1 for v in conditions.values() if v["pass"]),
         "conditions": conditions,
         "to_tp_pct": round(100 * (basis / price - 1), 2),
+        # Not one of the 6 score gates (keeps score comparable to the pre-existing
+        # UI/semantics) but a real, validated block on live entries in p.py's
+        # engine -- a 6/6 score with earnings_risk=True would NOT actually fire
+        # a buy in the production backtest.
+        "earnings_risk": bool(df["EarningsWithinAvoidWindow"].iloc[-1]),
         "open_trade": open_trade,
         "avg_trade_days": avg_trade_days,
         "last5_trades": last5_trades,
