@@ -31,24 +31,28 @@
   button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
            padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; margin-left: auto; }
   button:disabled { opacity: 0.5; cursor: wait; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; min-width: 1100px; }
-  th, td { padding: 9px 12px; text-align: left; white-space: nowrap; }
-  td.wrap { white-space: normal; min-width: 200px; }
-  td.wrap.score { min-width: 90px; }
-  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em;
-       color: var(--muted); border-bottom: 1px solid var(--line); font-weight: 600; }
-  tbody tr { border-bottom: 1px solid var(--line); }
-  tbody tr:last-child { border-bottom: 0; }
-  tr.err { opacity: 0.45; }
-  td.num { font-variant-numeric: tabular-nums; }
-  .tk { font-weight: 700; }
+  .cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  .tickercard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .tickercard.fire { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+  .tickercard.err { opacity: 0.5; }
+  .cardhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .cardhead .price { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  .cardsection { display: flex; flex-direction: column; gap: 4px; }
+  .cardsection .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .cardpair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stratrow { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .stratrow .cardsection .lbl { text-align: center; }
+  .stratrow .opentrade { align-items: center; }
+  .divider { border: 0; border-top: 1px solid var(--line); margin: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+  .tk { font-weight: 700; font-size: 15px; }
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
   .tklink:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .scorebar { display: inline-flex; gap: 3px; vertical-align: middle; margin-right: 8px; }
   .scorebar i { width: 9px; height: 16px; border-radius: 2.5px; background: var(--line); }
   .scorebar i.on { background: var(--green); }
-  tr.fire .scorebar i.on { background: var(--gold); }
+  .tickercard.fire .scorebar i.on { background: var(--gold); }
   .chip { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px;
           padding: 2px 6px; cursor: default; text-align: center; }
   .chip.ok { background: var(--green-bg); color: var(--green); }
@@ -86,24 +90,8 @@
     select { flex: 1 1 auto; min-width: 0; }
     .foot { font-size: 11px; }
     .pager { flex-wrap: wrap; gap: 8px; }
-
-    /* Stack the table into one card per ticker instead of horizontal scroll. */
-    .card { border: 0; background: transparent; overflow: visible; }
-    table { min-width: 0; }
-    table, tbody { display: block; width: 100%; }
-    thead { display: none; }
-    tbody tr { display: flex; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line);
-               border-radius: 10px; padding: 4px 12px; margin-bottom: 10px; }
-    tbody tr:last-child { margin-bottom: 0; }
-    td, td.wrap, td.wrap.score { flex: 1 1 100%; min-width: 0;
-        white-space: normal; text-align: left; padding: 7px 0; font-size: 13px;
-        border-bottom: 1px dashed var(--line); }
-    /* Ticker / Price / Score share a row; To TP % / Avg Days share a row. */
-    td[data-label="Ticker"], td[data-label="Price"], td[data-label="Score"] { flex-basis: 33%; border-bottom: 0; }
-    td[data-label="To TP %"], td[data-label="Avg Days"] { flex-basis: 50%; border-bottom: 0; }
-    td:last-child { border-bottom: 0; }
-    td[data-label]::before { content: attr(data-label); display: block; font-size: 10px;
-        text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 2px; }
+    .cardgrid { grid-template-columns: 1fr; gap: 10px; }
+    .stratrow { grid-template-columns: 1fr; gap: 10px; }
   }
 </style>
 </head>
@@ -130,17 +118,10 @@
       <option value="6">6/6 (entry only)</option>
     </select>
   </div>
-  <div class="card">
-    <table>
-      <thead><tr>
-        <th>Ticker</th><th>Price</th><th>Score</th><th>Conditions</th>
-        <th>To&nbsp;TP&nbsp;%</th><th>Avg&nbsp;Days</th><th>Last&nbsp;5&nbsp;TP&nbsp;%</th><th>Open&nbsp;Trade</th>
-        <th>Strat&nbsp;A</th><th>Strat&nbsp;D</th><th>VCP&nbsp;Master</th>
-      </tr></thead>
-      <tbody id="rows"><tr><td colspan="11" style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</td></tr></tbody>
-    </table>
-    <div class="pager" id="pager"></div>
+  <div id="rows" class="cardgrid">
+    <p style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</p>
   </div>
+  <div class="pager" id="pager"></div>
   <p class="foot">Score = entry gates passing on the latest daily close (6/6 = strategy enters on this close).
      To TP % = distance to the 20-day mid-band, the trade's payoff if entered now.
      Config: SMA150 &middot; BB 20/1.5&sigma; &middot; RSI&le;40 &middot; dist 0.5&middot;ATR &middot; ATR 4&ndash;12% &middot; time stop 20.</p>
@@ -228,25 +209,48 @@ function render(data) {
   for (const r of rows) {
     const distTier = r.conditions?.sma_dist?.tier;
     const isFire = r.score === 6 && distTier !== "LOW" && !r.earnings_risk;
-    html += `<tr class="${isFire ? "fire" : ""}">
-      <td class="tk" data-label="Ticker"><a class="tklink" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a></td>
-      <td class="num" data-label="Price">$${r.price.toFixed(2)}</td>
-      <td class="wrap score" data-label="Score">${scorebar(r.score, distTier, r.earnings_risk)}</td>
-      <td class="wrap" data-label="Conditions"><span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span></td>
-      <td class="num" data-label="To TP %">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</td>
-      <td class="num" data-label="Avg Days">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</td>
-      <td class="wrap" data-label="Last 5 TP %">${last5(r.last5_trades)}</td>
-      <td class="wrap" data-label="Open Trade">${badge(r.open_trade)}</td>
-      <td class="wrap" data-label="Strat A">${otherStrategy(r.strategy_a)}</td>
-      <td class="wrap" data-label="Strat D">${otherStrategy(r.strategy_d)}</td>
-      <td class="wrap" data-label="VCP Master">${otherStrategy(r.strategy_vcp)}</td>
-    </tr>`;
+    html += `<div class="tickercard ${isFire ? "fire" : ""}">
+      <div class="cardhead">
+        <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
+        <span class="price num">$${r.price.toFixed(2)}</span>
+        ${scorebar(r.score, distTier, r.earnings_risk)}
+      </div>
+      <div class="cardsection">
+        <span class="lbl">Conditions</span>
+        <span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span>
+      </div>
+      <div class="cardpair">
+        <div class="cardsection">
+          <span class="lbl">To TP %</span>
+          <span class="num">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</span>
+        </div>
+        <div class="cardsection">
+          <span class="lbl">Avg Days</span>
+          <span class="num">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</span>
+        </div>
+      </div>
+      <div class="cardsection">
+        <span class="lbl">Last 5 TP %</span>
+        ${last5(r.last5_trades)}
+      </div>
+      <hr class="divider">
+      <div class="cardsection">
+        <span class="lbl">Open Trade</span>
+        ${badge(r.open_trade)}
+      </div>
+      <hr class="divider">
+      <div class="stratrow">
+        <div class="cardsection"><span class="lbl">Strat A</span>${otherStrategy(r.strategy_a)}</div>
+        <div class="cardsection"><span class="lbl">Strat D</span>${otherStrategy(r.strategy_d)}</div>
+        <div class="cardsection"><span class="lbl">VCP Master</span>${otherStrategy(r.strategy_vcp)}</div>
+      </div>
+    </div>`;
   }
   if (currentPage === pageCount)
     for (const [tk, err] of Object.entries(data.errors || {}))
-      html += `<tr class="err"><td class="tk">${tk}</td><td colspan="10">${err}</td></tr>`;
+      html += `<div class="tickercard err"><div class="cardhead"><span class="tk">${tk}</span></div><span>${err}</span></div>`;
   if (!rows.length && !Object.keys(data.errors || {}).length)
-    html = `<tr><td colspan="11" style="color:var(--muted)">No tickers match this filter</td></tr>`;
+    html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
   const countText = minScore > 0
