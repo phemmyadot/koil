@@ -1,9 +1,10 @@
 """
 Strategy A: KAMA adaptive pullback (validated in the session's model.py work).
-Ported to fetch live data via yfinance instead of a local JSON cache, and
-extended with a "signal today" / rating-bucket evaluator for the dashboard.
+Reads from the shared raw-data cache (webapp/data.py) instead of fetching its
+own data, and extends it with a "signal today" / TAKE-SKIP verdict evaluator
+for the dashboard.
 """
-import yfinance as yf
+import pandas as pd
 
 ADX_THRESHOLD = 20.0
 EXTENSION_MULT = 1.5
@@ -14,11 +15,7 @@ TRAIL_ATR_MULT = 3.0
 TRAIL_ACTIVATE_ATR_MULT = 1.0
 
 
-def fetch_bars(ticker: str, period: str = "10y") -> list[dict]:
-    df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=False)
-    if hasattr(df.columns, "get_level_values"):
-        df.columns = df.columns.get_level_values(0)
-    df = df.dropna()
+def _bars_from_df(df: pd.DataFrame) -> list[dict]:
     bars = []
     for idx, row in df.iterrows():
         bars.append({"o": float(row.Open), "h": float(row.High), "l": float(row.Low),
@@ -199,8 +196,8 @@ def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: flo
     return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
-def evaluate(ticker: str) -> dict:
-    bars = fetch_bars(ticker)
+def evaluate(ticker: str, df: pd.DataFrame) -> dict:
+    bars = _bars_from_df(df)
     if len(bars) < 250:
         raise ValueError("insufficient history")
     ind = compute_indicators(bars)

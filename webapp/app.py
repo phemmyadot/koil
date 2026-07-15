@@ -2,9 +2,17 @@
 
 Run from the project root:
     .\\.venv\\Scripts\\python.exe -m uvicorn webapp.app:app --port 8123
+
+Architecture: fetch and compute are decoupled from the request path.
+webapp/data.py owns a shared raw-OHLCV cache (one fetch serves all four
+strategy evaluators, refreshed on a market-hours-aware schedule -- see that
+module for the exact rule). On startup, and whenever the background
+refresher decides the cache is stale, every ticker's full payload (all four
+strategies) is recomputed once and held in memory. A page request is then
+just a fast in-memory read -- no network call, no per-request backtest run.
 """
-import math
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -12,80 +20,92 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+import webapp.data as data
 from webapp.scoring import evaluate
 from webapp.tickers import TICKERS
 import webapp.strategy_a as strategy_a
 import webapp.strategy_d as strategy_d
 import webapp.strategy_vcp as strategy_vcp
 
-CACHE_TTL = 15 * 60  # seconds
-_cache: dict[str, tuple[float, dict]] = {}
-_errors: dict[str, str] = {}
-
 app = FastAPI(title="Exhaustion Dashboard")
 
+_computed: list[dict] = []
+_computed_errors: dict[str, str] = {}
+_computed_asof: str | None = None
+_compute_lock = threading.Lock()
 
-def _eval_other_strategy(module, ticker: str) -> dict | None:
-    """Each extra strategy does its own data fetch and is independently
-    error-isolated -- one failing (e.g. insufficient history) shouldn't drop
-    the other strategies' results for that ticker."""
+
+def _eval_other_strategy(module, ticker: str, bars) -> dict | None:
+    """Independently error-isolated -- one strategy failing on a ticker
+    shouldn't drop the other strategies' results for that same ticker."""
     try:
-        return module.evaluate(ticker)
+        return module.evaluate(ticker, bars)
     except Exception:  # noqa: BLE001
         return None
 
 
-def _get_one(ticker: str, refresh: bool) -> tuple[str, dict | None, str | None]:
-    now = time.time()
-    if not refresh and ticker in _cache and now - _cache[ticker][0] < CACHE_TTL:
-        return ticker, _cache[ticker][1], None
+def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
+    bars = data.get_bars(ticker)
+    if bars is None:
+        return ticker, None, data.get_error(ticker) or "no data"
     try:
-        payload = evaluate(ticker)
-        payload["strategy_a"] = _eval_other_strategy(strategy_a, ticker)
-        payload["strategy_d"] = _eval_other_strategy(strategy_d, ticker)
-        payload["strategy_vcp"] = _eval_other_strategy(strategy_vcp, ticker)
-        _cache[ticker] = (now, payload)
+        payload = evaluate(ticker, bars)
+        payload["strategy_a"] = _eval_other_strategy(strategy_a, ticker, bars)
+        payload["strategy_d"] = _eval_other_strategy(strategy_d, ticker, bars)
+        payload["strategy_vcp"] = _eval_other_strategy(strategy_vcp, ticker, bars)
         return ticker, payload, None
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
         return ticker, None, str(e) or type(e).__name__
 
 
+def compute_all() -> None:
+    """Recompute every ticker's full payload from whatever's currently in the
+    raw cache. Pure CPU work, no network -- safe to call from a background
+    thread without blocking request handling."""
+    global _computed, _computed_errors, _computed_asof
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(_compute_one, TICKERS))
+    with _compute_lock:
+        _computed = [p for _, p, _ in results if p is not None]
+        _computed_errors = {t: e for t, _, e in results if e is not None}
+        _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def refresh_and_compute() -> None:
+    """Fetch (if needed) then recompute. Called once at startup and by the
+    background refresher whenever webapp.data says the cache is stale."""
+    data.warm_cache()
+    compute_all()
+
+
+@app.on_event("startup")
+def _on_startup():
+    refresh_and_compute()
+
+    def loop():
+        while True:
+            time.sleep(data.CHECK_INTERVAL)
+            if data.is_stale():
+                refresh_and_compute()
+    threading.Thread(target=loop, daemon=True).start()
+
+
 @app.get("/api/meta")
 def meta():
-    """Instant, no-fetch endpoint so the frontend can seed a progress-bar
-    estimate (ticker count) before kicking off the slow /api/tickers call."""
-    return {"total_tickers": len(TICKERS)}
+    return {"total_tickers": len(TICKERS), "last_fetch": data.last_fetch_time()}
 
 
 @app.get("/api/tickers")
-def tickers(refresh: int = 0, page: int = 1, page_size: int = 8):
-    """Backend-paginated: only the requested page's tickers are evaluated (and
-    fetched from Yahoo), not the full universe -- this is what makes paging
-    fast. The trade-off: sort/filter only apply within the loaded page, since
-    a ticker's score/signal isn't known until it's actually evaluated."""
-    page_size = max(1, min(page_size, 50))
-    total = len(TICKERS)
-    total_pages = max(1, math.ceil(total / page_size))
-    page = max(1, min(page, total_pages))
-    start = (page - 1) * page_size
-    page_tickers = TICKERS[start:start + page_size]
-
-    all_cached = not refresh and all(
-        t in _cache and time.time() - _cache[t][0] < CACHE_TTL for t in page_tickers)
-    with ThreadPoolExecutor(max_workers=page_size) as pool:
-        results = list(pool.map(lambda t: _get_one(t, bool(refresh)), page_tickers))
-    payloads = [p for _, p, _ in results if p is not None]
-    errors = {t: e for t, _, e in results if e is not None}
-    return {
-        "asof": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "cached": all_cached,
-        "tickers": payloads,
-        "errors": errors,
-        "page": page,
-        "page_size": page_size,
-        "total_tickers": total,
-        "total_pages": total_pages,
-    }
+def tickers(refresh: int = 0):
+    if refresh:
+        refresh_and_compute()
+    with _compute_lock:
+        return {
+            "asof": _computed_asof,
+            "cached": not refresh,
+            "tickers": list(_computed),
+            "errors": dict(_computed_errors),
+        }
 
 
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"),

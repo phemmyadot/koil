@@ -7,9 +7,9 @@ import os
 import sys
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import pandas as pd
-import yfinance as yf
 from backtesting import Backtest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +23,13 @@ E = PortfolioSizedEngine  # production config constants live on the engine class
 # data -- a much longer TTL than the 15-min price cache is safe here.
 _EARNINGS_CACHE_TTL = 24 * 60 * 60
 _earnings_cache: dict[str, tuple[float, pd.DatetimeIndex]] = {}
+# yf.Ticker.get_earnings_dates() has no built-in timeout and can hang on a
+# given ticker -- since compute_all() bulk-processes hundreds of tickers via
+# ThreadPoolExecutor.map(), one hung call would block the ENTIRE batch
+# forever (map waits for every result). Bound it with an explicit timeout so
+# a single bad ticker degrades to "no earnings data" instead of freezing startup.
+_EARNINGS_FETCH_TIMEOUT = 8
+_earnings_executor = ThreadPoolExecutor(max_workers=8)
 
 
 def _cached_earnings_dates(ticker: str) -> pd.DatetimeIndex:
@@ -30,17 +37,20 @@ def _cached_earnings_dates(ticker: str) -> pd.DatetimeIndex:
     cached = _earnings_cache.get(ticker)
     if cached and now - cached[0] < _EARNINGS_CACHE_TTL:
         return cached[1]
-    dates = fetch_earnings_dates(ticker)
+    future = _earnings_executor.submit(fetch_earnings_dates, ticker)
+    try:
+        dates = future.result(timeout=_EARNINGS_FETCH_TIMEOUT)
+    except (FutureTimeoutError, Exception):  # noqa: BLE001 - never let one ticker hang the batch
+        dates = pd.DatetimeIndex([])
     _earnings_cache[ticker] = (now, dates)
     return dates
 
 
-def fetch(ticker: str) -> pd.DataFrame:
-    df = yf.download(ticker, start="2020-01-01", interval="1d",
-                     progress=False, auto_adjust=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df.drop(columns=["Adj Close"], errors="ignore")
+def _with_earnings_flags(bars: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """Attach earnings-window flag columns to a copy of the shared raw OHLCV
+    cache. Earnings dates have their own 24h cache (they don't change
+    intraday), independent of the shared price-data cache in webapp/data.py."""
+    df = bars.copy()
     df["EarningsWithinAvoidWindow"], df["EarningsImminent"] = earnings_flags_from_dates(
         df.index, _cached_earnings_dates(ticker))
     return df
@@ -133,8 +143,8 @@ def _dist_confidence_tier(dist_atr: float) -> str:
     return "LOW"
 
 
-def evaluate(ticker: str) -> dict:
-    df = fetch(ticker)
+def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
+    df = _with_earnings_flags(bars, ticker)
     if df.empty or len(df) < E.sma_slow_len + 20:
         raise ValueError("no data" if df.empty else "insufficient history")
 

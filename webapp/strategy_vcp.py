@@ -2,11 +2,11 @@
 VCP Master (vcp.pine, fixed + volume-confirmed) ported for the dashboard.
 Mirrors test_vcp.py's validated logic: ATR compression + 20-bar breakout +
 volume confirmation, multi-tier stop/breakeven/trail, partial TP, time stop.
-Extended with a "signal today" / rating-bucket evaluator.
+Reads from the shared raw-data cache (webapp/data.py) and extends it with a
+"signal today" / TAKE-SKIP verdict evaluator.
 """
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 ATR_LEN = 22
 ATR_MULT = 3.0
@@ -19,13 +19,6 @@ MAX_BARS = 20
 EMA_LEN = 50
 VOL_MULT = 1.4
 VOL_AVG_LEN = 50
-
-
-def fetch(ticker: str, period: str = "10y") -> pd.DataFrame:
-    df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df.drop(columns=["Adj Close"], errors="ignore").dropna()
 
 
 def wilder_atr(h, l, c, length):
@@ -56,8 +49,7 @@ def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: flo
     return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
-def evaluate(ticker: str) -> dict:
-    df = fetch(ticker)
+def evaluate(ticker: str, df: pd.DataFrame) -> dict:
     if len(df) < 250:
         raise ValueError("insufficient history")
 

@@ -1,11 +1,12 @@
 """
 Strategy D: VCP fixed-bracket breakout (validated in the session's model_d.py
-work, with the corrected 50-day volume-dry-up window). Ported to fetch live
-data via yfinance and extended with a "signal today" / rating-bucket evaluator.
+work, with the corrected 50-day volume-dry-up window). Reads from the shared
+raw-data cache (webapp/data.py) and extends it with a "signal today" /
+TAKE-SKIP verdict evaluator.
 """
 import statistics
 
-import yfinance as yf
+import pandas as pd
 
 ADX_THRESHOLD = 25.0
 BBW_PCT_LIMIT = 45.0
@@ -24,11 +25,7 @@ VOL_SLOW_LEN = 50
 VOL_AVG_LEN = 50
 
 
-def fetch_bars(ticker: str, period: str = "10y") -> list[dict]:
-    df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=False)
-    if hasattr(df.columns, "get_level_values"):
-        df.columns = df.columns.get_level_values(0)
-    df = df.dropna()
+def _bars_from_df(df: pd.DataFrame) -> list[dict]:
     bars = []
     for idx, row in df.iterrows():
         bars.append({"o": float(row.Open), "h": float(row.High), "l": float(row.Low),
@@ -209,8 +206,8 @@ def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: flo
     return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
-def evaluate(ticker: str) -> dict:
-    bars = fetch_bars(ticker)
+def evaluate(ticker: str, df: pd.DataFrame) -> dict:
+    bars = _bars_from_df(df)
     if len(bars) < 250:
         raise ValueError("insufficient history")
     ind = compute_indicators(bars)

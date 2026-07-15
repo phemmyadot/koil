@@ -207,23 +207,26 @@ function otherStrategy(s) {
          `<hr class="divider">` +
          `<span class="advicewhy">${statLine}</span></span>`;
 }
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 9;
 let lastData = null;
 let currentPage = 1;
 
-// Backend-paginated: the server only evaluates this page's tickers, so
-// sort/filter can only apply within the currently-loaded page (a ticker's
-// score isn't known until the server actually evaluates it).
+// The server now precomputes every ticker in the background (see
+// webapp/data.py + app.py's compute_all()) and this endpoint just returns
+// the full in-memory result set -- so sort/filter/paginate happen here,
+// client-side, across the WHOLE universe, same as before backend pagination
+// existed, except the "fetch everything" step never happens on this path.
 function render(data) {
   lastData = data;
-  currentPage = data.page || 1;
   const minScore = Number(document.getElementById("scoreFilter").value);
   const allRows = data.tickers.slice()
     .filter(r => r.score >= minScore)
     .sort((a, b) =>
       (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct));
 
-  const rows = allRows;
+  const pageCount = Math.max(1, Math.ceil(allRows.length / PAGE_SIZE));
+  currentPage = Math.min(Math.max(1, currentPage), pageCount);
+  const rows = allRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   let html = "";
   for (const r of rows) {
@@ -266,20 +269,20 @@ function render(data) {
       </div>
     </div>`;
   }
-  for (const [tk, err] of Object.entries(data.errors || {}))
-    html += `<div class="tickercard err"><div class="cardhead"><span class="tk">${tk}</span></div><span>${err}</span></div>`;
+  if (currentPage === pageCount)
+    for (const [tk, err] of Object.entries(data.errors || {}))
+      html += `<div class="tickercard err"><div class="cardhead"><span class="tk">${tk}</span></div><span>${err}</span></div>`;
   if (!rows.length && !Object.keys(data.errors || {}).length)
-    html = `<p style="color:var(--muted)">No tickers on this page match the filter -- try Next/Prev or All</p>`;
+    html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
   const countText = minScore > 0
-    ? `${allRows.length} of ${data.tickers.length} shown on this page (score &ge; ${minScore})`
-    : `${data.tickers.length} tickers on this page`;
+    ? `${allRows.length} of ${data.tickers.length} tickers (score &ge; ${minScore})`
+    : `${data.tickers.length} tickers`;
   document.getElementById("meta").innerHTML =
-    `as of ${new Date(data.asof).toLocaleString()} &middot; ${countText} of ${data.total_tickers} total` +
-    ` &middot; ${open} open trade${open === 1 ? "" : "s"}` +
+    `as of ${new Date(data.asof).toLocaleString()} &middot; ${countText} &middot; ${open} open trade${open === 1 ? "" : "s"}` +
     (data.cached ? " &middot; cached" : " &middot; live");
-  renderPager(data.page, data.total_pages);
+  renderPager(currentPage, pageCount);
 }
 
 function renderPager(page, pageCount) {
@@ -289,8 +292,10 @@ function renderPager(page, pageCount) {
     <button id="prevPage" ${page === 1 ? "disabled" : ""}>&larr; Prev</button>
     <span>Page ${page} of ${pageCount}</span>
     <button id="nextPage" ${page === pageCount ? "disabled" : ""}>Next &rarr;</button>`;
-  document.getElementById("prevPage").addEventListener("click", () => load(false, page - 1, true));
-  document.getElementById("nextPage").addEventListener("click", () => load(false, page + 1, true));
+  // Data for every ticker is already loaded (server precomputes everything in
+  // the background) -- paging is just a client-side re-render, no fetch.
+  document.getElementById("prevPage").addEventListener("click", () => { currentPage--; render(lastData); });
+  document.getElementById("nextPage").addEventListener("click", () => { currentPage++; render(lastData); });
 }
 // Progress bar is an ESTIMATE, not a real per-ticker completion signal --
 // /api/tickers blocks server-side until every ticker (and its 4 strategy
@@ -352,30 +357,39 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
-async function load(refresh, page, isNav) {
-  page = page || currentPage || 1;
+// A plain page load just reads the server's already-precomputed cache (fast).
+// refresh=1 forces the server to re-fetch + recompute the WHOLE universe
+// synchronously before responding, which is genuinely slow -- that's the
+// only case that still needs the progress bar / overlay.
+async function load(refresh) {
   const btn = document.getElementById("refresh");
   btn.disabled = true;
-  if (isNav) showPageOverlay(`Loading page ${page}…`);
-  else if (refresh) showPageOverlay("Refreshing…");
-  const t0 = startProgress(PAGE_SIZE);
+  let tickerCount = lastData ? lastData.tickers.length : null;
+  if (tickerCount === null) {
+    try {
+      const metaRes = await fetch("/api/meta");
+      tickerCount = (await metaRes.json()).total_tickers;
+    } catch (e) { tickerCount = 474; }
+  }
+  if (refresh) { showPageOverlay("Refreshing all tickers…"); startProgress(tickerCount); }
+  const t0 = Date.now();
   try {
-    const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
-    if (refresh) params.set("refresh", "1");
-    const res = await fetch("/api/tickers?" + params.toString());
+    const params = refresh ? "?refresh=1" : "";
+    const res = await fetch("/api/tickers" + params);
     const data = await res.json();
-    if (!data.cached) updateAvgMsPerTicker(Date.now() - t0, PAGE_SIZE);
+    if (refresh) updateAvgMsPerTicker(Date.now() - t0, tickerCount);
     render(data);
   } catch (e) {
     document.getElementById("meta").textContent = "failed to load: " + e;
   } finally {
     hidePageOverlay();
     btn.disabled = false;
-    finishProgress();
+    if (refresh) finishProgress();
   }
 }
-document.getElementById("refresh").addEventListener("click", () => load(true, currentPage));
+document.getElementById("refresh").addEventListener("click", () => load(true));
 document.getElementById("scoreFilter").addEventListener("change", () => {
+  currentPage = 1;
   if (lastData) render(lastData);
 });
 load(false);
