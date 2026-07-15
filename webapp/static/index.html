@@ -70,6 +70,11 @@
   .pager button { margin-left: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); }
   .pager button:disabled { opacity: 0.35; cursor: default; }
   .pager span { color: var(--muted); font-size: 12.5px; }
+  .progresswrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .progressbar { flex: 1 1 auto; height: 6px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .progressfill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px;
+                  transition: width 0.3s ease-out; }
+  .progresslabel { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 
   @media (max-width: 720px) {
     .wrap { padding: 10px 8px 24px; }
@@ -109,6 +114,10 @@
     <span class="meta" id="meta">loading&hellip;</span>
     <button id="refresh">Refresh</button>
   </header>
+  <div class="progresswrap" id="progresswrap" style="display:none">
+    <div class="progressbar"><div class="progressfill" id="progressfill"></div></div>
+    <span class="progresslabel" id="progresslabel"></span>
+  </div>
   <div class="filterbar">
     <label for="scoreFilter">Min score</label>
     <select id="scoreFilter">
@@ -126,8 +135,9 @@
       <thead><tr>
         <th>Ticker</th><th>Price</th><th>Score</th><th>Conditions</th>
         <th>To&nbsp;TP&nbsp;%</th><th>Avg&nbsp;Days</th><th>Last&nbsp;5&nbsp;TP&nbsp;%</th><th>Open&nbsp;Trade</th>
+        <th>Strat&nbsp;A</th><th>Strat&nbsp;D</th><th>VCP&nbsp;Master</th>
       </tr></thead>
-      <tbody id="rows"><tr><td colspan="8" style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</td></tr></tbody>
+      <tbody id="rows"><tr><td colspan="11" style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</td></tr></tbody>
     </table>
     <div class="pager" id="pager"></div>
   </div>
@@ -186,6 +196,18 @@ function last5(trades) {
     return `<span class="${cls}">${sign}${t.tp_pct}% - ${t.days}D</span>`;
   }).join(", ") + `</span>`;
 }
+const RATING_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
+function otherStrategy(s) {
+  if (!s) return '<span style="color:var(--muted)">—</span>';
+  const title = `${s.n_trades} trades &middot; WR ${s.win_rate}% &middot; PF ${s.profit_factor}`;
+  let stateTag = "";
+  if (s.in_position) stateTag = '<span class="chip mid">IN TRADE</span>';
+  else if (s.signal_today) stateTag = '<span class="chip ok">SIGNAL</span>';
+  return `<span class="opentrade">` +
+         `<span class="chip ${RATING_CLASS[s.rating]}" title="${title}">${s.rating} BUCKET</span>` +
+         `<span class="verdict">${stateTag}` +
+         `<span class="advicewhy">${s.n_trades}t &middot; ${s.win_rate}% WR &middot; PF ${s.profit_factor}</span></span></span>`;
+}
 const PAGE_SIZE = 20;
 let lastData = null;
 let currentPage = 1;
@@ -215,13 +237,16 @@ function render(data) {
       <td class="num" data-label="Avg Days">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</td>
       <td class="wrap" data-label="Last 5 TP %">${last5(r.last5_trades)}</td>
       <td class="wrap" data-label="Open Trade">${badge(r.open_trade)}</td>
+      <td class="wrap" data-label="Strat A">${otherStrategy(r.strategy_a)}</td>
+      <td class="wrap" data-label="Strat D">${otherStrategy(r.strategy_d)}</td>
+      <td class="wrap" data-label="VCP Master">${otherStrategy(r.strategy_vcp)}</td>
     </tr>`;
   }
   if (currentPage === pageCount)
     for (const [tk, err] of Object.entries(data.errors || {}))
-      html += `<tr class="err"><td class="tk">${tk}</td><td colspan="7">${err}</td></tr>`;
+      html += `<tr class="err"><td class="tk">${tk}</td><td colspan="10">${err}</td></tr>`;
   if (!rows.length && !Object.keys(data.errors || {}).length)
-    html = `<tr><td colspan="8" style="color:var(--muted)">No tickers match this filter</td></tr>`;
+    html = `<tr><td colspan="11" style="color:var(--muted)">No tickers match this filter</td></tr>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
   const countText = minScore > 0
@@ -243,15 +268,80 @@ function renderPager(pageCount) {
   document.getElementById("prevPage").addEventListener("click", () => { currentPage--; render(lastData); });
   document.getElementById("nextPage").addEventListener("click", () => { currentPage++; render(lastData); });
 }
+// Progress bar is an ESTIMATE, not a real per-ticker completion signal --
+// /api/tickers blocks server-side until every ticker (and its 4 strategy
+// evaluations) finish, so there's no live progress to stream. Instead we
+// track a rolling average of (elapsed_ms / ticker_count) from real past
+// loads in localStorage, and animate toward that estimate.
+const AVG_MS_KEY = "dashboardAvgMsPerTicker";
+const DEFAULT_AVG_MS_PER_TICKER = 900; // seed guess before any real data exists
+
+function getAvgMsPerTicker() {
+  const stored = Number(localStorage.getItem(AVG_MS_KEY));
+  return stored > 0 ? stored : DEFAULT_AVG_MS_PER_TICKER;
+}
+function updateAvgMsPerTicker(elapsedMs, tickerCount) {
+  if (!tickerCount) return;
+  const measured = elapsedMs / tickerCount;
+  const prev = getAvgMsPerTicker();
+  // Exponential moving average so one slow/fast run doesn't swing the estimate wildly.
+  const next = prev * 0.7 + measured * 0.3;
+  localStorage.setItem(AVG_MS_KEY, String(next));
+}
+
+let progressTimer = null;
+function startProgress(tickerCount) {
+  const wrap = document.getElementById("progresswrap");
+  const fill = document.getElementById("progressfill");
+  const label = document.getElementById("progresslabel");
+  const estimatedMs = Math.max(1000, tickerCount * getAvgMsPerTicker());
+  const t0 = Date.now();
+  wrap.style.display = "flex";
+  fill.style.width = "0%";
+  const tick = () => {
+    const elapsed = Date.now() - t0;
+    // Ease toward 92% over the estimate; never claim 100% until actually done.
+    const pct = Math.min(92, (elapsed / estimatedMs) * 92);
+    fill.style.width = pct.toFixed(1) + "%";
+    const remainingMs = Math.max(0, estimatedMs - elapsed);
+    label.textContent = `~${Math.ceil(remainingMs / 1000)}s remaining (estimate, ${tickerCount} tickers)`;
+  };
+  tick();
+  progressTimer = setInterval(tick, 250);
+  return t0;
+}
+function finishProgress() {
+  if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+  const wrap = document.getElementById("progresswrap");
+  const fill = document.getElementById("progressfill");
+  const label = document.getElementById("progresslabel");
+  fill.style.width = "100%";
+  label.textContent = "done";
+  setTimeout(() => { wrap.style.display = "none"; }, 500);
+}
+
 async function load(refresh) {
   const btn = document.getElementById("refresh");
   btn.disabled = true;
+  let tickerCount = lastData ? lastData.tickers.length : null;
+  if (tickerCount === null) {
+    try {
+      const metaRes = await fetch("/api/meta");
+      tickerCount = (await metaRes.json()).total_tickers;
+    } catch (e) { tickerCount = 20; }
+  }
+  const t0 = startProgress(tickerCount);
   try {
     const res = await fetch("/api/tickers" + (refresh ? "?refresh=1" : ""));
-    render(await res.json());
+    const data = await res.json();
+    if (!data.cached) updateAvgMsPerTicker(Date.now() - t0, tickerCount);
+    render(data);
   } catch (e) {
     document.getElementById("meta").textContent = "failed to load: " + e;
-  } finally { btn.disabled = false; }
+  } finally {
+    btn.disabled = false;
+    finishProgress();
+  }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));
 document.getElementById("scoreFilter").addEventListener("change", () => {
