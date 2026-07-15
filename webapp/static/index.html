@@ -18,13 +18,18 @@
     }
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
-  .wrap { max-width: 1440px; margin: 0 auto; padding: 14px 10px 30px; }
-  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+         font: 14px/1.45 system-ui, "Segoe UI", sans-serif; overflow: hidden; }
+  /* App-shell layout: header/filterbar/pager/foot are fixed height, only the
+     card list scrolls -- the page itself never grows past the viewport. */
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 14px 10px 12px; height: 100vh;
+          display: flex; flex-direction: column; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 18px;
+           flex: 0 0 auto; }
   h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
   .meta { color: var(--muted); font-size: 12.5px; }
-  .filterbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .filterbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex: 0 0 auto; }
   .filterbar label { color: var(--muted); font-size: 12.5px; }
   .filterbar .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
   .filterbar .checklabel { display: flex; align-items: center; gap: 6px; color: var(--text);
@@ -37,7 +42,10 @@
   button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
            padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; margin-left: auto; }
   button:disabled { opacity: 0.5; cursor: wait; }
-  .cardgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  /* #rows is the only part of the page that scrolls -- header/filterbar/
+     pager/foot are pinned so the app shell always fits the viewport. */
+  .cardgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+              flex: 1 1 auto; min-height: 0; overflow-y: auto; align-content: start; }
   .tickercard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
                 padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
   .tickercard.fire { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
@@ -46,7 +54,6 @@
   .cardhead .price { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
   .cardsection { display: flex; flex-direction: column; gap: 4px; }
   .cardsection .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-  .cardpair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .divider { border: 0; border-top: 1px solid var(--line); margin: 0; }
   /* The 4 "scoring" sections -- Open Trade + Strategy A/D/VCP Master -- get
      equal, consistent treatment: one full-width box per line, not squeezed
@@ -54,19 +61,16 @@
   .scoresections { display: flex; flex-direction: column; gap: 8px; }
   .scorebox { background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
               padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
-  .scorebox-name { font-size: 11px; font-weight: 700; text-transform: uppercase;
-                    letter-spacing: 0.05em; color: var(--text); }
-  .subrow { background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
-            padding: 7px 9px; display: flex; flex-direction: column; gap: 3px; }
-  .sublabel { font-size: 9.5px; font-weight: 700; text-transform: uppercase;
-              letter-spacing: 0.05em; color: var(--muted); }
-  /* All 4 strategies (Exhaustion/A/D/VCP Master) stacked one per row. */
-  .strategyrows { display: flex; flex-direction: column; gap: 10px; }
-  .strategyrow { display: flex; gap: 10px; align-items: flex-start; }
-  .strategyrow:not(:first-child) { padding-top: 10px; border-top: 1px solid var(--line); }
-  .strategyname { flex: 0 0 76px; font-size: 10.5px; font-weight: 700; color: var(--text);
-                   padding-top: 6px; }
-  .strategybody { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  /* All 4 strategies (Exhaustion/A/D/VCP Master) in a 2x2 grid -- label on
+     top, colored status chip(s) below, everything else lives in the detail
+     modal (click a chip). */
+  .strategygrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .strategycell { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; }
+  .strategyname { flex: 0 0 14px; font-size: 11px; font-weight: 700; color: var(--text); }
+  .strategybody { flex: 1; min-width: 0; }
+  /* Baseline/Training/Holdout chips side by side within a strategy's cell. */
+  .splitrow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .hasdetail { cursor: pointer; }
   .num { font-variant-numeric: tabular-nums; }
   .tk { font-weight: 700; font-size: 15px; }
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
@@ -83,24 +87,19 @@
   .chip.neutral { background: var(--line); color: var(--muted); }
   .chip.active { background: var(--accent-bg); color: var(--accent); }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
-  .badge { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 6px;
-           padding: 3px 8px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; }
   .pos { color: var(--green); } .neg { color: var(--red); }
   .last5 { font-size: 11px; }
-  .advicewhy { color: var(--muted); font-size: 11px; }
-  .targettext { color: var(--muted); font-size: 11px; }
-  .opentrade { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-  .opentrade .verdict { display: flex; align-items: center; gap: 6px; }
   .firetag { display:inline-block; font-size: 10.5px; font-weight: 700; color: var(--gold);
              background: var(--gold-bg); border-radius: 5px; padding: 2px 6px; margin-left: 6px;
              white-space: nowrap; }
   .firetag.weak { color: var(--muted); background: var(--line); }
-  .foot { color: var(--muted); font-size: 12px; margin-top: 12px; }
-  .pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 12px; flex: 0 0 auto; }
+  .pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0;
+           flex: 0 0 auto; }
   .pager button { margin-left: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); }
   .pager button:disabled { opacity: 0.35; cursor: default; }
   .pager span { color: var(--muted); font-size: 12.5px; }
-  .progresswrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .progresswrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex: 0 0 auto; }
   .progressbar { flex: 1 1 auto; height: 6px; border-radius: 4px; background: var(--line); overflow: hidden; }
   .progressfill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px;
                   transition: width 0.3s ease-out; }
@@ -114,6 +113,23 @@
              border: 3px solid var(--line); border-top-color: var(--accent);
              animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .modalbackdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100;
+                    display: flex; align-items: center; justify-content: center; padding: 20px;
+                    cursor: pointer; }
+  .modalbox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+              width: 340px; max-width: 100%; max-height: 80vh; overflow-y: auto;
+              color: var(--text); cursor: auto; box-shadow: 0 12px 32px rgba(0,0,0,0.25); }
+  .modaltitle { font-size: 13.5px; font-weight: 700; padding: 14px 18px; letter-spacing: 0.01em;
+                border-bottom: 1px solid var(--line); background: var(--bg);
+                border-radius: 12px 12px 0 0; }
+  .modalbody { padding: 12px 18px 16px; display: flex; flex-direction: column; gap: 7px; }
+  .modalrow { display: flex; justify-content: space-between; align-items: baseline; gap: 14px;
+              font-size: 13px; }
+  .modalrow .modalrowlabel { color: var(--muted); font-size: 11px; text-transform: uppercase;
+                              letter-spacing: 0.04em; flex: 0 0 auto; }
+  .modalrow .modalrowvalue { text-align: right; font-variant-numeric: tabular-nums; }
+  .modalsep { border-top: 1px solid var(--line); margin: 2px 0; }
+  .modalnote { color: var(--muted); font-size: 12px; line-height: 1.5; }
 
   @media (max-width: 1080px) {
     .cardgrid { grid-template-columns: repeat(2, 1fr); }
@@ -149,6 +165,9 @@
       <div class="spinner"></div>
       <span id="pageoverlaytext">Loading page&hellip;</span>
     </div>
+  </div>
+  <div class="modalbackdrop" id="modalBackdrop" style="display:none">
+    <div class="modalbox" id="modalBox"></div>
   </div>
   <div class="filterbar">
     <input type="text" id="tickerSearch" placeholder="Search ticker&hellip;" autocomplete="off">
@@ -245,19 +264,6 @@ function scorebar(n, distTier, earningsRisk, conditions) {
   }
   return s;
 }
-function badge(t) {
-  if (!t) return '<span style="color:var(--muted)">—</span>';
-  const cls = t.unrealized_pct >= 0 ? "pos" : "neg";
-  const sign = t.unrealized_pct >= 0 ? "+" : "";
-  const adviceCls = t.advice === "TAKE" ? "ok" : "no";
-  const entryTierChip = t.entry_confidence
-    ? `<span class="chip ${TIER_CLASS[t.entry_confidence]}">ENTRY-${TIER_LABEL[t.entry_confidence]}</span>` : "";
-  return `<span class="opentrade">` +
-         `<span class="badge" title="${t.bars_held} bars held">` +
-         `OPEN ${t.entry_date} @ ${t.entry_price} &rarr; target ${t.target} <span class="${cls}">${sign}${t.unrealized_pct}%</span></span>` +
-         `<span class="verdict">${entryTierChip}<span class="chip ${adviceCls}">${t.advice}</span>` +
-         `<span class="advicewhy">${t.advice_reason}</span></span></span>`;
-}
 function last5(trades) {
   if (!trades || !trades.length) return '<span style="color:var(--muted)">—</span>';
   return `<span class="last5">` + trades.map(t => {
@@ -266,10 +272,40 @@ function last5(trades) {
     return `<span class="${cls}">${sign}${t.tp_pct}% - ${t.days}D</span>`;
   }).join(", ") + `</span>`;
 }
-function fmtConfig(cfg) {
-  if (!cfg) return "no config";
-  return Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join(", ");
+// One modal row per config parameter (not a single comma-joined line) so
+// each value is easy to scan.
+function configRows(cfg) {
+  if (!cfg) return ['<div class="modalnote">no config</div>'];
+  return Object.entries(cfg).map(([k, v]) => modalRow(k, v));
 }
+
+// Detail modal replaces per-badge hover tooltips -- click any status chip to
+// see its config/stats/verdict reasoning as a structured panel, dismiss by
+// clicking anywhere (the box doesn't stop the click from bubbling to the
+// backdrop). Content is registered by id rather than inlined into onclick=
+// attributes so it can be real structured HTML (label/value rows) instead of
+// an escaped single-line string.
+let modalStore = {};
+let modalCounter = 0;
+function registerModal(title, rowsHtml) {
+  const id = "m" + (modalCounter++);
+  modalStore[id] = { title, rowsHtml };
+  return id;
+}
+function modalRow(label, value) {
+  return `<div class="modalrow"><span class="modalrowlabel">${label}</span><span class="modalrowvalue">${value}</span></div>`;
+}
+function showModal(id) {
+  const data = modalStore[id];
+  if (!data) return;
+  document.getElementById("modalBox").innerHTML =
+    `<div class="modaltitle">${data.title}</div><div class="modalbody">${data.rowsHtml.join("")}</div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+}
+function hideModal() {
+  document.getElementById("modalBackdrop").style.display = "none";
+}
+document.getElementById("modalBackdrop").addEventListener("click", hideModal);
 
 // Color coding: blue = an active/open trade right now, otherwise green/yellow/red
 // by how good the historical result actually is (independent of live status).
@@ -281,10 +317,6 @@ function qualityLabel(pf, wr) {
   return "bad";
 }
 const QUALITY_CSS = { good: "ok", fair: "mid", bad: "no" };
-function scoreChip(pf, wr, isActive) {
-  const cls = isActive ? "active" : QUALITY_CSS[qualityLabel(pf, wr)];
-  return `<span class="chip ${cls}">PF ${pf} &middot; ${wr}% WR</span>`;
-}
 
 // State of a single strategy's baseline result, for the per-strategy filters:
 // "active" (in trade now), "good"/"fair"/"bad" (historical quality), or null
@@ -309,21 +341,6 @@ function exhaustionState(r) {
   return r.open_trade.advice === "TAKE" ? "take" : "skip";
 }
 
-// A projected reward level, not necessarily a real order (see run()'s
-// docstring in each strategy module) -- shown only while a position is open.
-function targetText(openPosition) {
-  if (!openPosition) return "";
-  return `<span class="targettext">&rarr; target ${openPosition.target}</span>`;
-}
-
-function renderBaseline(b, cfg) {
-  if (!b) return '<span style="color:var(--muted)">—</span>';
-  const since = b.first_trade_date ? ` &middot; since ${b.first_trade_date}` : "";
-  const tooltip = `${fmtConfig(cfg)}\n${b.n_trades}t &middot; ${b.verdict}: ${b.verdict_reason}${since}`
-    .replace(/"/g, "&quot;");
-  return `<span class="opentrade" title="${tooltip}">${scoreChip(b.profit_factor, b.win_rate, b.in_position)}${targetText(b.open_position)}</span>`;
-}
-
 function optimizedBeatsBaseline(o, baseline) {
   if (!o || !baseline) return false;
   // Robust = worst-of-both-splits, same discipline used to pick the config in
@@ -333,34 +350,91 @@ function optimizedBeatsBaseline(o, baseline) {
   return robustPf > baseline.profit_factor || robustWr > baseline.win_rate;
 }
 
-function renderSplit(stats, cfg, openPosition) {
-  // Each split gets its own badge, colored by its OWN quality -- collapsing
-  // train+holdout into a single number hides exactly the case (good train,
-  // bad holdout, or vice versa) this split exists to catch. openPosition is
-  // shared by both splits (one winning config -> one live position), same
-  // as cfg.
-  const tooltip = `${fmtConfig(cfg)}\n${stats.n_trades}t`.replace(/"/g, "&quot;");
-  return `<span class="opentrade" title="${tooltip}">${scoreChip(stats.profit_factor, stats.win_rate, false)}${targetText(openPosition)}</span>`;
-}
-
-function scorebox(title, bodyHtml) {
-  return `<div class="scorebox"><span class="scorebox-name">${title}</span>${bodyHtml}</div>`;
-}
-function subrow(label, html) {
-  return `<div class="subrow"><span class="sublabel">${label}</span>${html}</div>`;
-}
-
-function otherStrategy(s) {
-  if (!s) return subrow("Baseline", '<span style="color:var(--muted)">—</span>');
-  let html = subrow("Baseline", renderBaseline(s.baseline, s.baseline_config));
-  // No Training/Holdout subrows at all when there's nothing worth showing --
-  // no empty/dash card taking up space.
-  if (optimizedBeatsBaseline(s.optimized, s.baseline)) {
-    const o = s.optimized;
-    html += subrow("Training", renderSplit(o.train_stats, o.config, o.open_position));
-    html += subrow("Holdout", renderSplit(o.holdout_stats, o.config, o.open_position));
+// Exhaustion's row: just the colored TAKE/SKIP chip -- entry date/price,
+// target, unrealized %, bars held, advice reasoning, and the strategy's own
+// To TP %/Avg Days/Last 5 TP % stats all move to the detail modal (click the
+// chip).
+function exhaustionChip(r) {
+  const t = r.open_trade;
+  const rows = [];
+  if (t) {
+    const sign = t.unrealized_pct >= 0 ? "+" : "";
+    rows.push(modalRow("Entry", `${t.entry_date} @ ${t.entry_price}`));
+    rows.push(modalRow("Target", t.target));
+    rows.push(modalRow("Unrealized", `${sign}${t.unrealized_pct}%`));
+    rows.push(modalRow("Bars held", t.bars_held));
+    if (t.entry_confidence) rows.push(modalRow("Entry confidence", t.entry_confidence));
+    rows.push('<div class="modalsep"></div>');
   }
-  return html;
+  const tpSign = r.to_tp_pct > 0 ? "+" : "";
+  rows.push(modalRow("To TP %", `${tpSign}${r.to_tp_pct.toFixed(1)}%`));
+  rows.push(modalRow("Avg Days", r.avg_trade_days ?? "&mdash;"));
+  rows.push('<div class="modalsep"></div>');
+  rows.push(modalRow("Last 5 TP %", last5(r.last5_trades)));
+  if (t) {
+    rows.push('<div class="modalsep"></div>');
+    rows.push(`<div class="modalnote"><b>${t.advice}</b>: ${t.advice_reason}</div>`);
+  }
+  const id = registerModal("Exhaustion", rows);
+  const cls = t ? (t.advice === "TAKE" ? "ok" : "no") : "neutral";
+  const label = t ? t.advice : "NO SIGNAL";
+  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
+}
+
+// Rows shared by the Training and Holdout modals -- same shape, different
+// stats/label passed in.
+function splitModalRows(cfg, stats, openPosition) {
+  const rows = [
+    ...configRows(cfg),
+    '<div class="modalsep"></div>',
+    modalRow("Trades", stats.n_trades),
+    modalRow("Profit factor", stats.profit_factor),
+    modalRow("Win rate", stats.win_rate + "%"),
+  ];
+  if (openPosition) {
+    rows.push('<div class="modalsep"></div>');
+    rows.push(modalRow("Entry", openPosition.entry_price));
+    rows.push(modalRow("Target", openPosition.target));
+  }
+  return rows;
+}
+
+// A/D/VCP row: BASELINE always shown; TRAINING/HOLDOUT only when the
+// optimizer found a config that actually beats baseline (same discipline as
+// before -- no empty/redundant chips). Each chip is colored by its OWN
+// quality and opens its own modal with the full config/stats/verdict.
+function strategyChips(s, name) {
+  if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
+  const b = s.baseline;
+  const baseCls = b.in_position ? "active" : QUALITY_CSS[qualityLabel(b.profit_factor, b.win_rate)];
+  const baseRows = [
+    ...configRows(s.baseline_config),
+    '<div class="modalsep"></div>',
+    modalRow("Trades", b.n_trades),
+    modalRow("Profit factor", b.profit_factor),
+    modalRow("Win rate", b.win_rate + "%"),
+  ];
+  if (b.first_trade_date) baseRows.push(modalRow("Trading since", b.first_trade_date));
+  if (b.open_position) {
+    baseRows.push('<div class="modalsep"></div>');
+    baseRows.push(modalRow("Entry", b.open_position.entry_price));
+    baseRows.push(modalRow("Target", b.open_position.target));
+  }
+  baseRows.push('<div class="modalsep"></div>');
+  baseRows.push(`<div class="modalnote"><b>${b.verdict}</b>: ${b.verdict_reason}</div>`);
+  const baseId = registerModal(`${name} &mdash; Baseline`, baseRows);
+  let html = `<span class="chip ${baseCls} hasdetail" onclick="showModal('${baseId}')">BASE</span>`;
+
+  if (optimizedBeatsBaseline(s.optimized, b)) {
+    const o = s.optimized;
+    const trCls = QUALITY_CSS[qualityLabel(o.train_stats.profit_factor, o.train_stats.win_rate)];
+    const hoCls = QUALITY_CSS[qualityLabel(o.holdout_stats.profit_factor, o.holdout_stats.win_rate)];
+    const hoId = registerModal(`${name} &mdash; Holdout`, splitModalRows(o.config, o.holdout_stats, o.open_position));
+    const trId = registerModal(`${name} &mdash; Training`, splitModalRows(o.config, o.train_stats, o.open_position));
+    html += `<span class="chip ${hoCls} hasdetail" onclick="showModal('${hoId}')">HOLD</span>`;
+    html += `<span class="chip ${trCls} hasdetail" onclick="showModal('${trId}')">TRAIN</span>`;
+  }
+  return `<div class="splitrow">${html}</div>`;
 }
 const PAGE_SIZE = 9;
 let lastData = null;
@@ -373,6 +447,10 @@ let currentPage = 1;
 // existed, except the "fetch everything" step never happens on this path.
 function render(data) {
   lastData = data;
+  // Every re-render rebuilds all chips from scratch, so their modal ids
+  // would otherwise accumulate forever -- start clean each time.
+  modalStore = {};
+  modalCounter = 0;
   const minScore = Number(document.getElementById("scoreFilter").value);
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
   const exhaustionWant = document.getElementById("exhaustionFilter").value;
@@ -411,32 +489,18 @@ function render(data) {
         <span class="lbl">Conditions</span>
         <span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span>
       </div>
-      <div class="cardpair">
-        <div class="cardsection">
-          <span class="lbl">To TP %</span>
-          <span class="num">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</span>
-        </div>
-        <div class="cardsection">
-          <span class="lbl">Avg Days</span>
-          <span class="num">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</span>
-        </div>
-      </div>
-      <div class="cardsection">
-        <span class="lbl">Last 5 TP %</span>
-        ${last5(r.last5_trades)}
-      </div>
       <hr class="divider">
       <div class="scoresections">
-        ${scorebox("Strategies", `<div class="strategyrows">
-          <div class="strategyrow"><span class="strategyname">Exhaustion</span>
-            <div class="strategybody">${subrow("Status", badge(r.open_trade))}</div></div>
-          <div class="strategyrow"><span class="strategyname">Strategy A</span>
-            <div class="strategybody">${otherStrategy(r.strategy_a)}</div></div>
-          <div class="strategyrow"><span class="strategyname">Strategy D</span>
-            <div class="strategybody">${otherStrategy(r.strategy_d)}</div></div>
-          <div class="strategyrow"><span class="strategyname">VCP Master</span>
-            <div class="strategybody">${otherStrategy(r.strategy_vcp)}</div></div>
-        </div>`)}
+        <div class="scorebox"><div class="strategygrid2">
+          <div class="strategycell"><span class="strategyname">E</span>
+            <div class="strategybody">${exhaustionChip(r)}</div></div>
+          <div class="strategycell"><span class="strategyname">A</span>
+            <div class="strategybody">${strategyChips(r.strategy_a, "Strategy A")}</div></div>
+          <div class="strategycell"><span class="strategyname">D</span>
+            <div class="strategybody">${strategyChips(r.strategy_d, "Strategy D")}</div></div>
+          <div class="strategycell"><span class="strategyname">V</span>
+            <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
+        </div></div>
       </div>
     </div>`;
   }
