@@ -37,6 +37,13 @@
   .filterbar .checklabel { display: flex; align-items: center; gap: 6px; color: var(--text);
                             font-size: 12.5px; cursor: pointer; }
   .filterbar .checklabel input { cursor: pointer; }
+  /* On desktop the controls just flow inline inside .filterbar (no extra
+     box); on mobile they become a collapsible panel -- see the media query
+     below. */
+  .filtercontrols { display: contents; }
+  .filtertoggle { display: none; }
+  .clearfilters { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+                   margin-left: 0; }
   select { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; }
   input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
@@ -143,7 +150,15 @@
     h1 { font-size: 17px; }
     .meta { font-size: 11.5px; flex-basis: 100%; }
     button { padding: 8px 14px; }
-    .filterbar { flex-wrap: wrap; }
+    .filterbar { flex-direction: column; align-items: stretch; }
+    .filtertoggle { display: flex; align-items: center; justify-content: space-between;
+                     margin-left: 0; }
+    .filtertogglearrow { transition: transform 0.15s ease-out; }
+    .filtertoggle[aria-expanded="true"] .filtertogglearrow { transform: rotate(180deg); }
+    .filtercontrols { display: none; flex-direction: column; align-items: stretch; gap: 8px;
+                       width: 100%; }
+    .filtercontrols.open { display: flex; }
+    .filtercontrols .sep { display: none; }
     select { flex: 1 1 auto; min-width: 0; }
     .foot { font-size: 11px; }
     .pager { flex-wrap: wrap; gap: 8px; }
@@ -172,6 +187,10 @@
     <div class="modalbox" id="modalBox"></div>
   </div>
   <div class="filterbar">
+    <button id="filterToggle" class="filtertoggle" type="button" aria-expanded="false">
+      Filters <span class="filtertogglearrow">&#9662;</span>
+    </button>
+    <div class="filtercontrols" id="filterControls">
     <input type="text" id="tickerSearch" placeholder="Search ticker&hellip;" autocomplete="off">
     <span class="sep"></span>
     <label for="scoreFilter">Min score</label>
@@ -221,6 +240,9 @@
       <input type="checkbox" id="anyOpenTradeFilter">
       Open trade in any of the 4
     </label>
+    <span class="sep"></span>
+    <button id="clearFilters" class="clearfilters" type="button">Clear filters</button>
+    </div>
   </div>
   <div id="rows" class="cardgrid">
     <p style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</p>
@@ -636,6 +658,21 @@ for (const id of ["scoreFilter", "exhaustionFilter", "stratAFilter", "stratDFilt
   });
 }
 document.getElementById("tickerSearch").addEventListener("input", () => {
+  currentPage = 1;
+  if (lastData) render(lastData);
+});
+document.getElementById("filterToggle").addEventListener("click", () => {
+  const controls = document.getElementById("filterControls");
+  const nowOpen = controls.classList.toggle("open");
+  document.getElementById("filterToggle").setAttribute("aria-expanded", nowOpen);
+});
+document.getElementById("clearFilters").addEventListener("click", () => {
+  document.getElementById("tickerSearch").value = "";
+  document.getElementById("scoreFilter").value = "0";
+  for (const id of ["exhaustionFilter", "stratAFilter", "stratDFilter", "stratVcpFilter"]) {
+    document.getElementById(id).value = "";
+  }
+  document.getElementById("anyOpenTradeFilter").checked = false;
   currentPage = 1;
   if (lastData) render(lastData);
 });
