@@ -70,6 +70,36 @@
   .pager button { margin-left: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); }
   .pager button:disabled { opacity: 0.35; cursor: default; }
   .pager span { color: var(--muted); font-size: 12.5px; }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 10px 8px 24px; }
+    header { gap: 8px 12px; margin-bottom: 12px; }
+    h1 { font-size: 17px; }
+    .meta { font-size: 11.5px; flex-basis: 100%; }
+    button { padding: 8px 14px; }
+    .filterbar { flex-wrap: wrap; }
+    select { flex: 1 1 auto; min-width: 0; }
+    .foot { font-size: 11px; }
+    .pager { flex-wrap: wrap; gap: 8px; }
+
+    /* Stack the table into one card per ticker instead of horizontal scroll. */
+    .card { border: 0; background: transparent; overflow: visible; }
+    table { min-width: 0; }
+    table, tbody { display: block; width: 100%; }
+    thead { display: none; }
+    tbody tr { display: flex; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line);
+               border-radius: 10px; padding: 4px 12px; margin-bottom: 10px; }
+    tbody tr:last-child { margin-bottom: 0; }
+    td, td.wrap, td.wrap.score { flex: 1 1 100%; min-width: 0;
+        white-space: normal; text-align: left; padding: 7px 0; font-size: 13px;
+        border-bottom: 1px dashed var(--line); }
+    /* Ticker / Price / Score share a row; To TP % / Avg Days share a row. */
+    td[data-label="Ticker"], td[data-label="Price"], td[data-label="Score"] { flex-basis: 33%; border-bottom: 0; }
+    td[data-label="To TP %"], td[data-label="Avg Days"] { flex-basis: 50%; border-bottom: 0; }
+    td:last-child { border-bottom: 0; }
+    td[data-label]::before { content: attr(data-label); display: block; font-size: 10px;
+        text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 2px; }
+  }
 </style>
 </head>
 <body>
@@ -177,14 +207,14 @@ function render(data) {
     const distTier = r.conditions?.sma_dist?.tier;
     const isFire = r.score === 6 && distTier !== "LOW" && !r.earnings_risk;
     html += `<tr class="${isFire ? "fire" : ""}">
-      <td class="tk"><a class="tklink" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a></td>
-      <td class="num">$${r.price.toFixed(2)}</td>
-      <td class="wrap score">${scorebar(r.score, distTier, r.earnings_risk)}</td>
-      <td class="wrap"><span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span></td>
-      <td class="num">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</td>
-      <td class="num">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</td>
-      <td class="wrap">${last5(r.last5_trades)}</td>
-      <td class="wrap">${badge(r.open_trade)}</td>
+      <td class="tk" data-label="Ticker"><a class="tklink" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a></td>
+      <td class="num" data-label="Price">$${r.price.toFixed(2)}</td>
+      <td class="wrap score" data-label="Score">${scorebar(r.score, distTier, r.earnings_risk)}</td>
+      <td class="wrap" data-label="Conditions"><span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span></td>
+      <td class="num" data-label="To TP %">${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%</td>
+      <td class="num" data-label="Avg Days">${r.avg_trade_days ?? '<span style="color:var(--muted)">—</span>'}</td>
+      <td class="wrap" data-label="Last 5 TP %">${last5(r.last5_trades)}</td>
+      <td class="wrap" data-label="Open Trade">${badge(r.open_trade)}</td>
     </tr>`;
   }
   if (currentPage === pageCount)
