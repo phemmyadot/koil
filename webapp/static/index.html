@@ -87,6 +87,7 @@
   .scorebar { display: inline-flex; gap: 3px; vertical-align: middle; margin-right: 8px; }
   .scorebar i { width: 9px; height: 16px; border-radius: 2.5px; background: var(--line); }
   .scorebar i.on { background: var(--green); }
+  .scorebar i.half { background: linear-gradient(to right, var(--green) 50%, var(--line) 50%); }
   .tickercard.fire .scorebar i.on { background: var(--gold); }
   .chip { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px;
           padding: 2px 6px; cursor: default; text-align: center; white-space: nowrap; }
@@ -249,6 +250,7 @@
   </div>
   <div class="pager" id="pager"></div>
   <p class="foot">Score = entry gates passing on the latest daily close (6/6 = strategy enters on this close).
+     DIST is graduated, not pass/fail: HIGH tier = 1pt, MEDIUM = 0.5pt, LOW = 0pt, so 6/6 requires HIGH-tier distance.
      To TP % = distance to the 20-day mid-band, the trade's payoff if entered now.
      Config: SMA150 &middot; BB 20/1.5&sigma; &middot; RSI&le;40 &middot; dist 0.5&middot;ATR &middot; ATR 4&ndash;12% &middot; time stop 20.</p>
 </div>
@@ -264,7 +266,7 @@ function chip(key, c) {
   }
   return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
 }
-function scorebar(n, distTier, earningsRisk, conditions) {
+function scorebar(n, earningsRisk, conditions) {
   // Combined tooltip so the score values are visible without hovering each
   // individual condition chip separately.
   const tooltip = conditions
@@ -272,19 +274,23 @@ function scorebar(n, distTier, earningsRisk, conditions) {
         `${COND_LABELS[k]}: ${c.pass ? "PASS" : "FAIL"} (${c.value})`).join(" | ")
     : "";
   let s = `<span class="scorebar" title="${String(tooltip).replace(/"/g, "&quot;")}">`;
-  for (let i = 0; i < 6; i++) s += `<i class="${i < n ? "on" : ""}"></i>`;
+  // sma_dist contributes graduated credit (0/0.5/1, see scoring.py's
+  // _DIST_TIER_CREDIT) so n can be a half-point value like 5.5 -- light full
+  // dots up to floor(n), and give the next dot a half-fill for the .5 case.
+  const fullDots = Math.floor(n);
+  for (let i = 0; i < 6; i++) {
+    const cls = i < fullDots ? "on" : (i < n ? "half" : "");
+    s += `<i class="${cls}"></i>`;
+  }
   s += `</span>${n}/6`;
   if (n === 6) {
-    if (earningsRisk) {
-      // Not a score gate, but a real block on the live engine's entry (see
-      // scoring.py's earnings_risk docstring) -- a 6/6 here would NOT actually
-      // fire a buy in production, so don't show it as a live-fireable signal.
-      s += '<span class="firetag weak" title="earnings report within the entry-avoid window -- engine will not take this entry (validated: holding through earnings drops win rate 62%->51%)">ENTRY (earnings risk)</span>';
-    } else if (distTier === "LOW") {
-      s += '<span class="firetag weak" title="entered at LOW confidence (&lt;1.5 ATR from SMA) -- historically ~41-56% win rate">ENTRY (weak)</span>';
-    } else {
-      s += '<span class="firetag">ENTRY</span>';
-    }
+    // A 6/6 now requires HIGH-tier sma_dist (the only way to earn the full
+    // point there), so the old "weak entry at LOW/MEDIUM tier but still
+    // 6/6" case this used to special-case can no longer happen -- earnings
+    // risk is the only remaining reason a 6/6 wouldn't actually fire live.
+    s += earningsRisk
+      ? '<span class="firetag weak" title="earnings report within the entry-avoid window -- engine will not take this entry (validated: holding through earnings drops win rate 62%->51%)">ENTRY (earnings risk)</span>'
+      : '<span class="firetag">ENTRY</span>';
   }
   return s;
 }
@@ -501,13 +507,14 @@ function render(data) {
 
   let html = "";
   for (const r of rows) {
-    const distTier = r.conditions?.sma_dist?.tier;
-    const isFire = r.score === 6 && distTier !== "LOW" && !r.earnings_risk;
+    // A 6/6 now requires HIGH-tier sma_dist by construction (see scorebar()),
+    // so score alone is enough to gate the fire-card highlight.
+    const isFire = r.score === 6 && !r.earnings_risk;
     html += `<div class="tickercard ${isFire ? "fire" : ""}">
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
-        ${scorebar(r.score, distTier, r.earnings_risk, r.conditions)}
+        ${scorebar(r.score, r.earnings_risk, r.conditions)}
       </div>
       <div class="cardsection">
         <span class="lbl">Conditions</span>

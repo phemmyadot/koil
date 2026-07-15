@@ -143,6 +143,14 @@ def _dist_confidence_tier(dist_atr: float) -> str:
     return "LOW"
 
 
+# The sma_dist gate contributes graduated credit to the score instead of a
+# flat 0/1, reflecting the tier's own win-rate research above (LOW ~41-56%,
+# HIGH ~73%+) directly in the number shown -- a HIGH-tier entry scores a full
+# point, MEDIUM half a point, LOW none, so 6/6 now requires HIGH-tier
+# distance, not just clearing the (much lower) 0.5-ATR pass/fail threshold.
+_DIST_TIER_CREDIT = {"HIGH": 1.0, "MEDIUM": 0.5, "LOW": 0.0}
+
+
 def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
     df = _with_earnings_flags(bars, ticker)
     if df.empty or len(df) < E.sma_slow_len + 20:
@@ -174,27 +182,34 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
             "value": round(rsi_val, 1),
         },
         "sma_dist": {
-            "pass": price >= sma150 + E.min_sma_dist_atr * atr_val,
+            # E.min_sma_dist_atr == 0 is a supported "gate off" mode in p.py/Pine
+            # (see PortfolioSizedEngine.min_sma_dist_atr's "0 = off" comment) --
+            # must short-circuit the same way here or the score would disagree
+            # with what the live engine actually does if that constant is ever 0.
+            "pass": E.min_sma_dist_atr == 0 or price >= sma150 + E.min_sma_dist_atr * atr_val,
             "value": f"{(price - sma150) / atr_val:.1f} ATR above SMA" if atr_val > 0 else "n/a",
             "tier": _dist_confidence_tier((price - sma150) / atr_val) if atr_val > 0 else "LOW",
         },
         "vol_ceil": {
-            "pass": atr_pct <= 100 * E.max_atr_pct,
+            "pass": E.max_atr_pct == 0 or atr_pct <= 100 * E.max_atr_pct,
             "value": f"ATR {atr_pct:.1f}% <= {100 * E.max_atr_pct:.0f}%",
         },
         "vol_floor": {
-            "pass": atr_pct >= 100 * E.min_atr_pct,
+            "pass": E.min_atr_pct == 0 or atr_pct >= 100 * E.min_atr_pct,
             "value": f"ATR {atr_pct:.1f}% >= {100 * E.min_atr_pct:.0f}%",
         },
     }
 
     open_trade, avg_trade_days, last5_trades = _trade_history(df)
 
+    non_dist_score = sum(1 for k, v in conditions.items() if k != "sma_dist" and v["pass"])
+    score = non_dist_score + _DIST_TIER_CREDIT[conditions["sma_dist"]["tier"]]
+
     return {
         "ticker": ticker,
         "price": round(price, 4),
         "date": str(df.index[-1].date()),
-        "score": sum(1 for v in conditions.values() if v["pass"]),
+        "score": score,
         "conditions": conditions,
         "to_tp_pct": round(100 * (basis / price - 1), 2),
         # Not one of the 6 score gates (keeps score comparable to the pre-existing

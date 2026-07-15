@@ -1,17 +1,14 @@
-INFO:     Started server process [7192]
+INFO:     Started server process [9584]
 INFO:     Waiting for application startup.
-ALOY: No earnings dates found, symbol may be delisted
-C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
-  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
-  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
-  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
-  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
-  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
-  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8123 (Press CTRL+C to quit)
+
+1 Failed download:
+['ABEO']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
+
+1 Failed download:
+['FROG']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
+
+1 Failed download:
+['HCSG']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
+
+1 Failed download:
+['LILAK']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
