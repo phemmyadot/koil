@@ -60,10 +60,13 @@
             padding: 7px 9px; display: flex; flex-direction: column; gap: 3px; }
   .sublabel { font-size: 9.5px; font-weight: 700; text-transform: uppercase;
               letter-spacing: 0.05em; color: var(--muted); }
-  /* All 3 strategies (A/D/VCP Master) side by side in one card, 3 columns x 1 row. */
-  .strategygrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .strategycol { display: flex; flex-direction: column; gap: 6px; }
-  .strategycol > .sublabel { font-size: 10.5px; color: var(--text); text-align: center; }
+  /* All 4 strategies (Exhaustion/A/D/VCP Master) stacked one per row. */
+  .strategyrows { display: flex; flex-direction: column; gap: 10px; }
+  .strategyrow { display: flex; gap: 10px; align-items: flex-start; }
+  .strategyrow:not(:first-child) { padding-top: 10px; border-top: 1px solid var(--line); }
+  .strategyname { flex: 0 0 76px; font-size: 10.5px; font-weight: 700; color: var(--text);
+                   padding-top: 6px; }
+  .strategybody { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .num { font-variant-numeric: tabular-nums; }
   .tk { font-weight: 700; font-size: 15px; }
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
@@ -85,6 +88,7 @@
   .pos { color: var(--green); } .neg { color: var(--red); }
   .last5 { font-size: 11px; }
   .advicewhy { color: var(--muted); font-size: 11px; }
+  .targettext { color: var(--muted); font-size: 11px; }
   .opentrade { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
   .opentrade .verdict { display: flex; align-items: center; gap: 6px; }
   .firetag { display:inline-block; font-size: 10.5px; font-weight: 700; color: var(--gold);
@@ -126,7 +130,6 @@
     .foot { font-size: 11px; }
     .pager { flex-wrap: wrap; gap: 8px; }
     .cardgrid { grid-template-columns: 1fr; gap: 10px; }
-    .strategygrid { grid-template-columns: 1fr; gap: 10px; }
   }
 </style>
 </head>
@@ -306,12 +309,19 @@ function exhaustionState(r) {
   return r.open_trade.advice === "TAKE" ? "take" : "skip";
 }
 
+// A projected reward level, not necessarily a real order (see run()'s
+// docstring in each strategy module) -- shown only while a position is open.
+function targetText(openPosition) {
+  if (!openPosition) return "";
+  return `<span class="targettext">&rarr; target ${openPosition.target}</span>`;
+}
+
 function renderBaseline(b, cfg) {
   if (!b) return '<span style="color:var(--muted)">—</span>';
   const since = b.first_trade_date ? ` &middot; since ${b.first_trade_date}` : "";
   const tooltip = `${fmtConfig(cfg)}\n${b.n_trades}t &middot; ${b.verdict}: ${b.verdict_reason}${since}`
     .replace(/"/g, "&quot;");
-  return `<span class="opentrade" title="${tooltip}">${scoreChip(b.profit_factor, b.win_rate, b.in_position)}</span>`;
+  return `<span class="opentrade" title="${tooltip}">${scoreChip(b.profit_factor, b.win_rate, b.in_position)}${targetText(b.open_position)}</span>`;
 }
 
 function optimizedBeatsBaseline(o, baseline) {
@@ -323,12 +333,14 @@ function optimizedBeatsBaseline(o, baseline) {
   return robustPf > baseline.profit_factor || robustWr > baseline.win_rate;
 }
 
-function renderSplit(stats, cfg) {
+function renderSplit(stats, cfg, openPosition) {
   // Each split gets its own badge, colored by its OWN quality -- collapsing
   // train+holdout into a single number hides exactly the case (good train,
-  // bad holdout, or vice versa) this split exists to catch.
+  // bad holdout, or vice versa) this split exists to catch. openPosition is
+  // shared by both splits (one winning config -> one live position), same
+  // as cfg.
   const tooltip = `${fmtConfig(cfg)}\n${stats.n_trades}t`.replace(/"/g, "&quot;");
-  return `<span class="opentrade" title="${tooltip}">${scoreChip(stats.profit_factor, stats.win_rate, false)}</span>`;
+  return `<span class="opentrade" title="${tooltip}">${scoreChip(stats.profit_factor, stats.win_rate, false)}${targetText(openPosition)}</span>`;
 }
 
 function scorebox(title, bodyHtml) {
@@ -345,8 +357,8 @@ function otherStrategy(s) {
   // no empty/dash card taking up space.
   if (optimizedBeatsBaseline(s.optimized, s.baseline)) {
     const o = s.optimized;
-    html += subrow("Training", renderSplit(o.train_stats, o.config));
-    html += subrow("Holdout", renderSplit(o.holdout_stats, o.config));
+    html += subrow("Training", renderSplit(o.train_stats, o.config, o.open_position));
+    html += subrow("Holdout", renderSplit(o.holdout_stats, o.config, o.open_position));
   }
   return html;
 }
@@ -415,11 +427,15 @@ function render(data) {
       </div>
       <hr class="divider">
       <div class="scoresections">
-        ${scorebox("Open Trade (Exhaustion)", subrow("Status", badge(r.open_trade)))}
-        ${scorebox("Strategies", `<div class="strategygrid">
-          <div class="strategycol"><span class="sublabel">Strategy A</span>${otherStrategy(r.strategy_a)}</div>
-          <div class="strategycol"><span class="sublabel">Strategy D</span>${otherStrategy(r.strategy_d)}</div>
-          <div class="strategycol"><span class="sublabel">VCP Master</span>${otherStrategy(r.strategy_vcp)}</div>
+        ${scorebox("Strategies", `<div class="strategyrows">
+          <div class="strategyrow"><span class="strategyname">Exhaustion</span>
+            <div class="strategybody">${subrow("Status", badge(r.open_trade))}</div></div>
+          <div class="strategyrow"><span class="strategyname">Strategy A</span>
+            <div class="strategybody">${otherStrategy(r.strategy_a)}</div></div>
+          <div class="strategyrow"><span class="strategyname">Strategy D</span>
+            <div class="strategybody">${otherStrategy(r.strategy_d)}</div></div>
+          <div class="strategyrow"><span class="strategyname">VCP Master</span>
+            <div class="strategybody">${otherStrategy(r.strategy_vcp)}</div></div>
         </div>`)}
       </div>
     </div>`;

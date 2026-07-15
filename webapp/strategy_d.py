@@ -141,9 +141,14 @@ def run(bars, ind, adx_threshold=ADX_THRESHOLD, bbw_pct_limit=BBW_PCT_LIMIT,
         vol_dryup_mult=VOL_DRYUP_MULT, vol_multiplier=VOL_MULTIPLIER,
         stop_atr_mult=STOP_ATR_MULT, trail_atr_mult=TRAIL_ATR_MULT,
         trail_activate_atr_mult=TRAIL_ACTIVATE_ATR_MULT):
-    """Returns (trades, signal_today, in_position). Parameters default to the
-    validated baseline but can be overridden -- used by optimize() to sweep
-    configs without mutating shared module state."""
+    """Returns (trades, signal_today, in_position, open_position). Parameters
+    default to the validated baseline but can be overridden -- used by
+    optimize() to sweep configs without mutating shared module state.
+    open_position (None unless a position is open) is {"entry_price",
+    "target"} -- target is a projected reward level (entry +
+    trail_atr_mult*ATR-at-entry, mirroring the trailing stop's distance), NOT
+    an order this strategy actually places -- it trails/pattern-breaks out,
+    it doesn't take profit at a fixed price."""
     n = len(bars)
     c = [b["c"] for b in bars]
     h = [b["h"] for b in bars]
@@ -170,7 +175,7 @@ def run(bars, ind, adx_threshold=ADX_THRESHOLD, bbw_pct_limit=BBW_PCT_LIMIT,
             stop_init = min(entry_price - stop_atr_mult * atr[i - 1],
                              pattern_low[i - 1] if pattern_low[i - 1] is not None else entry_price - stop_atr_mult * atr[i - 1])
             position = {"entry_i": i, "entry_price": entry_price, "stop": stop_init,
-                        "high_since": h[i], "pattern_low": pattern_low[i - 1]}
+                        "high_since": h[i], "pattern_low": pattern_low[i - 1], "entry_atr": atr[i - 1]}
             pending_entry = False
 
         if position is not None:
@@ -194,7 +199,13 @@ def run(bars, ind, adx_threshold=ADX_THRESHOLD, bbw_pct_limit=BBW_PCT_LIMIT,
 
         pending_entry = long_signal and position is None
 
-    return trades, pending_entry, position is not None
+    open_position = None
+    if position is not None:
+        open_position = {
+            "entry_price": round(position["entry_price"], 4),
+            "target": round(position["entry_price"] + trail_atr_mult * position["entry_atr"], 4),
+        }
+    return trades, pending_entry, position is not None, open_position
 
 
 def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: float, pf: float) -> tuple[str, str]:
@@ -248,7 +259,7 @@ def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_
     best = None
     for combo in itertools.product(*OPTIMIZE_GRID.values()):
         cfg = dict(zip(keys, combo))
-        trades, _, _ = run(bars, ind, **cfg)
+        trades, _, _, open_position = run(bars, ind, **cfg)
         train_trades = [t for t in trades if t["entry_i"] < split_i]
         holdout_trades = [t for t in trades if t["entry_i"] >= split_i]
         if len(train_trades) < min_trades_per_split or len(holdout_trades) < min_trades_per_split:
@@ -258,7 +269,10 @@ def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_
         robust_wr = min(st["win_rate"], sh["win_rate"])
         score = robust_pf * robust_wr
         if best is None or score > best["_score"]:
-            best = {"config": cfg, "train_stats": st, "holdout_stats": sh, "_score": score}
+            # open_position is a single value shared by both splits (one
+            # config, so one live position) -- not per-split, same as config.
+            best = {"config": cfg, "train_stats": st, "holdout_stats": sh,
+                    "open_position": open_position, "_score": score}
 
     if best is None:
         return None
@@ -271,7 +285,7 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
     if len(bars) < 250:
         raise ValueError("insufficient history")
     ind = compute_indicators(bars)
-    trades, signal_today, in_position = run(bars, ind)
+    trades, signal_today, in_position, open_position = run(bars, ind)
 
     wins = [t for t in trades if t["pnl"] > 0]
     losses = [t for t in trades if t["pnl"] <= 0]
@@ -285,6 +299,7 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
     return {
         "signal_today": signal_today,
         "in_position": in_position,
+        "open_position": open_position,
         "verdict": verdict,
         "verdict_reason": verdict_reason,
         "n_trades": len(trades),

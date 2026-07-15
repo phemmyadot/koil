@@ -1,0 +1,7 @@
+INFO:     Started server process [7192]
+INFO:     Waiting for application startup.
+ALOY: No earnings dates found, symbol may be delisted
+C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
+  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
+C:\Users\phemm\Desktop\pine-trend-strategy\webapp\scoring.py:64: UserWarning: Some prices are larger than initial cash value. Note that fractional trading is not supported by this class. If you want to trade Bitcoin, increase initial cash, or trade \u03bcBTC or satoshis instead (see e.g. class `backtesting.lib.FractionalBacktest`.
+  bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,

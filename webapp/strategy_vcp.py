@@ -68,9 +68,12 @@ def compute_indicators(df: pd.DataFrame) -> dict:
 def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGER_PCT,
         trail_tier_pct=TRAIL_TIER_PCT, tp_target_pct=TP_TARGET_PCT, vol_mult=VOL_MULT,
         max_bars=MAX_BARS):
-    """Returns (trades, signal_today, in_position). Parameters default to the
-    validated baseline but can be overridden -- used by optimize() to sweep
-    configs without mutating shared module state."""
+    """Returns (trades, signal_today, in_position, tp_hit, open_position).
+    Parameters default to the validated baseline but can be overridden --
+    used by optimize() to sweep configs without mutating shared module state.
+    open_position (None unless a position is open) is {"entry_price",
+    "target"} -- unlike A/D this strategy DOES place a real partial take-
+    profit at tp_target_pct, so target here is that actual order level."""
     c, h, l, o, v = df.Close, df.High, df.Low, df.Open, df.Volume
     atr, atr_avg, ema50, resistance, vol_avg = (ind["atr"], ind["atr_avg"], ind["ema50"],
                                                   ind["resistance"], ind["vol_avg"])
@@ -142,7 +145,14 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
     signal_today = bool(breakout.iloc[-1]) and position is None
     in_position = position is not None
     tp_hit = bool(position["tp_half_hit"]) if position is not None else False
-    return trades, signal_today, in_position, tp_hit
+    open_position = None
+    if position is not None:
+        entry_price = position["entry_price"]
+        open_position = {
+            "entry_price": round(float(entry_price), 4),
+            "target": round(float(entry_price) * (1 + tp_target_pct / 100), 4),
+        }
+    return trades, signal_today, in_position, tp_hit, open_position
 
 
 BASELINE_CONFIG = dict(atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGER_PCT,
@@ -178,7 +188,7 @@ def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_
     best = None
     for combo in itertools.product(*OPTIMIZE_GRID.values()):
         cfg = dict(zip(keys, combo))
-        trades, _, _, _ = run(df, ind, **cfg)
+        trades, _, _, _, open_position = run(df, ind, **cfg)
         train_trades = [t for t in trades if t["entry_i"] < split_i]
         holdout_trades = [t for t in trades if t["entry_i"] >= split_i]
         if len(train_trades) < min_trades_per_split or len(holdout_trades) < min_trades_per_split:
@@ -188,7 +198,10 @@ def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_
         robust_wr = min(st["win_rate"], sh["win_rate"])
         score = robust_pf * robust_wr
         if best is None or score > best["_score"]:
-            best = {"config": cfg, "train_stats": st, "holdout_stats": sh, "_score": score}
+            # open_position is a single value shared by both splits (one
+            # config, so one live position) -- not per-split, same as config.
+            best = {"config": cfg, "train_stats": st, "holdout_stats": sh,
+                    "open_position": open_position, "_score": score}
 
     if best is None:
         return None
@@ -201,7 +214,7 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
         raise ValueError("insufficient history")
 
     ind = compute_indicators(df)
-    trades, signal_today, in_position, tp_hit = run(df, ind)
+    trades, signal_today, in_position, tp_hit, open_position = run(df, ind)
 
     wr_stats = _summarize(trades)
     wr, pf = wr_stats["win_rate"], wr_stats["profit_factor"]
@@ -211,6 +224,7 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
     return {
         "signal_today": signal_today,
         "in_position": in_position,
+        "open_position": open_position,
         "verdict": verdict,
         "verdict_reason": verdict_reason,
         "n_trades": len(trades),
