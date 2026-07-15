@@ -7,22 +7,36 @@ live scoring dashboard).
 ## Layout
 
 ### Pine Script strategies (TradingView)
+`pines/` holds the 4 canonical Pine ports of the dashboard's 4 strategies (Exhaustion, VCP
+Master, Strategy A, Strategy D) — each is a trade-for-trade mirror of its `webapp/` Python
+module:
+- `pines/strategy_d_volatility_exhaustion.pine` — the shipped/production strategy: buys
+  oversold pullbacks (RSI + lower Bollinger Band) within an established SMA150 uptrend, with
+  a time stop and ATR volatility ceiling/floor. This is what `p.py` and the dashboard's
+  Exhaustion chip mirror. (Filename predates the webapp's A/D/VCP expansion — despite the
+  `_d_`, this is Exhaustion, not Strategy D.)
+- `pines/vcp.pine` — "VCP Master", ATR-compression + volume-confirmed breakout with a
+  multi-tier stop/breakeven/trail and partial take-profit. Mirrors `webapp/strategy_vcp.py`.
+- `pines/strategy_a_adaptive_pullback.pine` — "Strategy A", adaptive KAMA-based pullback
+  entry with a fixed ATR trail. Mirrors `webapp/strategy_a.py`.
+- `pines/strategy_d_vcp_fixed_bracket.pine` — "Strategy D", ADX regime + Bollinger-Band-Width
+  compression/volume-dry-up setup + volume-confirmed resistance breakout, fixed-bracket ATR
+  stop with pattern-low floor and chandelier trail. Mirrors `webapp/strategy_d.py`.
+
+Root-level Pine files are earlier exploratory variants, not wired to the dashboard:
 - `strategy.pine` — original v1 pullback-in-trend strategy (EMA20/50/200, RSI, ATR stops).
-- `strategy_a_adaptive_pullback.pine` — adaptive KAMA-based pullback entry, fixed ATR trail.
-- `strategy_b_adx_scaled_trail.pine` — same entry logic as A, trail multiplier scales with
-  ADX trend strength.
-- `strategy_c_vcp_breakout.pine` — Volatility Contraction Pattern breakout (Minervini-style).
-- `strategy_d_volatility_exhaustion.pine` — the shipped/production strategy: buys oversold
-  pullbacks (RSI + lower Bollinger Band) within an established SMA150 uptrend, with a time
-  stop and ATR volatility ceiling/floor. This is what `p.py` and the dashboard mirror.
+- `strategy_b_adx_scaled_trail.pine` — same entry logic as Strategy A, trail multiplier
+  scales with ADX trend strength.
+- `strategy_c_vcp_breakout.pine` — an earlier VCP breakout variant using swing-pivot
+  contraction tracking (different detection logic than `pines/vcp.pine`).
 - `breakout_projection.pine` — a separate pre-breakout scoring/target-projection indicator
   (squeeze + volume dry-up + resistance clustering), not a strategy.
 
 ### Python
 - `p.py` — the production backtest harness (`PortfolioSizedEngine`, using the
   [`backtesting`](https://kernc.github.io/backtesting.py/) library) that exactly mirrors
-  `strategy_d_volatility_exhaustion.pine`'s entry/exit logic. Single source of truth for
-  strategy semantics — the webapp imports directly from this file.
+  `pines/strategy_d_volatility_exhaustion.pine`'s entry/exit logic. Single source of truth
+  for strategy semantics — the webapp imports directly from this file.
 - `experiment.py` — grid-search / parameter-sweep harness for testing strategy variants.
 - `scratch_keltner_basket.py` — exploratory scratch work.
 - `trade_features.py` — extracts entry-time feature snapshots (RSI, ATR%, distance from

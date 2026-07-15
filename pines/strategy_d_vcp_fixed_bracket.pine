@@ -1,0 +1,110 @@
+//@version=6
+// Mirrors webapp/strategy_d.py exactly (the dashboard's "Strategy D" chip) --
+// same entry/exit logic and bar alignment, market-order sizing added on top.
+strategy("Strategy D - VCP Fixed-Bracket Breakout", overlay = true, initial_capital = 10000,
+     process_orders_on_close = false)
+
+// ---------------- Inputs (minimal by design) ----------------
+volMultiplier = input.float(1.0, "Breakout Volume Multiplier", minval = 0.5, group = "Entry")
+riskPct       = input.float(1.0, "Risk % of Equity per Trade", minval = 0.1, group = "Risk")
+
+// ---------------- Hardcoded, research-backed constants ----------------
+emaLen        = 50
+atrLen        = 14
+adxLen        = 14
+adxThreshold  = 25.0
+resistanceLen = 20
+bbwLen        = 20
+bbwRankLen    = 100
+bbwPctLimit   = 45.0
+volFastLen    = 5
+volSlowLen    = 50
+volAvgLen     = 50
+volDryupMult  = 1.05
+stopAtrMult   = 2.5
+trailAtrMult  = 3.5
+trailActivateAtrMult = 1.0
+
+// ---------------- Indicators ----------------
+ema = ta.ema(close, emaLen)
+atr = ta.atr(atrLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+
+// Resistance/pattern-low windows exclude the current bar (20 bars strictly
+// before it), matching webapp/strategy_d.py's local_resistance[i]/
+// pattern_low[i] definitions -- the [1] shift lives here, once, so every
+// usage site below reads naturally as "the resistance/support level".
+localResistance = ta.highest(high, resistanceLen)[1]
+patternLow      = ta.lowest(low, resistanceLen)[1]
+
+bbwBasis = ta.sma(close, bbwLen)
+bbwDev   = ta.stdev(close, bbwLen)
+bbw      = close > 0 ? 4.0 * bbwDev / close * 100.0 : 0.0
+bbwRank  = ta.percentrank(bbw, bbwRankLen)
+
+volFast = ta.sma(volume, volFastLen)
+volSlow = ta.sma(volume, volSlowLen)
+volAvg  = ta.sma(volume, volAvgLen)
+
+// ---------------- Regime / setup / entry ----------------
+// The compression + volume-dry-up "setup" is evaluated as of the PRIOR bar's
+// close (the state the pattern was in coming into today), while the
+// breakout + volume-confirmation trigger uses TODAY's own price/volume --
+// matching python's bbw_rank[i-1]/vol_fast[i-1]/vol_slow[i-1] vs. the
+// unshifted local_resistance[i]/ema[i]/vol_avg[i] used against c[i].
+regimeOk = adx > adxThreshold and diPlus > diMinus
+breakout = close > localResistance and close > ema
+setupOk  = bbwRank[1] < bbwPctLimit and volFast[1] <= volSlow[1] * volDryupMult
+volumeConfirmed = volume >= volMultiplier * volAvg
+longSignal = regimeOk and breakout and setupOk and volumeConfirmed
+
+// ---------------- Position sizing (risk-based) ----------------
+stopDistance = stopAtrMult * atr
+riskQty = stopDistance > 0 ? (strategy.equity * riskPct / 100) / stopDistance : na
+
+if longSignal and not na(riskQty)
+    strategy.entry("Long", strategy.long, qty = riskQty)
+
+// ---------------- Exit logic ----------------
+var float stopPrice       = na
+var float highSinceEntry  = na
+var float entryPatternLow = na
+
+if strategy.position_size > 0 and strategy.position_size[1] == 0
+    // Fill price is this bar's open (market order); the ATR/pattern-low
+    // anchoring the initial stop are the last ones known BEFORE the fill --
+    // one bar back -- matching python's `entry_price - stop_atr_mult *
+    // atr[i-1]` and `pattern_low[i-1]` exactly (no lookahead). The stop
+    // starts at whichever is farther away (lower): the fixed ATR stop or
+    // the pattern's own support level.
+    entryPatternLow := patternLow[1]
+    stopPrice := math.min(open - stopAtrMult * atr[1], entryPatternLow)
+    highSinceEntry := high
+
+if strategy.position_size > 0
+    highSinceEntry := math.max(nz(highSinceEntry), high)
+    entryPrice = strategy.position_avg_price
+    inProfitForTrail = (close - entryPrice) >= trailActivateAtrMult * atr
+    if inProfitForTrail
+        chandelier = highSinceEntry - trailAtrMult * atr
+        stopPrice := math.max(stopPrice, chandelier)
+else
+    stopPrice := na
+    highSinceEntry := na
+    entryPatternLow := na
+
+patternBreak = strategy.position_size > 0 and not na(entryPatternLow) and close < entryPatternLow
+
+if strategy.position_size > 0
+    strategy.exit("Exit", "Long", stop = stopPrice)
+    if patternBreak
+        strategy.close("Long", comment = "Pattern break")
+
+// ---------------- Plots ----------------
+plot(ema, "EMA 50", color = color.new(color.blue, 0), linewidth = 2)
+plot(localResistance, "Resistance (20-bar)", color = color.new(color.orange, 0), style = plot.style_circles)
+plot(strategy.position_size > 0 ? stopPrice : na, "Stop", color = color.new(color.purple, 0),
+     style = plot.style_circles, linewidth = 1)
+
+plotshape(longSignal, title = "Long Signal", style = shape.triangleup,
+     location = location.belowbar, color = color.new(color.green, 0), size = size.small)

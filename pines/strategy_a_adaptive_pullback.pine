@@ -1,5 +1,7 @@
 //@version=6
-strategy("Adaptive Pullback A (Fixed Trail)", overlay = true, initial_capital = 10000,
+// Mirrors webapp/strategy_a.py exactly (the dashboard's "Strategy A" chip) --
+// same entry/exit logic and bar alignment, market-order sizing added on top.
+strategy("Strategy A - Adaptive Pullback", overlay = true, initial_capital = 10000,
      process_orders_on_close = false)
 
 // ---------------- Inputs (minimal by design) ----------------
@@ -76,7 +78,11 @@ var float stopPrice      = na
 var float highSinceEntry = na
 
 if strategy.position_size > 0 and strategy.position_size[1] == 0
-    stopPrice := close - stopAtrMult * atr
+    // Fill price is this bar's open (market order, process_orders_on_close =
+    // false), and the ATR anchoring the stop is the last one known BEFORE the
+    // fill -- i.e. one bar back -- matching webapp/strategy_a.py's
+    // `entry_price - stop_atr_mult * atr[i - 1]` exactly (no lookahead).
+    stopPrice := open - stopAtrMult * atr[1]
     highSinceEntry := high
 
 if strategy.position_size > 0

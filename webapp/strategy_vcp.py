@@ -1,5 +1,5 @@
 """
-VCP Master (vcp.pine, fixed + volume-confirmed) ported for the dashboard.
+VCP Master (pines/vcp.pine, fixed + volume-confirmed) ported for the dashboard.
 Mirrors test_vcp.py's validated logic: ATR compression + 20-bar breakout +
 volume confirmation, multi-tier stop/breakeven/trail, partial TP, time stop.
 Reads from the shared raw-data cache (webapp/data.py) and extends it with a
