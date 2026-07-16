@@ -100,7 +100,8 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             final_pnl_pct = (exit_price - entry_price) / entry_price * 100
             blended = (0.5 * position["half_pnl_pct"] + 0.5 * final_pnl_pct
                        if position["tp_half_hit"] else final_pnl_pct)
-            trades.append({"pnl_pct": round(float(blended), 2), "entry_i": position["entry_i"]})
+            trades.append({"pnl_pct": round(float(blended), 2), "entry_i": position["entry_i"],
+                            "days": i - position["entry_i"]})
             position = None
             pending_exit_at = None
             continue
@@ -148,10 +149,12 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
     open_position = None
     if position is not None:
         entry_price = position["entry_price"]
+        last_close = float(c.iloc[-1])
         open_position = {
             "entry_price": round(float(entry_price), 4),
             "target": round(float(entry_price) * (1 + tp_target_pct / 100), 4),
             "days_held": (len(df) - 1) - position["entry_i"],
+            "unrealized_pct": round((last_close / entry_price - 1) * 100, 2),
         }
     return trades, signal_today, in_position, tp_hit, open_position
 
@@ -174,7 +177,10 @@ def _summarize(trades: list[dict]) -> dict:
     gross_loss = -sum(t["pnl_pct"] for t in losses)
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
-    return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
+    avg_days = round(sum(t["days"] for t in trades) / len(trades), 1) if trades else None
+    last5 = [{"days": t["days"], "pnl_pct": t["pnl_pct"]} for t in trades[-5:]]
+    return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
+            "avg_trade_days": avg_days, "last5_trades": last5}
 
 
 def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_per_split: int = 3) -> dict | None:
@@ -217,9 +223,9 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
     ind = compute_indicators(df)
     trades, signal_today, in_position, tp_hit, open_position = run(df, ind)
 
-    wr_stats = _summarize(trades)
-    wr, pf = wr_stats["win_rate"], wr_stats["profit_factor"]
-    verdict, verdict_reason = _verdict(signal_today, in_position, len(trades), wr, pf, tp_hit)
+    stats = _summarize(trades)
+    verdict, verdict_reason = _verdict(signal_today, in_position, stats["n_trades"],
+                                        stats["win_rate"], stats["profit_factor"], tp_hit)
     first_trade_date = df.index[trades[0]["entry_i"]].strftime("%Y-%m") if trades else None
 
     return {
@@ -228,8 +234,6 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
         "open_position": open_position,
         "verdict": verdict,
         "verdict_reason": verdict_reason,
-        "n_trades": len(trades),
-        "win_rate": wr,
-        "profit_factor": pf,
         "first_trade_date": first_trade_date,
+        **stats,
     }

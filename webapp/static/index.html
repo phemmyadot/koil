@@ -95,7 +95,7 @@
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
   .chip.neutral { background: var(--line); color: var(--muted); }
   .chip.active { background: var(--blue-bg); color: var(--blue); }
-  .chip.stats { white-space: normal; text-align: left; line-height: 1.4; display: block; }
+  .badgerow { display: flex; flex-wrap: wrap; gap: 4px; }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .pos { color: var(--green); } .neg { color: var(--red); }
   .last5 { font-size: 11px; }
@@ -129,7 +129,7 @@
   .modalbox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
               width: 340px; max-width: 100%; max-height: 80vh; overflow-y: auto;
               color: var(--text); cursor: auto; box-shadow: 0 12px 32px rgba(0,0,0,0.25); }
-  .modalbox:has(.modalcolgrid) { width: 480px; }
+  .modalbox:has(.modalcolgrid) { width: 620px; }
   .modalcolgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; }
   .modalcol { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   .modalcolhead { text-align: center; margin-bottom: 2px; }
@@ -389,6 +389,32 @@ function exhaustionState(r) {
   return qualityLabel(r.profit_factor, r.win_rate);
 }
 
+// WR/PF get their own independent color grading (not the combined
+// good/fair/bad quality tier) -- O is blue while active else neutral gray,
+// T is always neutral (just a count, not a quality signal).
+function wrColorClass(wr) {
+  if (wr >= 75) return "ok";
+  if (wr >= 50) return "mid";
+  return "no";
+}
+function pfColorClass(pf) {
+  if (pf >= 2.0) return "ok";
+  if (pf >= 1.0) return "mid";
+  return "no";
+}
+// 4 separate small badges (O/T/WR/PF) instead of one combined chip, each
+// with its own color grading. All 4 open the same modal.
+function statBadges(active, days, nTrades, wr, pf, modalId) {
+  const badges = [];
+  if (active) badges.push(["active", `O-${days}`]);
+  badges.push(["neutral", `T${nTrades}`]);
+  badges.push([wrColorClass(wr), `WR${wr}%`]);
+  badges.push([pfColorClass(pf), `PF${pf}`]);
+  return `<span class="badgerow">` + badges.map(([cls, text]) =>
+    `<span class="chip ${cls} hasdetail" onclick="showModal('${modalId}')">${text}</span>`
+  ).join("") + `</span>`;
+}
+
 function optimizedBeatsBaseline(o, baseline) {
   if (!o || !baseline) return false;
   // Robust = worst-of-both-splits, same discipline used to pick the config in
@@ -398,8 +424,8 @@ function optimizedBeatsBaseline(o, baseline) {
   return robustPf > baseline.profit_factor || robustWr > baseline.win_rate;
 }
 
-// Exhaustion's row: just the colored BASE chip -- entry date/price, target,
-// unrealized %, bars held, advice reasoning, and the strategy's own To TP %/
+// Exhaustion's row: 4 O/T/WR/PF badges (see statBadges) -- entry date/price,
+// target, unrealized %, bars held, advice reasoning, and the strategy's own To TP %/
 // Avg Days/Last 5 TP % stats all move to the detail modal (click the chip).
 function exhaustionChip(r) {
   const t = r.open_trade;
@@ -427,13 +453,7 @@ function exhaustionChip(r) {
     rows.push(`<div class="modalnote"><b>${t.advice}</b>: ${t.advice_reason}</div>`);
   }
   const id = registerModal("Exhaustion", rows);
-  // No source-name label on the chip itself -- color alone conveys status
-  // (blue = active, green/gold/red = quality), the label lives in the modal.
-  // Just the numbers: days-held (if active) + Tx WRxx.x% PFx.xx.
-  const cls = t ? "active" : QUALITY_CSS[qualityLabel(r.profit_factor, r.win_rate)];
-  const daysPart = t ? `O-${t.bars_held} ` : "";
-  const label = `${daysPart}T${r.n_trades} WR${r.win_rate}% PF${r.profit_factor}`;
-  return `<span class="chip ${cls} stats hasdetail" onclick="showModal('${id}')">${label}</span>`;
+  return statBadges(!!t, t ? t.bars_held : null, r.n_trades, r.win_rate, r.profit_factor, id);
 }
 
 // Rows shared by the Training and Holdout modals -- same shape, different
@@ -446,6 +466,7 @@ function strategyCandidates(s) {
     source: "BASE", pf: b.profit_factor, wr: b.win_rate, n_trades: b.n_trades,
     active: b.in_position, openPosition: b.open_position, config: s.baseline_config,
     firstTradeDate: b.first_trade_date, verdict: b.verdict, verdictReason: b.verdict_reason,
+    avgTradeDays: b.avg_trade_days, last5Trades: b.last5_trades,
   }];
   if (optimizedBeatsBaseline(s.optimized, b)) {
     const o = s.optimized;
@@ -453,9 +474,11 @@ function strategyCandidates(s) {
     // share the same open-position state (see strategy_*.py's optimize()).
     const oActive = !!o.open_position;
     candidates.push({ source: "TRAIN", pf: o.train_stats.profit_factor, wr: o.train_stats.win_rate,
-      n_trades: o.train_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config });
+      n_trades: o.train_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config,
+      avgTradeDays: o.train_stats.avg_trade_days, last5Trades: o.train_stats.last5_trades });
     candidates.push({ source: "HOLD", pf: o.holdout_stats.profit_factor, wr: o.holdout_stats.win_rate,
-      n_trades: o.holdout_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config });
+      n_trades: o.holdout_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config,
+      avgTradeDays: o.holdout_stats.avg_trade_days, last5Trades: o.holdout_stats.last5_trades });
   }
   return candidates;
 }
@@ -482,32 +505,33 @@ function strategyColumnsModal(name, candidates) {
     rows.push(`<div class="modalcolrow"><span class="k">PF</span><span>${c.pf}</span></div>`);
     rows.push(`<div class="modalcolrow"><span class="k">WR</span><span>${c.wr}%</span></div>`);
     if (c.firstTradeDate) rows.push(`<div class="modalcolrow"><span class="k">Since</span><span>${c.firstTradeDate}</span></div>`);
+    if (c.avgTradeDays != null) rows.push(`<div class="modalcolrow"><span class="k">Avg Days</span><span>${c.avgTradeDays}</span></div>`);
     if (c.openPosition) {
-      rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${c.openPosition.entry_price}</span></div>`);
-      rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${c.openPosition.target}</span></div>`);
-      rows.push(`<div class="modalcolrow"><span class="k">Days</span><span>${c.openPosition.days_held}</span></div>`);
+      const op = c.openPosition;
+      const uCls = op.unrealized_pct >= 0 ? "pos" : "neg";
+      const uSign = op.unrealized_pct >= 0 ? "+" : "";
+      rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${op.entry_price}</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${op.target}</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Days held</span><span>${op.days_held}</span></div>`);
+      if (op.unrealized_pct != null) rows.push(`<div class="modalcolrow"><span class="k">Unrealized</span><span class="${uCls}">${uSign}${op.unrealized_pct}%</span></div>`);
     }
+    if (c.last5Trades && c.last5Trades.length) rows.push(`<div class="modalcolrow"><span class="k">Last 5</span><span>${last5(c.last5Trades)}</span></div>`);
     if (c.verdict) rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
     return `<div class="modalcol"><div class="modalcolhead chip ${cls}">${c.source}</div>${rows.join("")}</div>`;
   }).join("");
   return registerModal(name, [`<div class="modalcolgrid">${cols}</div>`]);
 }
 
-// A/D/VCP row: only ONE chip shown -- the active trade if there is one,
-// otherwise whichever of BASE/TRAIN/HOLD is the best-quality view. No
-// source-name label on the chip itself -- color alone conveys status
-// (blue = active, green/gold/red = quality), just the numbers: days-held
-// (if active) + Tx WRxx.x% PFx.xx. Which source it actually is
-// (BASE/TRAIN/HOLD) is only shown in the modal.
+// A/D/VCP row: whichever of BASE/TRAIN/HOLD is active (or best-quality if
+// none are) drives 4 separate O/T/WR/PF badges (see statBadges). Which
+// source it actually is (BASE/TRAIN/HOLD) is only shown in the modal.
 function strategyChips(s, name) {
   if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
   const candidates = strategyCandidates(s);
   const best = pickBestCandidate(candidates);
-  const cls = best.active ? "active" : QUALITY_CSS[qualityLabel(best.pf, best.wr)];
-  const daysPart = best.active && best.openPosition ? `O-${best.openPosition.days_held} ` : "";
-  const label = `${daysPart}T${best.n_trades} WR${best.wr}% PF${best.pf}`;
   const id = strategyColumnsModal(name, candidates);
-  return `<span class="chip ${cls} stats hasdetail" onclick="showModal('${id}')">${label}</span>`;
+  const days = best.active && best.openPosition ? best.openPosition.days_held : null;
+  return statBadges(best.active, days, best.n_trades, best.wr, best.pf, id);
 }
 const PAGE_SIZE = 9;
 let lastData = null;

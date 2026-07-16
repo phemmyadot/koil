@@ -188,7 +188,9 @@ def run(bars, ind, adx_threshold=ADX_THRESHOLD, bbw_pct_limit=BBW_PCT_LIMIT,
             if stopped or pattern_break:
                 exit_price = position["stop"] if stopped else c[i]
                 pnl = exit_price - position["entry_price"]
-                trades.append(dict(entry_i=position["entry_i"], exit_i=i, pnl=pnl))
+                trades.append(dict(entry_i=position["entry_i"], exit_i=i, pnl=pnl,
+                                    days=i - position["entry_i"],
+                                    pnl_pct=round(pnl / position["entry_price"] * 100, 2)))
                 position = None
 
         regime_ok = adx[i] > adx_threshold and plus_di[i] > minus_di[i]
@@ -201,10 +203,12 @@ def run(bars, ind, adx_threshold=ADX_THRESHOLD, bbw_pct_limit=BBW_PCT_LIMIT,
 
     open_position = None
     if position is not None:
+        last_close = c[-1]
         open_position = {
             "entry_price": round(position["entry_price"], 4),
             "target": round(position["entry_price"] + trail_atr_mult * position["entry_atr"], 4),
             "days_held": (n - 1) - position["entry_i"],
+            "unrealized_pct": round((last_close / position["entry_price"] - 1) * 100, 2),
         }
     return trades, pending_entry, position is not None, open_position
 
@@ -244,7 +248,10 @@ def _summarize(trades: list[dict]) -> dict:
     gross_loss = -sum(t["pnl"] for t in losses)
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
-    return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
+    avg_days = round(sum(t["days"] for t in trades) / len(trades), 1) if trades else None
+    last5 = [{"days": t["days"], "pnl_pct": t["pnl_pct"]} for t in trades[-5:]]
+    return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
+            "avg_trade_days": avg_days, "last5_trades": last5}
 
 
 def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_per_split: int = 3) -> dict | None:
@@ -288,13 +295,9 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
     ind = compute_indicators(bars)
     trades, signal_today, in_position, open_position = run(bars, ind)
 
-    wins = [t for t in trades if t["pnl"] > 0]
-    losses = [t for t in trades if t["pnl"] <= 0]
-    gross_win = sum(t["pnl"] for t in wins)
-    gross_loss = -sum(t["pnl"] for t in losses)
-    pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
-    wr = len(wins) / len(trades) * 100 if trades else 0.0
-    verdict, verdict_reason = _verdict(signal_today, in_position, len(trades), wr, pf)
+    stats = _summarize(trades)
+    verdict, verdict_reason = _verdict(signal_today, in_position, stats["n_trades"],
+                                        stats["win_rate"], stats["profit_factor"])
     first_trade_date = bars[trades[0]["entry_i"]]["d"] if trades else None
 
     return {
@@ -303,8 +306,6 @@ def evaluate(ticker: str, df: pd.DataFrame) -> dict:
         "open_position": open_position,
         "verdict": verdict,
         "verdict_reason": verdict_reason,
-        "n_trades": len(trades),
-        "win_rate": round(wr, 1),
-        "profit_factor": round(pf, 2),
         "first_trade_date": first_trade_date,
+        **stats,
     }
