@@ -204,6 +204,7 @@ def run(bars, ind, adx_threshold=ADX_THRESHOLD, bbw_pct_limit=BBW_PCT_LIMIT,
         open_position = {
             "entry_price": round(position["entry_price"], 4),
             "target": round(position["entry_price"] + trail_atr_mult * position["entry_atr"], 4),
+            "days_held": (n - 1) - position["entry_i"],
         }
     return trades, pending_entry, position is not None, open_position
 

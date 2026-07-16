@@ -426,8 +426,11 @@ function exhaustionChip(r) {
   const id = registerModal("Exhaustion", rows);
   // Same visual pattern as the other 3 strategies' BASE chip -- blue while an
   // open trade, otherwise the same good/fair/bad quality color from PF/WR.
+  // When active, show days-since-open right on the chip (e.g. "BASE-2") so
+  // you don't have to open the modal just to see how stale a signal is.
   const cls = t ? "active" : QUALITY_CSS[qualityLabel(r.profit_factor, r.win_rate)];
-  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">BASE</span>`;
+  const label = t ? `BASE-${t.bars_held}` : "BASE";
+  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
 }
 
 // Rows shared by the Training and Holdout modals -- same shape, different
@@ -444,6 +447,7 @@ function splitModalRows(cfg, stats, openPosition) {
     rows.push('<div class="modalsep"></div>');
     rows.push(modalRow("Entry", openPosition.entry_price));
     rows.push(modalRow("Target", openPosition.target));
+    rows.push(modalRow("Days held", openPosition.days_held));
   }
   return rows;
 }
@@ -468,20 +472,30 @@ function strategyChips(s, name) {
     baseRows.push('<div class="modalsep"></div>');
     baseRows.push(modalRow("Entry", b.open_position.entry_price));
     baseRows.push(modalRow("Target", b.open_position.target));
+    baseRows.push(modalRow("Days held", b.open_position.days_held));
   }
   baseRows.push('<div class="modalsep"></div>');
   baseRows.push(`<div class="modalnote"><b>${b.verdict}</b>: ${b.verdict_reason}</div>`);
   const baseId = registerModal(`${name} &mdash; Baseline`, baseRows);
-  let html = `<span class="chip ${baseCls} hasdetail" onclick="showModal('${baseId}')">BASE</span>`;
+  // When active, show days-since-open right on the chip (e.g. "BASE-2") so
+  // you don't have to open the modal just to see how stale a signal is.
+  const baseLabel = b.in_position && b.open_position ? `BASE-${b.open_position.days_held}` : "BASE";
+  let html = `<span class="chip ${baseCls} hasdetail" onclick="showModal('${baseId}')">${baseLabel}</span>`;
 
   if (optimizedBeatsBaseline(s.optimized, b)) {
     const o = s.optimized;
-    const trCls = QUALITY_CSS[qualityLabel(o.train_stats.profit_factor, o.train_stats.win_rate)];
-    const hoCls = QUALITY_CSS[qualityLabel(o.holdout_stats.profit_factor, o.holdout_stats.win_rate)];
+    // HOLD/TRAIN reflect the OPTIMIZED config's own current position, which
+    // can differ from baseline's -- color them blue + show days-held too
+    // when that specific config is presently in a trade.
+    const oActive = !!o.open_position;
+    const trCls = oActive ? "active" : QUALITY_CSS[qualityLabel(o.train_stats.profit_factor, o.train_stats.win_rate)];
+    const hoCls = oActive ? "active" : QUALITY_CSS[qualityLabel(o.holdout_stats.profit_factor, o.holdout_stats.win_rate)];
+    const hoLabel = oActive ? `HOLD-${o.open_position.days_held}` : "HOLD";
+    const trLabel = oActive ? `TRAIN-${o.open_position.days_held}` : "TRAIN";
     const hoId = registerModal(`${name} &mdash; Holdout`, splitModalRows(o.config, o.holdout_stats, o.open_position));
     const trId = registerModal(`${name} &mdash; Training`, splitModalRows(o.config, o.train_stats, o.open_position));
-    html += `<span class="chip ${hoCls} hasdetail" onclick="showModal('${hoId}')">HOLD</span>`;
-    html += `<span class="chip ${trCls} hasdetail" onclick="showModal('${trId}')">TRAIN</span>`;
+    html += `<span class="chip ${hoCls} hasdetail" onclick="showModal('${hoId}')">${hoLabel}</span>`;
+    html += `<span class="chip ${trCls} hasdetail" onclick="showModal('${trId}')">${trLabel}</span>`;
   }
   return `<div class="splitrow">${html}</div>`;
 }

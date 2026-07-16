@@ -151,6 +151,7 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
         open_position = {
             "entry_price": round(float(entry_price), 4),
             "target": round(float(entry_price) * (1 + tp_target_pct / 100), 4),
+            "days_held": (len(df) - 1) - position["entry_i"],
         }
     return trades, signal_today, in_position, tp_hit, open_position
 
