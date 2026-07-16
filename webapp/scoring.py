@@ -56,9 +56,25 @@ def _with_earnings_flags(bars: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return df
 
 
-def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict]]:
+def _summarize_trades(closed) -> dict:
+    """PF/WR from closed trades' ReturnPct -- same percentage-based formula
+    strategy_a.py/strategy_d.py/strategy_vcp.py use, so Exhaustion's baseline
+    chip can be colored on the same good/fair/bad scale as the other 3."""
+    if len(closed) == 0:
+        return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0}
+    returns_pct = closed.ReturnPct * 100
+    wins = returns_pct[returns_pct > 0]
+    losses = returns_pct[returns_pct <= 0]
+    gross_win = float(wins.sum())
+    gross_loss = float(-losses.sum())
+    pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
+    wr = len(wins) / len(returns_pct) * 100
+    return {"n_trades": len(returns_pct), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
+
+
+def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict], dict]:
     """Run the engine with and without finalize_trades; the extra row (if any) is the
-    open position. Returns (open_trade, avg_trade_days, last_5_closed_trades)."""
+    open position. Returns (open_trade, avg_trade_days, last_5_closed_trades, trade_stats)."""
     runs = {}
     for fin in (False, True):
         bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
@@ -73,6 +89,7 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
         {"tp_pct": round(100 * row.ReturnPct, 2), "days": int(row.Duration.days)}
         for row in last5.itertuples()
     ]
+    trade_stats = _summarize_trades(closed)
 
     open_trade = None
     if len(forced) > len(closed):
@@ -101,7 +118,7 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
             "advice": advice,
             "advice_reason": advice_reason,
         }
-    return open_trade, avg_trade_days, last5_trades
+    return open_trade, avg_trade_days, last5_trades, trade_stats
 
 
 def _trade_advice(target: float, last_close: float, bars_held: int, entry_tier: str,
@@ -200,7 +217,7 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
         },
     }
 
-    open_trade, avg_trade_days, last5_trades = _trade_history(df)
+    open_trade, avg_trade_days, last5_trades, trade_stats = _trade_history(df)
 
     non_dist_score = sum(1 for k, v in conditions.items() if k != "sma_dist" and v["pass"])
     score = non_dist_score + _DIST_TIER_CREDIT[conditions["sma_dist"]["tier"]]
@@ -220,4 +237,9 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
         "open_trade": open_trade,
         "avg_trade_days": avg_trade_days,
         "last5_trades": last5_trades,
+        # PF/WR from closed trades -- lets the dashboard color Exhaustion's
+        # BASE chip on the same good/fair/bad scale as strategies A/D/VCP.
+        "n_trades": trade_stats["n_trades"],
+        "win_rate": trade_stats["win_rate"],
+        "profit_factor": trade_stats["profit_factor"],
     }

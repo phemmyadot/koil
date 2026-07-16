@@ -204,37 +204,38 @@
       <option value="5">&ge; 5/6</option>
       <option value="6">6/6 (entry only)</option>
     </select>
-    <label for="exhaustionFilter">Exhaustion</label>
+    <label for="exhaustionFilter">VEXH</label>
     <select id="exhaustionFilter" class="stratFilter">
       <option value="">Any</option>
+      <option value="bad">Bad</option>
+      <option value="fair+">Fair+</option>
+      <option value="good+">Good+</option>
       <option value="active">Active trade</option>
-      <option value="take">TAKE advice</option>
-      <option value="skip">SKIP advice</option>
     </select>
     <span class="sep"></span>
-    <label for="stratAFilter">Strategy A</label>
+    <label for="stratAFilter">ADX</label>
     <select id="stratAFilter" class="stratFilter">
       <option value="">Any</option>
-      <option value="active">Active trade</option>
-      <option value="good">Good</option>
-      <option value="fair">Fair</option>
       <option value="bad">Bad</option>
+      <option value="fair+">Fair+</option>
+      <option value="good+">Good+</option>
+      <option value="active">Active trade</option>
     </select>
-    <label for="stratDFilter">Strategy D</label>
+    <label for="stratDFilter">VCPF</label>
     <select id="stratDFilter" class="stratFilter">
       <option value="">Any</option>
-      <option value="active">Active trade</option>
-      <option value="good">Good</option>
-      <option value="fair">Fair</option>
       <option value="bad">Bad</option>
+      <option value="fair+">Fair+</option>
+      <option value="good+">Good+</option>
+      <option value="active">Active trade</option>
     </select>
-    <label for="stratVcpFilter">VCP Master</label>
+    <label for="stratVcpFilter">VCP</label>
     <select id="stratVcpFilter" class="stratFilter">
       <option value="">Any</option>
-      <option value="active">Active trade</option>
-      <option value="good">Good</option>
-      <option value="fair">Fair</option>
       <option value="bad">Bad</option>
+      <option value="fair+">Fair+</option>
+      <option value="good+">Good+</option>
+      <option value="active">Active trade</option>
     </select>
     <span class="sep"></span>
     <label class="checklabel" for="anyOpenTradeFilter">
@@ -356,6 +357,20 @@ function strategyState(s) {
   if (s.baseline.in_position) return "active";
   return qualityLabel(s.baseline.profit_factor, s.baseline.win_rate);
 }
+// Strategy A/D/VCP filter dropdown: "" (Any) is the true no-op, "bad" is an
+// exact match (nothing ranks below it, and an active trade isn't "bad"),
+// "fair+"/"good+" are cumulative minimums over quality tiers PLUS active
+// trades (fair+ = fair|good|active, good+ = good|active -- a ticker you're
+// already in counts as clearing the bar too), "active" is an exact match.
+const QUALITY_RANK = { bad: 0, fair: 1, good: 2 };
+function matchesQualityFilter(state, want) {
+  if (!want) return true;
+  if (want === "active") return state === "active";
+  if (state === null) return false;
+  if (want === "bad") return state === "bad";
+  if (state === "active") return true;
+  return QUALITY_RANK[state] >= (want === "good+" ? 2 : 1);
+}
 // "Open trade in any of the 4" -- Exhaustion's own open_trade plus in_position
 // on each of the other three strategies' baseline result.
 function hasAnyOpenTrade(r) {
@@ -364,11 +379,11 @@ function hasAnyOpenTrade(r) {
     || strategyState(r.strategy_d) === "active"
     || strategyState(r.strategy_vcp) === "active";
 }
-// Exhaustion has no baseline PF/WR like the other three -- its only per-ticker
-// signal is the open trade's TAKE/SKIP advice, so "state" is scoped to that.
+// Same shape as strategyState() -- "active" if in an open trade, otherwise
+// the good/fair/bad tier from Exhaustion's own closed-trade PF/WR.
 function exhaustionState(r) {
-  if (!r.open_trade) return null;
-  return r.open_trade.advice === "TAKE" ? "take" : "skip";
+  if (r.open_trade) return "active";
+  return qualityLabel(r.profit_factor, r.win_rate);
 }
 
 function optimizedBeatsBaseline(o, baseline) {
@@ -380,24 +395,27 @@ function optimizedBeatsBaseline(o, baseline) {
   return robustPf > baseline.profit_factor || robustWr > baseline.win_rate;
 }
 
-// Exhaustion's row: just the colored TAKE/SKIP chip -- entry date/price,
-// target, unrealized %, bars held, advice reasoning, and the strategy's own
-// To TP %/Avg Days/Last 5 TP % stats all move to the detail modal (click the
-// chip).
+// Exhaustion's row: just the colored BASE chip -- entry date/price, target,
+// unrealized %, bars held, advice reasoning, and the strategy's own To TP %/
+// Avg Days/Last 5 TP % stats all move to the detail modal (click the chip).
 function exhaustionChip(r) {
   const t = r.open_trade;
-  const rows = [];
+  const rows = [
+    modalRow("Trades", r.n_trades),
+    modalRow("Profit factor", r.profit_factor),
+    modalRow("Win rate", r.win_rate + "%"),
+  ];
   if (t) {
     const sign = t.unrealized_pct >= 0 ? "+" : "";
+    rows.push('<div class="modalsep"></div>');
     rows.push(modalRow("Entry", `${t.entry_date} @ ${t.entry_price}`));
     rows.push(modalRow("Target", t.target));
     rows.push(modalRow("Unrealized", `${sign}${t.unrealized_pct}%`));
     rows.push(modalRow("Bars held", t.bars_held));
     if (t.entry_confidence) rows.push(modalRow("Entry confidence", t.entry_confidence));
-    rows.push('<div class="modalsep"></div>');
   }
-  const tpSign = r.to_tp_pct > 0 ? "+" : "";
-  rows.push(modalRow("To TP %", `${tpSign}${r.to_tp_pct.toFixed(1)}%`));
+  rows.push('<div class="modalsep"></div>');
+  rows.push(modalRow("To TP %", `${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%`));
   rows.push(modalRow("Avg Days", r.avg_trade_days ?? "&mdash;"));
   rows.push('<div class="modalsep"></div>');
   rows.push(modalRow("Last 5 TP %", last5(r.last5_trades)));
@@ -406,9 +424,10 @@ function exhaustionChip(r) {
     rows.push(`<div class="modalnote"><b>${t.advice}</b>: ${t.advice_reason}</div>`);
   }
   const id = registerModal("Exhaustion", rows);
-  const cls = t ? (t.advice === "TAKE" ? "ok" : "no") : "neutral";
-  const label = t ? t.advice : "NO SIGNAL";
-  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
+  // Same visual pattern as the other 3 strategies' BASE chip -- blue while an
+  // open trade, otherwise the same good/fair/bad quality color from PF/WR.
+  const cls = t ? "active" : QUALITY_CSS[qualityLabel(r.profit_factor, r.win_rate)];
+  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">BASE</span>`;
 }
 
 // Rows shared by the Training and Holdout modals -- same shape, different
@@ -493,10 +512,10 @@ function render(data) {
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => r.score >= minScore)
-    .filter(r => !exhaustionWant || (exhaustionWant === "active" ? !!r.open_trade : exhaustionState(r) === exhaustionWant))
-    .filter(r => !stratAWant || strategyState(r.strategy_a) === stratAWant)
-    .filter(r => !stratDWant || strategyState(r.strategy_d) === stratDWant)
-    .filter(r => !stratVcpWant || strategyState(r.strategy_vcp) === stratVcpWant)
+    .filter(r => matchesQualityFilter(exhaustionState(r), exhaustionWant))
+    .filter(r => matchesQualityFilter(strategyState(r.strategy_a), stratAWant))
+    .filter(r => matchesQualityFilter(strategyState(r.strategy_d), stratDWant))
+    .filter(r => matchesQualityFilter(strategyState(r.strategy_vcp), stratVcpWant))
     .filter(r => !anyOpenTradeOnly || hasAnyOpenTrade(r))
     .sort((a, b) =>
       (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct));
@@ -545,7 +564,8 @@ function render(data) {
     html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
-  const filtered = minScore > 0 || tickerQuery || exhaustionWant || stratAWant || stratDWant || stratVcpWant || anyOpenTradeOnly;
+  const filtered = minScore > 0 || tickerQuery || exhaustionWant
+    || stratAWant || stratDWant || stratVcpWant || anyOpenTradeOnly;
   const countText = filtered
     ? `${allRows.length} of ${data.tickers.length} tickers (filtered)`
     : `${data.tickers.length} tickers`;
@@ -676,7 +696,8 @@ document.getElementById("filterToggle").addEventListener("click", () => {
 document.getElementById("clearFilters").addEventListener("click", () => {
   document.getElementById("tickerSearch").value = "";
   document.getElementById("scoreFilter").value = "0";
-  for (const id of ["exhaustionFilter", "stratAFilter", "stratDFilter", "stratVcpFilter"]) {
+  document.getElementById("exhaustionFilter").value = "";
+  for (const id of ["stratAFilter", "stratDFilter", "stratVcpFilter"]) {
     document.getElementById(id).value = "";
   }
   document.getElementById("anyOpenTradeFilter").checked = false;

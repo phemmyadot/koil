@@ -1,14 +1,2 @@
-INFO:     Started server process [9584]
+INFO:     Started server process [23696]
 INFO:     Waiting for application startup.
-
-1 Failed download:
-['ABEO']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
-
-1 Failed download:
-['FROG']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
-
-1 Failed download:
-['HCSG']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
-
-1 Failed download:
-['LILAK']: YFRateLimitError('Too Many Requests. Rate limited. Try after a while.')
