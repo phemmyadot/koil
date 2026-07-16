@@ -78,7 +78,6 @@
   .strategyname { flex: 0 0 32px; font-size: 10px; font-weight: 700; color: var(--text); }
   .strategybody { flex: 1; min-width: 0; }
   /* Baseline/Training/Holdout chips side by side within a strategy's cell. */
-  .splitrow { display: flex; gap: 6px; flex-wrap: wrap; }
   .hasdetail { cursor: pointer; }
   .num { font-variant-numeric: tabular-nums; }
   .tk { font-weight: 700; font-size: 15px; }
@@ -129,6 +128,13 @@
   .modalbox { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
               width: 340px; max-width: 100%; max-height: 80vh; overflow-y: auto;
               color: var(--text); cursor: auto; box-shadow: 0 12px 32px rgba(0,0,0,0.25); }
+  .modalbox:has(.modalcolgrid) { width: 480px; }
+  .modalcolgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; }
+  .modalcol { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .modalcolhead { text-align: center; margin-bottom: 2px; }
+  .modalcolrow { display: flex; flex-direction: column; font-size: 11.5px; gap: 0; }
+  .modalcolrow .k { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .modalcol .modalnote { font-size: 10.5px; }
   .modaltitle { font-size: 13.5px; font-weight: 700; padding: 14px 18px; letter-spacing: 0.01em;
                 border-bottom: 1px solid var(--line); background: var(--bg);
                 border-radius: 12px 12px 0 0; }
@@ -164,6 +170,9 @@
     .foot { font-size: 11px; }
     .pager { flex-wrap: wrap; gap: 8px; }
     .cardgrid { grid-template-columns: 1fr; gap: 10px; }
+    .modalbox:has(.modalcolgrid) { width: 100%; }
+    .modalcolgrid { grid-template-columns: 1fr; gap: 10px; }
+    .modalcolrow { flex-direction: row; justify-content: space-between; }
   }
 </style>
 </head>
@@ -303,13 +312,6 @@ function last5(trades) {
     return `<span class="${cls}">${sign}${t.tp_pct}% - ${t.days}D</span>`;
   }).join(", ") + `</span>`;
 }
-// One modal row per config parameter (not a single comma-joined line) so
-// each value is easy to scan.
-function configRows(cfg) {
-  if (!cfg) return ['<div class="modalnote">no config</div>'];
-  return Object.entries(cfg).map(([k, v]) => modalRow(k, v));
-}
-
 // Detail modal replaces per-badge hover tooltips -- click any status chip to
 // see its config/stats/verdict reasoning as a structured panel, dismiss by
 // clicking anywhere (the box doesn't stop the click from bubbling to the
@@ -424,80 +426,82 @@ function exhaustionChip(r) {
     rows.push(`<div class="modalnote"><b>${t.advice}</b>: ${t.advice_reason}</div>`);
   }
   const id = registerModal("Exhaustion", rows);
-  // Same visual pattern as the other 3 strategies' BASE chip -- blue while an
-  // open trade, otherwise the same good/fair/bad quality color from PF/WR.
-  // When active, show days-since-open right on the chip (e.g. "BASE-2") so
-  // you don't have to open the modal just to see how stale a signal is.
+  // Blue + "IN-TRADE-N" (days held) while an open trade, otherwise the
+  // good/fair/bad quality color from PF/WR with a plain "BASE" label.
   const cls = t ? "active" : QUALITY_CSS[qualityLabel(r.profit_factor, r.win_rate)];
-  const label = t ? `BASE-${t.bars_held}` : "BASE";
+  const label = t ? `IN-TRADE-${t.bars_held}` : "BASE";
   return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
 }
 
 // Rows shared by the Training and Holdout modals -- same shape, different
 // stats/label passed in.
-function splitModalRows(cfg, stats, openPosition) {
-  const rows = [
-    ...configRows(cfg),
-    '<div class="modalsep"></div>',
-    modalRow("Trades", stats.n_trades),
-    modalRow("Profit factor", stats.profit_factor),
-    modalRow("Win rate", stats.win_rate + "%"),
-  ];
-  if (openPosition) {
-    rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("Entry", openPosition.entry_price));
-    rows.push(modalRow("Target", openPosition.target));
-    rows.push(modalRow("Days held", openPosition.days_held));
-  }
-  return rows;
-}
-
-// A/D/VCP row: BASELINE always shown; TRAINING/HOLDOUT only when the
-// optimizer found a config that actually beats baseline (same discipline as
-// before -- no empty/redundant chips). Each chip is colored by its OWN
-// quality and opens its own modal with the full config/stats/verdict.
-function strategyChips(s, name) {
-  if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
+// Build one candidate view per available source (BASE always; TRAIN/HOLD only
+// when the optimizer found a config that actually beats baseline).
+function strategyCandidates(s) {
   const b = s.baseline;
-  const baseCls = b.in_position ? "active" : QUALITY_CSS[qualityLabel(b.profit_factor, b.win_rate)];
-  const baseRows = [
-    ...configRows(s.baseline_config),
-    '<div class="modalsep"></div>',
-    modalRow("Trades", b.n_trades),
-    modalRow("Profit factor", b.profit_factor),
-    modalRow("Win rate", b.win_rate + "%"),
-  ];
-  if (b.first_trade_date) baseRows.push(modalRow("Trading since", b.first_trade_date));
-  if (b.open_position) {
-    baseRows.push('<div class="modalsep"></div>');
-    baseRows.push(modalRow("Entry", b.open_position.entry_price));
-    baseRows.push(modalRow("Target", b.open_position.target));
-    baseRows.push(modalRow("Days held", b.open_position.days_held));
-  }
-  baseRows.push('<div class="modalsep"></div>');
-  baseRows.push(`<div class="modalnote"><b>${b.verdict}</b>: ${b.verdict_reason}</div>`);
-  const baseId = registerModal(`${name} &mdash; Baseline`, baseRows);
-  // When active, show days-since-open right on the chip (e.g. "BASE-2") so
-  // you don't have to open the modal just to see how stale a signal is.
-  const baseLabel = b.in_position && b.open_position ? `BASE-${b.open_position.days_held}` : "BASE";
-  let html = `<span class="chip ${baseCls} hasdetail" onclick="showModal('${baseId}')">${baseLabel}</span>`;
-
+  const candidates = [{
+    source: "BASE", pf: b.profit_factor, wr: b.win_rate, n_trades: b.n_trades,
+    active: b.in_position, openPosition: b.open_position, config: s.baseline_config,
+    firstTradeDate: b.first_trade_date, verdict: b.verdict, verdictReason: b.verdict_reason,
+  }];
   if (optimizedBeatsBaseline(s.optimized, b)) {
     const o = s.optimized;
-    // HOLD/TRAIN reflect the OPTIMIZED config's own current position, which
-    // can differ from baseline's -- color them blue + show days-held too
-    // when that specific config is presently in a trade.
+    // TRAIN/HOLD share one live backtest run of the optimized config, so they
+    // share the same open-position state (see strategy_*.py's optimize()).
     const oActive = !!o.open_position;
-    const trCls = oActive ? "active" : QUALITY_CSS[qualityLabel(o.train_stats.profit_factor, o.train_stats.win_rate)];
-    const hoCls = oActive ? "active" : QUALITY_CSS[qualityLabel(o.holdout_stats.profit_factor, o.holdout_stats.win_rate)];
-    const hoLabel = oActive ? `HOLD-${o.open_position.days_held}` : "HOLD";
-    const trLabel = oActive ? `TRAIN-${o.open_position.days_held}` : "TRAIN";
-    const hoId = registerModal(`${name} &mdash; Holdout`, splitModalRows(o.config, o.holdout_stats, o.open_position));
-    const trId = registerModal(`${name} &mdash; Training`, splitModalRows(o.config, o.train_stats, o.open_position));
-    html += `<span class="chip ${hoCls} hasdetail" onclick="showModal('${hoId}')">${hoLabel}</span>`;
-    html += `<span class="chip ${trCls} hasdetail" onclick="showModal('${trId}')">${trLabel}</span>`;
+    candidates.push({ source: "TRAIN", pf: o.train_stats.profit_factor, wr: o.train_stats.win_rate,
+      n_trades: o.train_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config });
+    candidates.push({ source: "HOLD", pf: o.holdout_stats.profit_factor, wr: o.holdout_stats.win_rate,
+      n_trades: o.holdout_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config });
   }
-  return `<div class="splitrow">${html}</div>`;
+  return candidates;
+}
+
+// Pick the single chip to surface: prefer an active (in-trade) candidate --
+// best quality among actives if more than one -- otherwise the best-quality
+// candidate among all available views.
+function pickBestCandidate(candidates) {
+  const rank = c => QUALITY_RANK[qualityLabel(c.pf, c.wr)];
+  const actives = candidates.filter(c => c.active);
+  const pool = actives.length ? actives : candidates;
+  return pool.slice().sort((a, b) => rank(b) - rank(a) || b.pf - a.pf)[0];
+}
+
+// One combined modal per strategy, laid out in columns (BASE / TRAIN / HOLD
+// side by side) so all views are comparable at a glance instead of needing a
+// separate modal per chip.
+function strategyColumnsModal(name, candidates) {
+  const cols = candidates.map(c => {
+    const cls = c.active ? "active" : QUALITY_CSS[qualityLabel(c.pf, c.wr)];
+    const rows = [];
+    if (c.config) rows.push(`<div class="modalcolrow"><span class="k">Cfg</span><span>${Object.values(c.config).join(", ")}</span></div>`);
+    rows.push(`<div class="modalcolrow"><span class="k">Trades</span><span>${c.n_trades}</span></div>`);
+    rows.push(`<div class="modalcolrow"><span class="k">PF</span><span>${c.pf}</span></div>`);
+    rows.push(`<div class="modalcolrow"><span class="k">WR</span><span>${c.wr}%</span></div>`);
+    if (c.firstTradeDate) rows.push(`<div class="modalcolrow"><span class="k">Since</span><span>${c.firstTradeDate}</span></div>`);
+    if (c.openPosition) {
+      rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${c.openPosition.entry_price}</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${c.openPosition.target}</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Days</span><span>${c.openPosition.days_held}</span></div>`);
+    }
+    if (c.verdict) rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
+    return `<div class="modalcol"><div class="modalcolhead chip ${cls}">${c.source}</div>${rows.join("")}</div>`;
+  }).join("");
+  return registerModal(name, [`<div class="modalcolgrid">${cols}</div>`]);
+}
+
+// A/D/VCP row: only ONE chip shown -- the active trade if there is one
+// (labeled "IN-TRADE-N" like Exhaustion's), otherwise whichever of
+// BASE/TRAIN/HOLD is the best-quality view. Everything else lives in one
+// combined, column-laid-out modal behind that single chip.
+function strategyChips(s, name) {
+  if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
+  const candidates = strategyCandidates(s);
+  const best = pickBestCandidate(candidates);
+  const cls = best.active ? "active" : QUALITY_CSS[qualityLabel(best.pf, best.wr)];
+  const label = best.active && best.openPosition ? `IN-TRADE-${best.openPosition.days_held}` : best.source;
+  const id = strategyColumnsModal(name, candidates);
+  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
 }
 const PAGE_SIZE = 9;
 let lastData = null;
