@@ -249,7 +249,7 @@ def _summarize(trades: list[dict]) -> dict:
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
     avg_days = round(sum(t["days"] for t in trades) / len(trades), 1) if trades else None
-    last5 = [{"days": t["days"], "pnl_pct": t["pnl_pct"]} for t in trades[-5:]]
+    last5 = [{"days": t["days"], "tp_pct": t["pnl_pct"]} for t in trades[-5:]]
     return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
             "avg_trade_days": avg_days, "last5_trades": last5}
 

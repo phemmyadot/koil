@@ -130,10 +130,13 @@
               width: 340px; max-width: 100%; max-height: 80vh; overflow-y: auto;
               color: var(--text); cursor: auto; box-shadow: 0 12px 32px rgba(0,0,0,0.25); }
   .modalbox:has(.modalcolgrid) { width: 620px; }
-  .modalcolgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; }
-  .modalcol { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .modalcolgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 12px; }
+  .modalcol { display: flex; flex-direction: column; gap: 5px; min-width: 0;
+              padding-right: 12px; border-right: 1px solid var(--line); }
+  .modalcol:last-child { padding-right: 0; border-right: 0; }
   .modalcolhead { text-align: center; margin-bottom: 2px; }
-  .modalcolrow { display: flex; flex-direction: column; font-size: 11.5px; gap: 0; }
+  .modalcolrow { display: flex; flex-direction: row; justify-content: space-between;
+                 align-items: baseline; gap: 8px; font-size: 11.5px; }
   .modalcolrow .k { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; }
   .modalcol .modalnote { font-size: 10.5px; }
   .modaltitle { font-size: 13.5px; font-weight: 700; padding: 14px 18px; letter-spacing: 0.01em;
@@ -173,7 +176,11 @@
     .cardgrid { grid-template-columns: 1fr; gap: 10px; }
     .modalbox:has(.modalcolgrid) { width: 100%; }
     .modalcolgrid { grid-template-columns: 1fr; gap: 10px; }
-    .modalcolrow { flex-direction: row; justify-content: space-between; }
+    /* Columns stack instead of sitting side by side -- swap the vertical
+       divider for a horizontal one between stacked columns. */
+    .modalcol { border-right: 0; padding-right: 0; padding-bottom: 10px;
+                border-bottom: 1px solid var(--line); }
+    .modalcol:last-child { padding-bottom: 0; border-bottom: 0; }
   }
 </style>
 </head>
@@ -499,24 +506,41 @@ function pickBestCandidate(candidates) {
 function strategyColumnsModal(name, candidates) {
   const cols = candidates.map(c => {
     const cls = c.active ? "active" : QUALITY_CSS[qualityLabel(c.pf, c.wr)];
+    // Same grouping/divider rhythm as the Exhaustion modal: core stats, then
+    // [divider] open-position details, then [divider] last 5, then
+    // [divider] verdict note -- each group separated by a modalsep.
     const rows = [];
     if (c.config) rows.push(`<div class="modalcolrow"><span class="k">Cfg</span><span>${Object.values(c.config).join(", ")}</span></div>`);
     rows.push(`<div class="modalcolrow"><span class="k">Trades</span><span>${c.n_trades}</span></div>`);
     rows.push(`<div class="modalcolrow"><span class="k">PF</span><span>${c.pf}</span></div>`);
     rows.push(`<div class="modalcolrow"><span class="k">WR</span><span>${c.wr}%</span></div>`);
     if (c.firstTradeDate) rows.push(`<div class="modalcolrow"><span class="k">Since</span><span>${c.firstTradeDate}</span></div>`);
-    if (c.avgTradeDays != null) rows.push(`<div class="modalcolrow"><span class="k">Avg Days</span><span>${c.avgTradeDays}</span></div>`);
+
+    if (c.avgTradeDays != null) {
+      rows.push('<div class="modalsep"></div>');
+      rows.push(`<div class="modalcolrow"><span class="k">Avg Days</span><span>${c.avgTradeDays}</span></div>`);
+    }
+
     if (c.openPosition) {
       const op = c.openPosition;
       const uCls = op.unrealized_pct >= 0 ? "pos" : "neg";
       const uSign = op.unrealized_pct >= 0 ? "+" : "";
+      rows.push('<div class="modalsep"></div>');
       rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${op.entry_price}</span></div>`);
       rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${op.target}</span></div>`);
       rows.push(`<div class="modalcolrow"><span class="k">Days held</span><span>${op.days_held}</span></div>`);
       if (op.unrealized_pct != null) rows.push(`<div class="modalcolrow"><span class="k">Unrealized</span><span class="${uCls}">${uSign}${op.unrealized_pct}%</span></div>`);
     }
-    if (c.last5Trades && c.last5Trades.length) rows.push(`<div class="modalcolrow"><span class="k">Last 5</span><span>${last5(c.last5Trades)}</span></div>`);
-    if (c.verdict) rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
+
+    if (c.last5Trades && c.last5Trades.length) {
+      rows.push('<div class="modalsep"></div>');
+      rows.push(`<div class="modalcolrow"><span class="k">Last 5</span><span>${last5(c.last5Trades)}</span></div>`);
+    }
+
+    if (c.verdict) {
+      rows.push('<div class="modalsep"></div>');
+      rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
+    }
     return `<div class="modalcol"><div class="modalcolhead chip ${cls}">${c.source}</div>${rows.join("")}</div>`;
   }).join("");
   return registerModal(name, [`<div class="modalcolgrid">${cols}</div>`]);
