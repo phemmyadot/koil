@@ -95,6 +95,7 @@
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
   .chip.neutral { background: var(--line); color: var(--muted); }
   .chip.active { background: var(--blue-bg); color: var(--blue); }
+  .chip.stats { white-space: normal; text-align: left; line-height: 1.4; display: block; }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .pos { color: var(--green); } .neg { color: var(--red); }
   .last5 { font-size: 11px; }
@@ -426,11 +427,13 @@ function exhaustionChip(r) {
     rows.push(`<div class="modalnote"><b>${t.advice}</b>: ${t.advice_reason}</div>`);
   }
   const id = registerModal("Exhaustion", rows);
-  // Blue + "IN-TRADE-N" (days held) while an open trade, otherwise the
-  // good/fair/bad quality color from PF/WR with a plain "BASE" label.
+  // No source-name label on the chip itself -- color alone conveys status
+  // (blue = active, green/gold/red = quality), the label lives in the modal.
+  // Just the numbers: days-held (if active) + Tx WRxx.x% PFx.xx.
   const cls = t ? "active" : QUALITY_CSS[qualityLabel(r.profit_factor, r.win_rate)];
-  const label = t ? `IN-TRADE-${t.bars_held}` : "BASE";
-  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
+  const daysPart = t ? `O-${t.bars_held} ` : "";
+  const label = `${daysPart}T${r.n_trades} WR${r.win_rate}% PF${r.profit_factor}`;
+  return `<span class="chip ${cls} stats hasdetail" onclick="showModal('${id}')">${label}</span>`;
 }
 
 // Rows shared by the Training and Holdout modals -- same shape, different
@@ -490,18 +493,21 @@ function strategyColumnsModal(name, candidates) {
   return registerModal(name, [`<div class="modalcolgrid">${cols}</div>`]);
 }
 
-// A/D/VCP row: only ONE chip shown -- the active trade if there is one
-// (labeled "IN-TRADE-N" like Exhaustion's), otherwise whichever of
-// BASE/TRAIN/HOLD is the best-quality view. Everything else lives in one
-// combined, column-laid-out modal behind that single chip.
+// A/D/VCP row: only ONE chip shown -- the active trade if there is one,
+// otherwise whichever of BASE/TRAIN/HOLD is the best-quality view. No
+// source-name label on the chip itself -- color alone conveys status
+// (blue = active, green/gold/red = quality), just the numbers: days-held
+// (if active) + Tx WRxx.x% PFx.xx. Which source it actually is
+// (BASE/TRAIN/HOLD) is only shown in the modal.
 function strategyChips(s, name) {
   if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
   const candidates = strategyCandidates(s);
   const best = pickBestCandidate(candidates);
   const cls = best.active ? "active" : QUALITY_CSS[qualityLabel(best.pf, best.wr)];
-  const label = best.active && best.openPosition ? `IN-TRADE-${best.openPosition.days_held}` : best.source;
+  const daysPart = best.active && best.openPosition ? `O-${best.openPosition.days_held} ` : "";
+  const label = `${daysPart}T${best.n_trades} WR${best.wr}% PF${best.pf}`;
   const id = strategyColumnsModal(name, candidates);
-  return `<span class="chip ${cls} hasdetail" onclick="showModal('${id}')">${label}</span>`;
+  return `<span class="chip ${cls} stats hasdetail" onclick="showModal('${id}')">${label}</span>`;
 }
 const PAGE_SIZE = 9;
 let lastData = null;
