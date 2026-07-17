@@ -44,6 +44,28 @@
   .filtertoggle { display: none; }
   .clearfilters { background: var(--panel); color: var(--text); border: 1px solid var(--line);
                    margin-left: 0; }
+  .advfilter { position: relative; }
+  .advfilterbtn { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+                  margin-left: 0; display: flex; align-items: center; gap: 6px; }
+  .advfiltercount { background: var(--accent); color: #fff; border-radius: 999px;
+                     font-size: 10.5px; font-weight: 700; padding: 1px 6px; }
+  .advfilterpanel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
+                     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+                     box-shadow: 0 12px 32px rgba(0,0,0,0.25); padding: 10px;
+                     width: 340px; max-height: 70vh; overflow-y: auto; }
+  .advstrat { border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .advstrat:last-of-type { border-bottom: 0; }
+  .advstrat > summary { cursor: pointer; font-weight: 700; font-size: 12.5px; padding: 4px 2px; }
+  .advsub { padding: 4px 2px 8px 12px; }
+  .advsublabel { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+                 letter-spacing: 0.04em; margin: 6px 0 2px; }
+  .advmetric { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px;
+               padding: 2px 0; }
+  .advmetriclabel { flex: 0 0 60px; color: var(--muted); }
+  .advcheck { display: flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
+  .advcheck input { cursor: pointer; }
+  .advfilterfoot { display: flex; justify-content: flex-end; padding-top: 8px; margin-top: 4px;
+                    border-top: 1px solid var(--line); }
   select { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; }
   input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
@@ -171,6 +193,7 @@
     .filtercontrols.open { display: flex; }
     .filtercontrols .sep { display: none; }
     select { flex: 1 1 auto; min-width: 0; }
+    .advfilterpanel { width: 100%; left: 0; right: 0; }
     .foot { font-size: 11px; }
     .pager { flex-wrap: wrap; gap: 8px; }
     .cardgrid { grid-template-columns: 1fr; gap: 10px; }
@@ -230,44 +253,22 @@
       <option value="5">&ge; 5/6</option>
       <option value="6">6/6 (entry only)</option>
     </select>
-    <label for="exhaustionFilter">VEXH</label>
-    <select id="exhaustionFilter" class="stratFilter">
-      <option value="">Any</option>
-      <option value="bad">Bad</option>
-      <option value="fair+">Fair+</option>
-      <option value="good+">Good+</option>
-      <option value="active">Active trade</option>
-    </select>
     <span class="sep"></span>
-    <label for="stratAFilter">ADX</label>
-    <select id="stratAFilter" class="stratFilter">
-      <option value="">Any</option>
-      <option value="bad">Bad</option>
-      <option value="fair+">Fair+</option>
-      <option value="good+">Good+</option>
-      <option value="active">Active trade</option>
-    </select>
-    <label for="stratDFilter">VCPF</label>
-    <select id="stratDFilter" class="stratFilter">
-      <option value="">Any</option>
-      <option value="bad">Bad</option>
-      <option value="fair+">Fair+</option>
-      <option value="good+">Good+</option>
-      <option value="active">Active trade</option>
-    </select>
-    <label for="stratVcpFilter">VCP</label>
-    <select id="stratVcpFilter" class="stratFilter">
-      <option value="">Any</option>
-      <option value="bad">Bad</option>
-      <option value="fair+">Fair+</option>
-      <option value="good+">Good+</option>
-      <option value="active">Active trade</option>
-    </select>
+    <div class="advfilter" id="advFilter">
+      <button id="advFilterToggle" class="advfilterbtn" type="button" aria-expanded="false">
+        Advance Filter<span class="advfiltercount" id="advFilterCount" style="display:none"></span>
+        <span class="filtertogglearrow">&#9662;</span>
+      </button>
+      <div class="advfilterpanel" id="advFilterPanel" style="display:none"></div>
+    </div>
     <span class="sep"></span>
-    <label class="checklabel" for="anyOpenTradeFilter">
-      <input type="checkbox" id="anyOpenTradeFilter">
-      Open trade in any of the 4
-    </label>
+    <div class="advfilter" id="tradeOnFilter">
+      <button id="tradeOnToggle" class="advfilterbtn" type="button" aria-expanded="false">
+        Trade on<span class="advfiltercount" id="tradeOnCount" style="display:none"></span>
+        <span class="filtertogglearrow">&#9662;</span>
+      </button>
+      <div class="advfilterpanel" id="tradeOnPanel" style="display:none"></div>
+    </div>
     <span class="sep"></span>
     <button id="clearFilters" class="clearfilters" type="button">Clear filters</button>
     </div>
@@ -368,41 +369,121 @@ function qualityLabel(pf, wr) {
 }
 const QUALITY_CSS = { good: "ok", fair: "mid", bad: "no" };
 
-// State of a single strategy's baseline result, for the per-strategy filters:
-// "active" (in trade now), "good"/"fair"/"bad" (historical quality), or null
-// (no data on this ticker for this strategy).
-function strategyState(s) {
-  if (!s || !s.baseline) return null;
-  if (s.baseline.in_position) return "active";
-  return qualityLabel(s.baseline.profit_factor, s.baseline.win_rate);
-}
-// Strategy A/D/VCP filter dropdown: "" (Any) is the true no-op, "bad" is an
-// exact match (nothing ranks below it, and an active trade isn't "bad"),
-// "fair+"/"good+" are cumulative minimums over quality tiers PLUS active
-// trades (fair+ = fair|good|active, good+ = good|active -- a ticker you're
-// already in counts as clearing the bar too), "active" is an exact match.
 const QUALITY_RANK = { bad: 0, fair: 1, good: 2 };
-function matchesQualityFilter(state, want) {
-  if (!want) return true;
-  if (want === "active") return state === "active";
-  if (state === null) return false;
-  if (want === "bad") return state === "bad";
-  if (state === "active") return true;
-  return QUALITY_RANK[state] >= (want === "good+" ? 2 : 1);
+
+// ---------------- Advance Filter ----------------
+// Nested tree: strategy -> sub-view (BASE always; TRAIN/HOLD only for the 3
+// optimized strategies) -> Win Rate / Profit checkbox groups. Combination
+// logic: OR between checked tiers of the SAME metric (WR bad+good checked
+// means "WR is bad OR good"), AND between WR and PF within one sub-view, AND
+// across every block that has at least one box checked -- every checked
+// group narrows the result further, ticker must satisfy ALL of them.
+const ADV_FILTER_STRATS = [
+  { key: "vexh", label: "VEXH", subs: ["base"] },
+  { key: "adx", label: "ADX (Strategy A)", subs: ["base", "training", "holdout"] },
+  { key: "vcpf", label: "VCPF (Strategy D)", subs: ["base", "training", "holdout"] },
+  { key: "vcp", label: "VCP (VCP Master)", subs: ["base", "training", "holdout"] },
+];
+const ADV_SUB_LABEL = { base: "Base", training: "Training", holdout: "Holdout" };
+const ADV_SUB_SOURCE = { base: "BASE", training: "TRAIN", holdout: "HOLD" };
+const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp" };
+// WR is cumulative (Fair+ includes Good, same convention as the old filter);
+// Profit is exact tiers -- matches how the WR/PF badge colors already work.
+const ADV_WR_TIERS = [["bad", "Bad"], ["fair+", "Fair+"], ["good", "Good"]];
+const ADV_PF_TIERS = [["bad", "Bad"], ["fair", "Fair"], ["good", "Good"]];
+
+function advMetricRow(strat, sub, metric, label, tiers) {
+  const boxes = tiers.map(([tier, tlabel]) =>
+    `<label class="advcheck"><input type="checkbox" data-strat="${strat}" data-sub="${sub}" data-metric="${metric}" data-tier="${tier}"> ${tlabel}</label>`
+  ).join("");
+  return `<div class="advmetric"><span class="advmetriclabel">${label}</span>${boxes}</div>`;
 }
-// "Open trade in any of the 4" -- Exhaustion's own open_trade plus in_position
-// on each of the other three strategies' baseline result.
-function hasAnyOpenTrade(r) {
-  return !!r.open_trade
-    || strategyState(r.strategy_a) === "active"
-    || strategyState(r.strategy_d) === "active"
-    || strategyState(r.strategy_vcp) === "active";
+function buildAdvFilterPanel() {
+  let html = "";
+  for (const strat of ADV_FILTER_STRATS) {
+    html += `<details class="advstrat" open><summary>${strat.label}</summary>`;
+    for (const sub of strat.subs) {
+      html += `<div class="advsub"><div class="advsublabel">${ADV_SUB_LABEL[sub]}</div>`
+        + advMetricRow(strat.key, sub, "wr", "Win Rate", ADV_WR_TIERS)
+        + advMetricRow(strat.key, sub, "pf", "Profit", ADV_PF_TIERS)
+        + `</div>`;
+    }
+    html += `</details>`;
+  }
+  html += `<div class="advfilterfoot"><button id="advFilterClearBtn" class="clearfilters" type="button">Clear</button></div>`;
+  return html;
 }
-// Same shape as strategyState() -- "active" if in an open trade, otherwise
-// the good/fair/bad tier from Exhaustion's own closed-trade PF/WR.
-function exhaustionState(r) {
-  if (r.open_trade) return "active";
-  return qualityLabel(r.profit_factor, r.win_rate);
+
+function wrMatchesTier(wr, tier) {
+  if (tier === "bad") return wr < 50;
+  if (tier === "fair+") return wr >= 50;
+  if (tier === "good") return wr >= 75;
+  return false;
+}
+function pfMatchesTier(pf, tier) {
+  if (tier === "bad") return pf < 1.0;
+  if (tier === "fair") return pf >= 1.0 && pf < 2.0;
+  if (tier === "good") return pf >= 2.0;
+  return false;
+}
+// A block's WR/PF stats for one ticker -- null if that (strategy, sub-view)
+// doesn't exist for this ticker (e.g. TRAIN/HOLD when the optimizer never
+// beat baseline), which makes the block fail to match (see matchesAdvFilter).
+function getAdvBlockStats(r, strat, sub) {
+  if (strat === "vexh") return { wr: r.win_rate, pf: r.profit_factor };
+  const s = r[ADV_STRAT_KEY[strat]];
+  if (!s || !s.baseline) return null;
+  const want = ADV_SUB_SOURCE[sub];
+  const cand = strategyCandidates(s).find(c => c.source === want);
+  return cand ? { wr: cand.wr, pf: cand.pf } : null;
+}
+// Reads all checked boxes into { strat_sub: {strat, sub, wr:Set, pf:Set} } blocks.
+function readAdvFilterBlocks() {
+  const panel = document.getElementById("advFilterPanel");
+  const blocks = {};
+  panel.querySelectorAll("input[type=checkbox]:checked").forEach(cb => {
+    const { strat, sub, metric, tier } = cb.dataset;
+    const key = `${strat}_${sub}`;
+    if (!blocks[key]) blocks[key] = { strat, sub, wr: new Set(), pf: new Set() };
+    blocks[key][metric].add(tier);
+  });
+  return Object.values(blocks);
+}
+function advBlockMatches(r, block) {
+  const stats = getAdvBlockStats(r, block.strat, block.sub);
+  if (!stats) return false;
+  const wrOk = block.wr.size === 0 || [...block.wr].some(t => wrMatchesTier(stats.wr, t));
+  const pfOk = block.pf.size === 0 || [...block.pf].some(t => pfMatchesTier(stats.pf, t));
+  return wrOk && pfOk;
+}
+function matchesAdvFilter(r, blocks) {
+  return blocks.every(b => advBlockMatches(r, b));
+}
+
+// ---------------- Trade On filter ----------------
+// Separate from Advance Filter, ANDed against it (just another .filter() in
+// the same chain) -- "is this ticker currently in an open trade on ANY of
+// the checked strategies" (OR among the checked strategies themselves).
+const TRADE_ON_STRATS = [["adx", "ADX"], ["vcp", "VCP"], ["vcpf", "VCPF"], ["vexh", "VEXH"]];
+
+function buildTradeOnPanel() {
+  const boxes = TRADE_ON_STRATS.map(([key, label]) =>
+    `<label class="advcheck"><input type="checkbox" data-strat="${key}"> ${label}</label>`
+  ).join("");
+  return `<div class="advmetric">${boxes}</div>`
+    + `<div class="advfilterfoot"><button id="tradeOnClearBtn" class="clearfilters" type="button">Clear</button></div>`;
+}
+function isStrategyActive(r, key) {
+  if (key === "vexh") return !!r.open_trade;
+  const s = r[ADV_STRAT_KEY[key]];
+  if (!s || !s.baseline) return false;
+  return strategyCandidates(s).some(c => c.active);
+}
+function readTradeOnStrats() {
+  return [...document.querySelectorAll("#tradeOnPanel input[type=checkbox]:checked")].map(cb => cb.dataset.strat);
+}
+function matchesTradeOnFilter(r, strats) {
+  return strats.length === 0 || strats.some(key => isStrategyActive(r, key));
 }
 
 // WR/PF get their own independent color grading (not the combined
@@ -601,21 +682,17 @@ function render(data) {
   const minScore = Number(document.getElementById("scoreFilter").value);
   const sortBy = document.getElementById("sortBy").value;
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
-  const exhaustionWant = document.getElementById("exhaustionFilter").value;
-  const stratAWant = document.getElementById("stratAFilter").value;
-  const stratDWant = document.getElementById("stratDFilter").value;
-  const stratVcpWant = document.getElementById("stratVcpFilter").value;
-  const anyOpenTradeOnly = document.getElementById("anyOpenTradeFilter").checked;
-  // Each per-strategy select is AND-ed together, so picking a state on more
-  // than one strategy at once is how "filter by a combination of strategies" works.
+  const advBlocks = readAdvFilterBlocks();
+  const tradeOnStrats = readTradeOnStrats();
+  // Every checked Advance Filter block narrows the result further (AND across
+  // blocks); within one block, checking multiple WR/PF tiers is OR. Trade On
+  // is a separate filter ANDed against Advance Filter (its own .filter() in
+  // the chain); within Trade On, checking multiple strategies is OR.
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => r.score >= minScore)
-    .filter(r => matchesQualityFilter(exhaustionState(r), exhaustionWant))
-    .filter(r => matchesQualityFilter(strategyState(r.strategy_a), stratAWant))
-    .filter(r => matchesQualityFilter(strategyState(r.strategy_d), stratDWant))
-    .filter(r => matchesQualityFilter(strategyState(r.strategy_vcp), stratVcpWant))
-    .filter(r => !anyOpenTradeOnly || hasAnyOpenTrade(r))
+    .filter(r => matchesAdvFilter(r, advBlocks))
+    .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
     .sort((a, b) => {
       if (sortBy === "days_desc" || sortBy === "days_asc") {
         const da = maxDaysInTrade(a), db = maxDaysInTrade(b);
@@ -788,7 +865,7 @@ async function load(refresh) {
   }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));
-for (const id of ["sortBy", "scoreFilter", "exhaustionFilter", "stratAFilter", "stratDFilter", "stratVcpFilter", "anyOpenTradeFilter"]) {
+for (const id of ["sortBy", "scoreFilter"]) {
   document.getElementById(id).addEventListener("change", () => {
     currentPage = 1;
     if (lastData) render(lastData);
@@ -803,14 +880,67 @@ document.getElementById("filterToggle").addEventListener("click", () => {
   const nowOpen = controls.classList.toggle("open");
   document.getElementById("filterToggle").setAttribute("aria-expanded", nowOpen);
 });
+
+// Advance Filter: build the nested checkbox tree once, then toggle the
+// popover open/closed and re-render on every checkbox change. Clicking
+// anywhere outside the panel closes it (same pattern as the detail modal).
+// Generic wiring shared by both popovers (Advance Filter and Trade On):
+// build the panel HTML, keep the count badge in sync, toggle open/closed,
+// close on outside click, and re-render on every checkbox change. Returns
+// a clearAll() so the page-level "Clear filters" button can reset both.
+function setupFilterPopover(containerId, toggleId, panelId, countId, clearBtnId, buildFn) {
+  const panel = document.getElementById(panelId);
+  const toggle = document.getElementById(toggleId);
+  const container = document.getElementById(containerId);
+  const countBadge = document.getElementById(countId);
+  panel.innerHTML = buildFn();
+
+  function updateCount() {
+    const n = panel.querySelectorAll("input[type=checkbox]:checked").length;
+    countBadge.textContent = n;
+    countBadge.style.display = n > 0 ? "inline-block" : "none";
+  }
+  function close() {
+    panel.style.display = "none";
+    toggle.setAttribute("aria-expanded", "false");
+  }
+  function clearAll() {
+    panel.querySelectorAll("input[type=checkbox]:checked").forEach(cb => cb.checked = false);
+    updateCount();
+  }
+
+  panel.addEventListener("change", (e) => {
+    if (!e.target.matches('input[type=checkbox]')) return;
+    updateCount();
+    currentPage = 1;
+    if (lastData) render(lastData);
+  });
+  document.getElementById(clearBtnId).addEventListener("click", () => {
+    clearAll();
+    currentPage = 1;
+    if (lastData) render(lastData);
+  });
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const nowOpen = panel.style.display === "none";
+    panel.style.display = nowOpen ? "block" : "none";
+    toggle.setAttribute("aria-expanded", String(nowOpen));
+  });
+  document.addEventListener("click", (e) => {
+    if (!container.contains(e.target)) close();
+  });
+  return clearAll;
+}
+const clearAdvFilter = setupFilterPopover("advFilter", "advFilterToggle", "advFilterPanel",
+  "advFilterCount", "advFilterClearBtn", buildAdvFilterPanel);
+const clearTradeOnFilter = setupFilterPopover("tradeOnFilter", "tradeOnToggle", "tradeOnPanel",
+  "tradeOnCount", "tradeOnClearBtn", buildTradeOnPanel);
+
 document.getElementById("clearFilters").addEventListener("click", () => {
   document.getElementById("tickerSearch").value = "";
   document.getElementById("scoreFilter").value = "0";
-  document.getElementById("exhaustionFilter").value = "";
-  for (const id of ["stratAFilter", "stratDFilter", "stratVcpFilter"]) {
-    document.getElementById(id).value = "";
-  }
-  document.getElementById("anyOpenTradeFilter").checked = false;
+  clearAdvFilter();
+  clearTradeOnFilter();
   currentPage = 1;
   if (lastData) render(lastData);
 });
