@@ -586,10 +586,12 @@ function strategyCandidates(s) {
     const oActive = !!o.open_position;
     candidates.push({ source: "TRAIN", pf: o.train_stats.profit_factor, wr: o.train_stats.win_rate,
       n_trades: o.train_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config,
-      avgTradeDays: o.train_stats.avg_trade_days, last5Trades: o.train_stats.last5_trades });
+      avgTradeDays: o.train_stats.avg_trade_days, last5Trades: o.train_stats.last5_trades,
+      firstTradeDate: o.train_stats.first_trade_date });
     candidates.push({ source: "HOLD", pf: o.holdout_stats.profit_factor, wr: o.holdout_stats.win_rate,
       n_trades: o.holdout_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config,
-      avgTradeDays: o.holdout_stats.avg_trade_days, last5Trades: o.holdout_stats.last5_trades });
+      avgTradeDays: o.holdout_stats.avg_trade_days, last5Trades: o.holdout_stats.last5_trades,
+      firstTradeDate: o.holdout_stats.first_trade_date });
   }
   return candidates;
 }

@@ -268,6 +268,8 @@ def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_
         if len(train_trades) < min_trades_per_split or len(holdout_trades) < min_trades_per_split:
             continue
         st, sh = _summarize(train_trades), _summarize(holdout_trades)
+        st["first_trade_date"] = bars[train_trades[0]["entry_i"]]["d"] if train_trades else None
+        sh["first_trade_date"] = bars[holdout_trades[0]["entry_i"]]["d"] if holdout_trades else None
         robust_pf = min(st["profit_factor"], sh["profit_factor"])
         robust_wr = min(st["win_rate"], sh["win_rate"])
         score = robust_pf * robust_wr
