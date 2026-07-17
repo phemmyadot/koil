@@ -512,10 +512,14 @@ function pfColorClass(pf) {
 // 4 separate small badges (O/T/WR/PF) instead of one combined chip, each
 // with its own color grading. All 4 open the same modal.
 function statBadges(active, days, nTrades, wr, pf, modalId) {
+  // Win count derived from the rounded win_rate% and n_trades (backend only
+  // stores the percentage, not the raw win count) -- rounding error here is
+  // at most the last decimal of wr%, negligible for display purposes.
+  const wins = Math.round(wr / 100 * nTrades);
   const badges = [];
   if (active) badges.push(["active", `O-${days}`]);
   badges.push(["neutral", `T${nTrades}`]);
-  badges.push([wrColorClass(wr), `WR${wr}%`]);
+  badges.push([wrColorClass(wr), `WR${wr}%(${wins}/${nTrades})`]);
   badges.push([pfColorClass(pf), `PF${pf}`]);
   return `<span class="badgerow">` + badges.map(([cls, text]) =>
     `<span class="chip ${cls} hasdetail" onclick="showModal('${modalId}')">${text}</span>`
