@@ -26,7 +26,7 @@ CHUNK = 100
 MAJOR_EXCHANGES = ["NMS", "NYQ", "NCM", "NGM", "ASE", "PCX"]
 
 
-def fetch_candidates(min_cap: int = 300_000_000, min_vol: int = 500_000,
+def fetch_candidates(min_cap: int = 300_000_000, min_vol: int = 1_000_000,
                       price_range: tuple[int, int] = (5, 100),
                       exchanges: list[str] | None = MAJOR_EXCHANGES) -> list[str]:
     """Server-side filter: cap/volume/price/exchange. Returns matching symbols."""
