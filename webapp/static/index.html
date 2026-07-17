@@ -770,8 +770,7 @@ function render(data) {
     html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   const open = allRows.filter(r => r.open_trade).length;
-  const filtered = minScore > 0 || tickerQuery || exhaustionWant
-    || stratAWant || stratDWant || stratVcpWant || anyOpenTradeOnly;
+  const filtered = minScore > 0 || !!tickerQuery || advBlocks.length > 0 || tradeOnStrats.length > 0;
   const countText = filtered
     ? `${allRows.length} of ${data.tickers.length} tickers (filtered)`
     : `${data.tickers.length} tickers`;
