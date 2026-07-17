@@ -211,6 +211,15 @@
     <div class="filtercontrols" id="filterControls">
     <input type="text" id="tickerSearch" placeholder="Search ticker&hellip;" autocomplete="off">
     <span class="sep"></span>
+    <label for="sortBy">Sort</label>
+    <select id="sortBy">
+      <option value="default">Default</option>
+      <option value="days_desc">Days in trade (longest first)</option>
+      <option value="days_asc">Days in trade (newest first)</option>
+      <option value="condition_desc">Condition (highest first)</option>
+      <option value="condition_asc">Condition (lowest first)</option>
+    </select>
+    <span class="sep"></span>
     <label for="scoreFilter">Min score</label>
     <select id="scoreFilter">
       <option value="0">All</option>
@@ -500,6 +509,23 @@ function pickBestCandidate(candidates) {
   return pool.slice().sort((a, b) => rank(b) - rank(a) || b.pf - a.pf)[0];
 }
 
+// Longest days-held across ALL open positions on this ticker -- Exhaustion's
+// own open_trade plus any active BASE/TRAIN/HOLD candidate on strategy A/D/VCP
+// (a ticker can be "in trade" on more than one strategy at once). null if
+// nothing is open anywhere, so it can sort after tickers that do have one.
+function maxDaysInTrade(r) {
+  let max = r.open_trade ? r.open_trade.bars_held : null;
+  for (const s of [r.strategy_a, r.strategy_d, r.strategy_vcp]) {
+    if (!s || !s.baseline) continue;
+    for (const c of strategyCandidates(s)) {
+      if (c.active && c.openPosition && c.openPosition.days_held != null) {
+        max = max === null ? c.openPosition.days_held : Math.max(max, c.openPosition.days_held);
+      }
+    }
+  }
+  return max;
+}
+
 // One combined modal per strategy, laid out in columns (BASE / TRAIN / HOLD
 // side by side) so all views are comparable at a glance instead of needing a
 // separate modal per chip.
@@ -573,6 +599,7 @@ function render(data) {
   modalStore = {};
   modalCounter = 0;
   const minScore = Number(document.getElementById("scoreFilter").value);
+  const sortBy = document.getElementById("sortBy").value;
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
   const exhaustionWant = document.getElementById("exhaustionFilter").value;
   const stratAWant = document.getElementById("stratAFilter").value;
@@ -589,8 +616,19 @@ function render(data) {
     .filter(r => matchesQualityFilter(strategyState(r.strategy_d), stratDWant))
     .filter(r => matchesQualityFilter(strategyState(r.strategy_vcp), stratVcpWant))
     .filter(r => !anyOpenTradeOnly || hasAnyOpenTrade(r))
-    .sort((a, b) =>
-      (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct));
+    .sort((a, b) => {
+      if (sortBy === "days_desc" || sortBy === "days_asc") {
+        const da = maxDaysInTrade(a), db = maxDaysInTrade(b);
+        // No open trade anywhere sorts last regardless of direction.
+        if (da === null && db === null) return 0;
+        if (da === null) return 1;
+        if (db === null) return -1;
+        return sortBy === "days_desc" ? db - da : da - db;
+      }
+      if (sortBy === "condition_desc") return b.score - a.score;
+      if (sortBy === "condition_asc") return a.score - b.score;
+      return (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct);
+    });
 
   const pageCount = Math.max(1, Math.ceil(allRows.length / PAGE_SIZE));
   currentPage = Math.min(Math.max(1, currentPage), pageCount);
@@ -750,7 +788,7 @@ async function load(refresh) {
   }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));
-for (const id of ["scoreFilter", "exhaustionFilter", "stratAFilter", "stratDFilter", "stratVcpFilter", "anyOpenTradeFilter"]) {
+for (const id of ["sortBy", "scoreFilter", "exhaustionFilter", "stratAFilter", "stratDFilter", "stratVcpFilter", "anyOpenTradeFilter"]) {
   document.getElementById(id).addEventListener("change", () => {
     currentPage = 1;
     if (lastData) render(lastData);
