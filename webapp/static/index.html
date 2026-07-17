@@ -96,6 +96,9 @@
      top, colored status chip(s) below, everything else lives in the detail
      modal (click a chip). */
   .strategygrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  /* ADX/VCPF hidden behind SHOW_ADX_VCPF -- VEXH and VCP each get the full
+     row width instead of being squeezed into half of a 2-column grid. */
+  .strategygrid2.solo { grid-template-columns: 1fr; }
   .strategycell { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; }
   .strategyname { flex: 0 0 32px; font-size: 10px; font-weight: 700; color: var(--text); }
   .strategybody { flex: 1; min-width: 0; }
@@ -283,6 +286,12 @@
      Config: SMA150 &middot; BB 20/1.5&sigma; &middot; RSI&le;40 &middot; dist 0.5&middot;ATR &middot; ATR 4&ndash;12% &middot; time stop 20.</p>
 </div>
 <script>
+// Feature flag: ADX (Strategy A) and VCPF (Strategy D) hidden from the card
+// grid and the Trade On filter while they're not the focus -- data is still
+// computed server-side and cached, so flipping this back to true needs no
+// backend change, just re-shows both columns.
+const SHOW_ADX_VCPF = false;
+
 const COND_LABELS = { trend:"TREND", band:"BAND", rsi:"RSI", sma_dist:"DIST", vol_ceil:"VCEIL", vol_floor:"VFLR" };
 
 const TIER_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
@@ -383,7 +392,7 @@ const ADV_FILTER_STRATS = [
   { key: "adx", label: "ADX (Strategy A)", subs: ["base", "training", "holdout"] },
   { key: "vcpf", label: "VCPF (Strategy D)", subs: ["base", "training", "holdout"] },
   { key: "vcp", label: "VCP (VCP Master)", subs: ["base", "training", "holdout"] },
-];
+].filter(s => SHOW_ADX_VCPF || (s.key !== "adx" && s.key !== "vcpf"));
 const ADV_SUB_LABEL = { base: "Base", training: "Training", holdout: "Holdout" };
 const ADV_SUB_SOURCE = { base: "BASE", training: "TRAIN", holdout: "HOLD" };
 const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp" };
@@ -464,7 +473,8 @@ function matchesAdvFilter(r, blocks) {
 // Separate from Advance Filter, ANDed against it (just another .filter() in
 // the same chain) -- "is this ticker currently in an open trade on ANY of
 // the checked strategies" (OR among the checked strategies themselves).
-const TRADE_ON_STRATS = [["adx", "ADX"], ["vcp", "VCP"], ["vcpf", "VCPF"], ["vexh", "VEXH"]];
+const TRADE_ON_STRATS = [["adx", "ADX"], ["vcp", "VCP"], ["vcpf", "VCPF"], ["vexh", "VEXH"]]
+  .filter(([key]) => SHOW_ADX_VCPF || (key !== "adx" && key !== "vcpf"));
 
 function buildTradeOnPanel() {
   const boxes = TRADE_ON_STRATS.map(([key, label]) =>
@@ -613,20 +623,20 @@ function maxDaysInTrade(r) {
 function strategyColumnsModal(name, candidates) {
   const cols = candidates.map(c => {
     const cls = c.active ? "active" : QUALITY_CSS[qualityLabel(c.pf, c.wr)];
-    // Same grouping/divider rhythm as the Exhaustion modal: core stats, then
-    // [divider] open-position details, then [divider] last 5, then
-    // [divider] verdict note -- each group separated by a modalsep.
+    // Same field set/order/grouping as the Exhaustion modal: Trades/Profit
+    // factor/Win rate, then [divider] Entry/Target/Unrealized/Bars held (only
+    // if open), then [divider] Avg Days, then [divider] Last 5 TP %, then
+    // [divider] verdict note. NOTE: "Entry confidence" and "To TP %" are
+    // Exhaustion-specific (its validated SMA-distance tier and Bollinger-
+    // midline target both need a reference line that exists on every bar,
+    // not just while a trade is open) -- A/D/VCP have no equivalent, so
+    // those two rows are intentionally omitted here rather than faked.
     const rows = [];
     if (c.config) rows.push(`<div class="modalcolrow"><span class="k">Cfg</span><span>${Object.values(c.config).join(", ")}</span></div>`);
     rows.push(`<div class="modalcolrow"><span class="k">Trades</span><span>${c.n_trades}</span></div>`);
-    rows.push(`<div class="modalcolrow"><span class="k">PF</span><span>${c.pf}</span></div>`);
-    rows.push(`<div class="modalcolrow"><span class="k">WR</span><span>${c.wr}%</span></div>`);
+    rows.push(`<div class="modalcolrow"><span class="k">Profit factor</span><span>${c.pf}</span></div>`);
+    rows.push(`<div class="modalcolrow"><span class="k">Win rate</span><span>${c.wr}%</span></div>`);
     if (c.firstTradeDate) rows.push(`<div class="modalcolrow"><span class="k">Since</span><span>${c.firstTradeDate}</span></div>`);
-
-    if (c.avgTradeDays != null) {
-      rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">Avg Days</span><span>${c.avgTradeDays}</span></div>`);
-    }
 
     if (c.openPosition) {
       const op = c.openPosition;
@@ -635,13 +645,18 @@ function strategyColumnsModal(name, candidates) {
       rows.push('<div class="modalsep"></div>');
       rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${op.entry_price}</span></div>`);
       rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${op.target}</span></div>`);
-      rows.push(`<div class="modalcolrow"><span class="k">Days held</span><span>${op.days_held}</span></div>`);
       if (op.unrealized_pct != null) rows.push(`<div class="modalcolrow"><span class="k">Unrealized</span><span class="${uCls}">${uSign}${op.unrealized_pct}%</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Bars held</span><span>${op.days_held}</span></div>`);
+    }
+
+    if (c.avgTradeDays != null) {
+      rows.push('<div class="modalsep"></div>');
+      rows.push(`<div class="modalcolrow"><span class="k">Avg Days</span><span>${c.avgTradeDays}</span></div>`);
     }
 
     if (c.last5Trades && c.last5Trades.length) {
       rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">Last 5</span><span>${last5(c.last5Trades)}</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Last 5 TP %</span><span>${last5(c.last5Trades)}</span></div>`);
     }
 
     if (c.verdict) {
@@ -728,13 +743,13 @@ function render(data) {
       </div>
       <hr class="divider">
       <div class="scoresections">
-        <div class="scorebox"><div class="strategygrid2">
+        <div class="scorebox"><div class="strategygrid2 ${SHOW_ADX_VCPF ? "" : "solo"}">
           <div class="strategycell"><span class="strategyname">VEXH</span>
             <div class="strategybody">${exhaustionChip(r)}</div></div>
-          <div class="strategycell"><span class="strategyname">ADX</span>
-            <div class="strategybody">${strategyChips(r.strategy_a, "Strategy A")}</div></div>
-          <div class="strategycell"><span class="strategyname">VCPF</span>
-            <div class="strategybody">${strategyChips(r.strategy_d, "Strategy D")}</div></div>
+          ${SHOW_ADX_VCPF ? `<div class="strategycell"><span class="strategyname">ADX</span>
+            <div class="strategybody">${strategyChips(r.strategy_a, "Strategy A")}</div></div>` : ""}
+          ${SHOW_ADX_VCPF ? `<div class="strategycell"><span class="strategyname">VCPF</span>
+            <div class="strategybody">${strategyChips(r.strategy_d, "Strategy D")}</div></div>` : ""}
           <div class="strategycell"><span class="strategyname">VCP</span>
             <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
         </div></div>
