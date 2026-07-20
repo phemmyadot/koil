@@ -1,8 +1,8 @@
 //@version=6
-strategy("VCP Master v9.3 - Production Base Standard", overlay=true, initial_capital=1500, default_qty_type=strategy.percent_of_equity, default_qty_value=66.66, calc_on_every_tick=false)
+strategy("VCPO", overlay=true, initial_capital=1500, default_qty_type=strategy.percent_of_equity, default_qty_value=33.33, calc_on_every_tick=true)
 
 // ==========================================
-// USER INPUTS & PARAMETERS (Strict Institutional Bounds)
+// USER INPUTS & PARAMETERS (Fallback Defaults)
 // ==========================================
 var string G_DATE   = "Stage 0b: Backtest Date Range"
 var string G_ENTRY  = "Stage 1: Adaptive Entry Settings"
@@ -12,20 +12,18 @@ var string G_DTE    = "Stage 6: DTE Elapsed Flag (visual only)"
 
 // Stage 0b Inputs - Date Filter
 bool use_date_filter = input.bool(false, title="Restrict Backtest to Date Range", group=G_DATE)
-int start_date        = input.time(timestamp("2020-01-01 00:00"), title="Start Date", group=G_DATE)
+int start_date        = input.time(timestamp("2022-01-01 00:00"), title="Start Date", group=G_DATE)
 int end_date           = input.time(timestamp("2069-12-31 00:00"), title="End Date", group=G_DATE)
 bool in_date_range     = not use_date_filter or (time >= start_date and time <= end_date)
 
 // Stage 1 Inputs - Validated Ranges
-int atr_len         = input.int(22, title="ATR Length", group=G_ENTRY, minval=10, maxval=25, step=1)
-float atr_mult      = input.float(3, title="Initial ATR Stop Multiplier", group=G_ENTRY, step=0.1, minval=1.0, maxval=3.0)
-float vol_mult      = input.float(1.4, title="Breakout Volume Multiplier (x 50d avg)", group=G_ENTRY, step=0.1, minval=1.0, maxval=3.0)
-float risk_pct      = input.float(1.0, title="Risk % of Equity per Trade", group=G_ENTRY, step=0.1, minval=0.1, maxval=5.0)
+int atr_len         = input.int(22, title="Manual ATR Length", group=G_ENTRY, minval=5, maxval=35, step=1)
+float atr_mult      = input.float(3.0, title="Manual ATR Stop Multiplier", group=G_ENTRY, step=0.1, minval=1.0, maxval=5.0)
 
 // Stage 4 Inputs - Hardcoded Safety Margins
 float be_trigger    = input.float(7.9, title="Breakeven Activation Tier (%)", group=G_TRAIL, step=0.1, minval=5.0, maxval=10.0)
 float trail_tier    = input.float(13.1, title="Aggressive Trail Tier (%)", group=G_TRAIL, step=0.1, minval=8.0, maxval=15.0)
-float tp_target     = input.float(11, title="Partial Take Profit Target (%)", group=G_TRAIL, step=1.0, minval=10.0, maxval=20.0)
+float tp_target     = input.float(11.0, title="Manual Take Profit Target (%)", group=G_TRAIL, step=1.0, minval=5.0, maxval=25.0)
 string stop_style   = input.string("Dynamic ATR", title="Stop Style Profile", options=["Dynamic ATR", "Static %"], group=G_TRAIL)
 
 // Stage 5 Inputs - Inactivity Parameters
@@ -38,13 +36,13 @@ int max_bars        = input.int(20, title="Max Bars to Stagnancy Check", group=G
 bool show_dte_flag = input.bool(true, title="Show DTE Elapsed Flag", group=G_DTE)
 int dte_bars        = input.int(20, title="DTE (candles)", group=G_DTE, minval=1, maxval=500)
 
+
 // ==========================================
 // SYSTEM INDICATORS & RE-SCALING ENGINE
 // ==========================================
 float atr_value          = ta.atr(atr_len)
 float historical_atr_avg = ta.sma(atr_value, 100)
 
-// Macro trend filter to preserve trades building institutional launchpads
 float macro_base_filter  = ta.ema(close, 50)
 bool macro_trend_bullish = close > macro_base_filter
 
@@ -54,12 +52,7 @@ bool macro_trend_bullish = close > macro_base_filter
 // ==========================================
 bool asset_is_compressed = atr_value <= (historical_atr_avg * 1.15)
 float local_resistance   = ta.highest(high, 20)[1]
-// Volume confirmation: a breakout above the contraction high needs institutional
-// participation behind it (Minervini's standard: 1.4x-2.0x the 50-day average
-// volume), otherwise it's much more prone to failing/reversing.
-float vol_avg_50         = ta.sma(volume, 50)
-bool volume_confirmed    = volume >= vol_mult * vol_avg_50
-bool breakout_triggered  = close > local_resistance and asset_is_compressed and volume_confirmed
+bool breakout_triggered  = close > local_resistance and asset_is_compressed
 
 
 // ==========================================
@@ -88,16 +81,8 @@ else
     tp_half_hit      := false
     bars_in_trade    := 0
 
-// Fire Strategy Entry Leg -- risk-based sizing: position size is derived from
-// the actual stop distance (atr_value * atr_mult) so every trade risks the
-// same % of equity regardless of how tight or wide that stock's ATR stop is,
-// instead of a flat 66.66%-of-equity allocation that let a tight-stop trade
-// and a wide-stop trade carry very different dollar risk for the same size.
-float stop_distance = atr_value * atr_mult
-float risk_qty       = stop_distance > 0 ? (strategy.equity * risk_pct / 100) / stop_distance : na
-
-if (breakout_triggered and strategy.position_size == 0 and in_date_range and not na(risk_qty))
-    strategy.entry("Long", strategy.long, qty=risk_qty, comment="Long")
+if (breakout_triggered and strategy.position_size == 0) and in_date_range
+    strategy.entry("Long", strategy.long, comment="Long")
     array.push(dte_entry_bars, bar_index)
 
 
@@ -113,12 +98,10 @@ if (strategy.position_size > 0)
         
     float max_gain_pct = ((high_since_entry - entry_price) / entry_price) * 100
     
-    // Tier 1: Early Breakeven Protection
     if (max_gain_pct >= be_trigger and not be_activated)
         stop_price   := entry_price
         be_activated := true
 
-    // Tier 2: Dynamic Scaling Stop Floor
     if (stop_style == "Dynamic ATR")
         if (tp_half_hit or max_gain_pct >= trail_tier)
             stop_price := math.max(stop_price, close - (atr_value * 2.5))
@@ -130,12 +113,10 @@ if (strategy.position_size > 0)
         if (max_gain_pct >= trail_tier or tp_half_hit)
             stop_price := math.max(stop_price, entry_price * (1 + (trail_tier * 0.005)))
 
-    // Partial Take Profit Execution
     if (max_gain_pct >= tp_target and not tp_half_hit)
         strategy.order("TP Half", strategy.short, qty=strategy.position_size * 0.5, comment="TP Half")
         tp_half_hit := true
 
-    // Capital Exit Trigger
     if (close < stop_price or low < stop_price)
         strategy.close("Long", comment="Ladder Floor Hit")
 else
@@ -164,5 +145,9 @@ if show_dte_flag and array.size(dte_entry_bars) > 0
         if age > dte_bars
             array.remove(dte_entry_bars, i)
 
-plot(strategy.position_size > 0 ? stop_price : na, color=color.green, style=plot.style_linebr, linewidth=2, title="Dynamic Tracking Floor")
-plot(strategy.position_size > 0 ? entry_price : na, color=color.blue, style=plot.style_circles, linewidth=1, title="Execution Baseline")
+// plot(strategy.position_size > 0 ? stop_price : na, color=color.maroon, style=plot.style_linebr, linewidth=2, title="Dynamic Tracking Floor")
+plot(strategy.position_size > 0 ? entry_price : na, color=color.maroon, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
+
+
+plotshape(breakout_triggered, title = "Long Signal", style = shape.triangleup,
+     location = location.belowbar, color = color.new(color.maroon, 0), size = size.small)

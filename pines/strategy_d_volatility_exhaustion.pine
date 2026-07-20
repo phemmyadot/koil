@@ -23,6 +23,12 @@ atrPctMin    = input.float(4.0, title="Entry: Min ATR as % of Price (0 = off)", 
 startDate  = input.time(timestamp("1 Jan 2022 00:00 +0000"), title="Backtest Start")
 endDate    = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="Backtest End")
 
+// Visual-only: flags N candles after EVERY entry, independent of the actual
+// time stop above -- lets you eyeball where each trade would be on a fixed
+// DTE clock without changing strategy behavior.
+showDteFlag = input.bool(true, title="Show DTE Elapsed Flag (visual only)")
+dteBars     = input.int(20, title="DTE (candles)", minval=1, maxval=500)
+
 // --- Technical Indicators ---
 macroSma = ta.sma(close, smaSlowLen)
 bbBasis  = ta.sma(close, bbLen)
@@ -54,6 +60,12 @@ entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOu
 var float targetMid = na
 var int   entryBar  = na
 
+// Visual-only DTE tracking: one entry per trade taken, independent of the
+// single-slot entryBar above (which the real time stop overwrites on the
+// next trade). Pruned once an entry ages past dteBars so the array can't
+// grow unbounded over a long backtest.
+var int[] dteEntryBars = array.new_int(0)
+
 // 1. Invalidation Stop: trend break below the macro floor closes the trade
 if (strategy.position_size > 0 and close < macroSma)
     strategy.close("Exhaustion_Long", comment="Stop: Trend Break")
@@ -63,15 +75,24 @@ if (strategy.position_size > 0 and timeStopBars > 0 and bar_index - entryBar >= 
     strategy.close("Exhaustion_Long", comment="Stop: Time")
 
 // 3. Entry on Close; take-profit as a resting limit at the frozen mid-band
-if (strategy.position_size == 0 and entryCondition)
+entrySignal = strategy.position_size == 0 and entryCondition
+if entrySignal
     targetMid := bbBasis
     entryBar  := bar_index
     strategy.entry("Exhaustion_Long", strategy.long, comment="Enter Position")
     strategy.exit("TP Reversion", "Exhaustion_Long", limit=targetMid)
+    array.push(dteEntryBars, bar_index)
+
+// 4. DTE Elapsed Flag: visual-only marker, N candles after each entry above
+if showDteFlag and array.size(dteEntryBars) > 0
+    for i = array.size(dteEntryBars) - 1 to 0
+        age = bar_index - array.get(dteEntryBars, i)
+        if age == dteBars
+            label.new(bar_index, high, text="DTE", style=label.style_label_down,
+                 color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
+        if age > dteBars
+            array.remove(dteEntryBars, i)
 
 // --- Visual Chart Layout ---
-plot(macroSma, color=color.blue, linewidth=2, title="150 SMA Macro floor")
-plot(bbBasis, color=color.orange, title="BB Basis Mean Line")
-plot(bbLower, color=color.red, title="BB Lower Boundary")
-plot(strategy.position_size > 0 ? targetMid : na, color=color.green, style=plot.style_linebr, linewidth=2, title="Active TP Target")
-bgcolor(entryCondition ? color.new(color.green, 85) : na, title="Trigger Zone")
+plotshape(entrySignal, title = "Long Signal", style = shape.triangleup,
+     location = location.belowbar, color = color.new(color.purple, 0), size = size.small)
