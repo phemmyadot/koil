@@ -11,6 +11,7 @@ refresher decides the cache is stale, every ticker's full payload (all four
 strategies) is recomputed once and held in memory. A page request is then
 just a fast in-memory read -- no network call, no per-request backtest run.
 """
+import importlib
 import os
 import threading
 import time
@@ -23,13 +24,14 @@ from fastapi.staticfiles import StaticFiles
 import webapp.data as data
 import webapp.optimizer as optimizer
 from webapp.scoring import evaluate
-from webapp.tickers import TICKERS
+import webapp.tickers as tickers_module
 import webapp.strategy_a as strategy_a
 import webapp.strategy_d as strategy_d
 import webapp.strategy_vcp as strategy_vcp
 
 app = FastAPI(title="Exhaustion Dashboard")
 
+TICKERS = tickers_module.TICKERS
 _computed: list[dict] = []
 _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
@@ -80,6 +82,15 @@ def compute_all() -> None:
         _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def reload_tickers() -> None:
+    """Re-read webapp/tickers.py so a build_universe.py rebuild takes effect
+    without a server restart. Called on manual refresh, not the background
+    stale-cache loop, since the ticker list only changes via manual rebuild."""
+    global TICKERS
+    importlib.reload(tickers_module)
+    TICKERS = tickers_module.TICKERS
+
+
 def refresh_and_compute() -> None:
     """Fetch (if needed) then recompute. Called once at startup and by the
     background refresher whenever webapp.data says the cache is stale."""
@@ -123,6 +134,7 @@ def _with_fresh_optimized(payload: dict) -> dict:
 @app.get("/api/tickers")
 def tickers(refresh: int = 0):
     if refresh:
+        reload_tickers()
         refresh_and_compute()
     with _compute_lock:
         computed_snapshot = list(_computed)

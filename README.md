@@ -57,7 +57,10 @@ Then open `http://127.0.0.1:8123`.
 - `scoring.py` — per-ticker evaluation logic: entry gate pass/fail, confidence tier
   (LOW/MEDIUM/HIGH, based on validated distance-from-SMA research), open-trade status with
   a TAKE/SKIP verdict, average trade duration, and last-5-trades history.
-- `tickers.py` — the screened ticker universe (generated file, see below).
+- `tickers.py` — the screened ticker universe (generated file, see below). Gitignored --
+  each environment (dev/prod) keeps its own local copy, so pulling/pushing never conflicts
+  over it. **Not present on a fresh clone** -- run `build_universe.py` once before starting
+  the app for the first time.
 - `build_universe.py` — rebuilds `tickers.py` from scratch by screening Yahoo Finance for
   cap/volume/price/exchange criteria, then filtering for SMA200/SMA50/weekly-volatility
   technicals. Supports `--min-cap`, `--min-vol`, `--merge`, `--allow-otc` flags:
