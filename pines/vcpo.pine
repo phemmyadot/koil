@@ -66,8 +66,11 @@ var int bars_in_trade  = 0
 
 // Visual-only DTE tracking: one entry per trade taken, independent of the
 // per-position state above. Pruned once an entry ages past dte_bars so the
-// array can't grow unbounded over a long backtest.
-var int[] dte_entry_bars = array.new_int(0)
+// array can't grow unbounded over a long backtest. dte_entry_prices is
+// parallel to dte_entry_bars (same index = same trade) so the % move since
+// entry can be shown alongside the flag.
+var int[]   dte_entry_bars   = array.new_int(0)
+var float[] dte_entry_prices = array.new_float(0)
 
 if (strategy.position_size > 0)
     bars_in_trade := bars_in_trade + 1
@@ -85,6 +88,7 @@ bool entry_signal = (breakout_triggered and strategy.position_size == 0) and in_
 if entry_signal
     strategy.entry("Long", strategy.long, comment="Long")
     array.push(dte_entry_bars, bar_index)
+    array.push(dte_entry_prices, close)
 
 
 // ==========================================
@@ -136,18 +140,21 @@ if (use_time and (bars_in_trade >= max_bars))
 // VISUAL DIAGNOSTICS
 // ==========================================
 
-// DTE Elapsed Flag: visual-only marker, N candles after each entry above
+// DTE Elapsed Flag: visual-only marker, N candles after each entry above,
+// labeled with the % move from that entry's price to now
 if show_dte_flag and array.size(dte_entry_bars) > 0
     for i = array.size(dte_entry_bars) - 1 to 0
         age = bar_index - array.get(dte_entry_bars, i)
         if age == dte_bars
-            label.new(bar_index, high, text="DTE", style=label.style_label_down,
-                 color=color.new(color.maroon, 0), textcolor=color.white, size=size.small)
+            float dte_pct = (close - array.get(dte_entry_prices, i)) / array.get(dte_entry_prices, i) * 100
+            label.new(bar_index, high, text="DTE\n" + str.tostring(dte_pct, "#.#") + "%",
+                 style=label.style_label_down, color=color.new(color.blue, 0), textcolor=color.white, size=size.small)
         if age > dte_bars
             array.remove(dte_entry_bars, i)
+            array.remove(dte_entry_prices, i)
 
-plot(strategy.position_size > 0 ? entry_price : na, color=color.maroon, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
+plot(strategy.position_size > 0 ? entry_price : na, color=color.blue, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
 
 
 plotshape(entry_signal, title = "Long Signal", style = shape.triangleup,
-     location = location.belowbar, color = color.new(color.maroon, 0), size = size.small)
+     location = location.belowbar, color = color.new(color.blue, 0), size = size.small)

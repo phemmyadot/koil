@@ -1,5 +1,5 @@
 //@version=5
-strategy("Hardened Exhaustion Engine - Production 5% Sized", 
+strategy("VEXH", 
      overlay=true, 
      initial_capital=10000, 
      default_qty_type=strategy.percent_of_equity, 
@@ -64,8 +64,11 @@ var float entryPrice = na
 // Visual-only DTE tracking: one entry per trade taken, independent of the
 // single-slot entryBar above (which the real time stop overwrites on the
 // next trade). Pruned once an entry ages past dteBars so the array can't
-// grow unbounded over a long backtest.
-var int[] dteEntryBars = array.new_int(0)
+// grow unbounded over a long backtest. dteEntryPrices is parallel to
+// dteEntryBars (same index = same trade) so the % move since entry can be
+// shown alongside the flag.
+var int[]   dteEntryBars   = array.new_int(0)
+var float[] dteEntryPrices = array.new_float(0)
 
 // 1. Invalidation Stop: trend break below the macro floor closes the trade
 if (strategy.position_size > 0 and close < macroSma)
@@ -84,16 +87,20 @@ if entrySignal
     strategy.entry("Exhaustion_Long", strategy.long, comment="Enter Position")
     strategy.exit("TP Reversion", "Exhaustion_Long", limit=targetMid)
     array.push(dteEntryBars, bar_index)
+    array.push(dteEntryPrices, close)
 
-// 4. DTE Elapsed Flag: visual-only marker, N candles after each entry above
+// 4. DTE Elapsed Flag: visual-only marker, N candles after each entry above,
+// labeled with the % move from that entry's price to now
 if showDteFlag and array.size(dteEntryBars) > 0
     for i = array.size(dteEntryBars) - 1 to 0
         age = bar_index - array.get(dteEntryBars, i)
         if age == dteBars
-            label.new(bar_index, high, text="DTE", style=label.style_label_down,
-                 color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
+            float dtePct = (close - array.get(dteEntryPrices, i)) / array.get(dteEntryPrices, i) * 100
+            label.new(bar_index, high, text="DTE\n" + str.tostring(dtePct, "#.#") + "%",
+                 style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
         if age > dteBars
             array.remove(dteEntryBars, i)
+            array.remove(dteEntryPrices, i)
 
 // --- Visual Chart Layout ---
 plotshape(entrySignal, title = "Long Signal", style = shape.triangleup,
