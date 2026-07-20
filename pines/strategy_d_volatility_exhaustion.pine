@@ -71,9 +71,11 @@ var int[]   dteEntryBars   = array.new_int(0)
 var float[] dteEntryPrices = array.new_float(0)
 
 // Running DTE-result stats (summary only, no per-trade list)
-var int   dteCount    = 0
-var int   dteWinCount = 0
-var float dtePctSum   = 0.0
+var int   dteCount        = 0
+var int   dteWinCount     = 0
+var int   dteLossCount    = 0
+var float dtePctWinSum    = 0.0
+var float dtePctLossSum   = 0.0
 
 // 1. Invalidation Stop: trend break below the macro floor closes the trade
 if (strategy.position_size > 0 and close < macroSma)
@@ -103,9 +105,13 @@ if showDteFlag and array.size(dteEntryBars) > 0
             float dtePct = (close - array.get(dteEntryPrices, i)) / array.get(dteEntryPrices, i) * 100
             label.new(bar_index, high, text="DTE\n" + str.tostring(dtePct, "#.#") + "%",
                  style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
-            dteCount    += 1
-            dtePctSum   += dtePct
-            dteWinCount := dtePct > 0 ? dteWinCount + 1 : dteWinCount
+            dteCount += 1
+            if dtePct > 0
+                dteWinCount  += 1
+                dtePctWinSum += dtePct
+            else
+                dteLossCount  += 1
+                dtePctLossSum += dtePct
         if age > dteBars
             array.remove(dteEntryBars, i)
             array.remove(dteEntryPrices, i)
@@ -115,13 +121,16 @@ plotshape(entrySignal, title = "Long Signal", style = shape.triangleup,
      location = location.belowbar, color = color.new(color.purple, 0), size = size.small)
 plot(strategy.position_size > 0 ? entryPrice : na, color=color.purple, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
 
-var table dteTable = table.new(position.bottom_right, 2, 3, bgcolor=color.new(color.purple, 95), border_color=color.purple, border_width=1) // VEXH: bottom-right
+var table dteTable = table.new(position.bottom_right, 2, 4, bgcolor=color.new(color.purple, 95), border_color=color.purple, border_width=1) // VEXH: bottom-right
 if showDteFlag and barstate.islastconfirmedhistory
-    float dteWinRate = dteCount > 0 ? dteWinCount / float(dteCount) * 100 : 0.0
-    float dteAvgPct  = dteCount > 0 ? dtePctSum / dteCount : 0.0
+    float dteWinRate   = dteCount > 0 ? dteWinCount / float(dteCount) * 100 : 0.0
+    float dteAvgPctWin = dteWinCount > 0 ? dtePctWinSum / dteWinCount : 0.0
+    float dteAvgPctLoss = dteLossCount > 0 ? dtePctLossSum / dteLossCount : 0.0
     table.cell(dteTable, 0, 0, "Win Rate", text_color=color.purple, text_size=size.small)
     table.cell(dteTable, 1, 0, str.tostring(dteWinRate, "#.#") + "%", text_color=color.purple, text_size=size.small)
-    table.cell(dteTable, 0, 1, "Avg DTE %", text_color=color.purple, text_size=size.small)
-    table.cell(dteTable, 1, 1, str.tostring(dteAvgPct, "#.#") + "%", text_color=color.purple, text_size=size.small)
-    table.cell(dteTable, 0, 2, "Count", text_color=color.purple, text_size=size.small)
-    table.cell(dteTable, 1, 2, str.tostring(dteCount), text_color=color.purple, text_size=size.small)
+    table.cell(dteTable, 0, 1, "Avg P DTE %", text_color=color.purple, text_size=size.small)
+    table.cell(dteTable, 1, 1, str.tostring(dteAvgPctWin, "#.#") + "%", text_color=color.purple, text_size=size.small)
+    table.cell(dteTable, 0, 2, "Avg L DTE %", text_color=color.purple, text_size=size.small)
+    table.cell(dteTable, 1, 2, str.tostring(dteAvgPctLoss, "#.#") + "%", text_color=color.purple, text_size=size.small)
+    table.cell(dteTable, 0, 3, "Count", text_color=color.purple, text_size=size.small)
+    table.cell(dteTable, 1, 3, str.tostring(dteCount), text_color=color.purple, text_size=size.small)
