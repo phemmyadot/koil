@@ -8,6 +8,12 @@ originally curate p.py's target_universe:
 
 Run from the project root:
     .\\.venv\\Scripts\\python.exe -m webapp.build_universe
+
+Screening criteria default from the constants below but can be overridden via
+env vars (BUILD_UNIVERSE_MIN_CAP, BUILD_UNIVERSE_MIN_VOL, BUILD_UNIVERSE_PRICE_MIN,
+BUILD_UNIVERSE_PRICE_MAX, BUILD_UNIVERSE_EXCHANGES, BUILD_UNIVERSE_MERGE,
+BUILD_UNIVERSE_ALLOW_OTC) so criteria changes don't require a code push --
+just set the env var and rerun.
 """
 import os
 import time
@@ -20,14 +26,55 @@ OUT_PATH = os.path.join(os.path.dirname(__file__), "tickers.py")
 CHUNK = 100
 
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from a .env file at the project root, if present.
+
+    No third-party dependency -- keeps existing os.environ values as-is.
+    """
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 # Major US listing venues only -- excludes OTC/Pink Sheets (exchange code "PNK"),
 # which are essentially never optionable and carry outsized pump-and-dump risk,
 # a bigger concern now that the cap floor can go as low as $100M.
-MAJOR_EXCHANGES = ["NMS", "NYQ", "NCM", "NGM", "ASE", "PCX"]
+# Override with BUILD_UNIVERSE_EXCHANGES (comma-separated) if needed.
+_DEFAULT_EXCHANGES = ["NMS", "NYQ", "NCM", "NGM", "ASE", "PCX"]
+MAJOR_EXCHANGES = (
+    [e.strip() for e in os.environ["BUILD_UNIVERSE_EXCHANGES"].split(",") if e.strip()]
+    if os.environ.get("BUILD_UNIVERSE_EXCHANGES")
+    else _DEFAULT_EXCHANGES
+)
+
+DEFAULT_MIN_CAP = int(os.environ.get("BUILD_UNIVERSE_MIN_CAP", 300_000_000))
+DEFAULT_MIN_VOL = int(os.environ.get("BUILD_UNIVERSE_MIN_VOL", 500_000))
+DEFAULT_PRICE_MIN = int(os.environ.get("BUILD_UNIVERSE_PRICE_MIN", 5))
+DEFAULT_PRICE_MAX = int(os.environ.get("BUILD_UNIVERSE_PRICE_MAX", 50))
+DEFAULT_MERGE = _env_bool("BUILD_UNIVERSE_MERGE")
+DEFAULT_ALLOW_OTC = _env_bool("BUILD_UNIVERSE_ALLOW_OTC")
 
 
-def fetch_candidates(min_cap: int = 300_000_000, min_vol: int = 1_000_000,
-                      price_range: tuple[int, int] = (5, 100),
+def fetch_candidates(min_cap: int = DEFAULT_MIN_CAP, min_vol: int = DEFAULT_MIN_VOL,
+                      price_range: tuple[int, int] = (DEFAULT_PRICE_MIN, DEFAULT_PRICE_MAX),
                       exchanges: list[str] | None = MAJOR_EXCHANGES) -> list[str]:
     """Server-side filter: cap/volume/price/exchange. Returns matching symbols."""
     filters = [
@@ -120,12 +167,14 @@ def write_tickers_file(tickers: list[str], note: str = "") -> None:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--min-cap", type=int, default=300_000_000)
-    parser.add_argument("--min-vol", type=int, default=500_000)
-    parser.add_argument("--merge", action="store_true",
-                         help="union with the existing webapp/tickers.py instead of replacing it")
-    parser.add_argument("--allow-otc", action="store_true",
-                         help="skip the major-exchange filter (allows OTC/Pink Sheet names through)")
+    parser.add_argument("--min-cap", type=int, default=DEFAULT_MIN_CAP)
+    parser.add_argument("--min-vol", type=int, default=DEFAULT_MIN_VOL)
+    parser.add_argument("--merge", action="store_true", default=DEFAULT_MERGE,
+                         help="union with the existing webapp/tickers.py instead of replacing it "
+                              "(default from BUILD_UNIVERSE_MERGE)")
+    parser.add_argument("--allow-otc", action="store_true", default=DEFAULT_ALLOW_OTC,
+                         help="skip the major-exchange filter (allows OTC/Pink Sheet names through) "
+                              "(default from BUILD_UNIVERSE_ALLOW_OTC)")
     args = parser.parse_args()
 
     candidates = fetch_candidates(min_cap=args.min_cap, min_vol=args.min_vol,
