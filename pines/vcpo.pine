@@ -81,7 +81,8 @@ else
     tp_half_hit      := false
     bars_in_trade    := 0
 
-if (breakout_triggered and strategy.position_size == 0) and in_date_range
+bool entry_signal = (breakout_triggered and strategy.position_size == 0) and in_date_range
+if entry_signal
     strategy.entry("Long", strategy.long, comment="Long")
     array.push(dte_entry_bars, bar_index)
 
@@ -148,5 +149,5 @@ if show_dte_flag and array.size(dte_entry_bars) > 0
 plot(strategy.position_size > 0 ? entry_price : na, color=color.maroon, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
 
 
-plotshape(breakout_triggered, title = "Long Signal", style = shape.triangleup,
+plotshape(entry_signal, title = "Long Signal", style = shape.triangleup,
      location = location.belowbar, color = color.new(color.maroon, 0), size = size.small)
