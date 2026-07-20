@@ -57,8 +57,9 @@ inWindow       = time >= startDate and time <= endDate
 entryCondition = hasEnoughData and macroBullish and bbExhaustion and rsiWashedOut and smaDistOk and volCeilOk and volFloorOk and inWindow
 
 // --- State Machine Tracking ---
-var float targetMid = na
-var int   entryBar  = na
+var float targetMid  = na
+var int   entryBar   = na
+var float entryPrice = na
 
 // Visual-only DTE tracking: one entry per trade taken, independent of the
 // single-slot entryBar above (which the real time stop overwrites on the
@@ -77,8 +78,9 @@ if (strategy.position_size > 0 and timeStopBars > 0 and bar_index - entryBar >= 
 // 3. Entry on Close; take-profit as a resting limit at the frozen mid-band
 entrySignal = strategy.position_size == 0 and entryCondition
 if entrySignal
-    targetMid := bbBasis
-    entryBar  := bar_index
+    targetMid  := bbBasis
+    entryBar   := bar_index
+    entryPrice := close
     strategy.entry("Exhaustion_Long", strategy.long, comment="Enter Position")
     strategy.exit("TP Reversion", "Exhaustion_Long", limit=targetMid)
     array.push(dteEntryBars, bar_index)
@@ -96,3 +98,4 @@ if showDteFlag and array.size(dteEntryBars) > 0
 // --- Visual Chart Layout ---
 plotshape(entrySignal, title = "Long Signal", style = shape.triangleup,
      location = location.belowbar, color = color.new(color.purple, 0), size = size.small)
+plot(strategy.position_size > 0 ? entryPrice : na, color=color.purple, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")

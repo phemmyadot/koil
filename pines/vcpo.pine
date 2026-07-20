@@ -141,11 +141,10 @@ if show_dte_flag and array.size(dte_entry_bars) > 0
         age = bar_index - array.get(dte_entry_bars, i)
         if age == dte_bars
             label.new(bar_index, high, text="DTE", style=label.style_label_down,
-                 color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
+                 color=color.new(color.maroon, 0), textcolor=color.white, size=size.small)
         if age > dte_bars
             array.remove(dte_entry_bars, i)
 
-// plot(strategy.position_size > 0 ? stop_price : na, color=color.maroon, style=plot.style_linebr, linewidth=2, title="Dynamic Tracking Floor")
 plot(strategy.position_size > 0 ? entry_price : na, color=color.maroon, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
 
 
