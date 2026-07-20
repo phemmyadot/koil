@@ -72,6 +72,11 @@ var int bars_in_trade  = 0
 var int[]   dte_entry_bars   = array.new_int(0)
 var float[] dte_entry_prices = array.new_float(0)
 
+// Running DTE-result stats (summary only, no per-trade list)
+var int   dte_count     = 0
+var int   dte_win_count = 0
+var float dte_pct_sum   = 0.0
+
 if (strategy.position_size > 0)
     bars_in_trade := bars_in_trade + 1
     if na(entry_price)
@@ -149,6 +154,9 @@ if show_dte_flag and array.size(dte_entry_bars) > 0
             float dte_pct = (close - array.get(dte_entry_prices, i)) / array.get(dte_entry_prices, i) * 100
             label.new(bar_index, high, text="DTE\n" + str.tostring(dte_pct, "#.#") + "%",
                  style=label.style_label_down, color=color.new(color.blue, 0), textcolor=color.white, size=size.small)
+            dte_count     += 1
+            dte_pct_sum   += dte_pct
+            dte_win_count := dte_pct > 0 ? dte_win_count + 1 : dte_win_count
         if age > dte_bars
             array.remove(dte_entry_bars, i)
             array.remove(dte_entry_prices, i)
@@ -158,3 +166,14 @@ plot(strategy.position_size > 0 ? entry_price : na, color=color.blue, style=plot
 
 plotshape(entry_signal, title = "Long Signal", style = shape.triangleup,
      location = location.belowbar, color = color.new(color.blue, 0), size = size.small)
+
+var table dte_table = table.new(position.bottom_left, 2, 3, bgcolor=color.new(color.blue, 95), border_color=color.blue, border_width=1) // VCPO: bottom-left, avoids overlap with VEXH/VCP if run together
+if show_dte_flag and barstate.islast
+    float dte_win_rate = dte_count > 0 ? dte_win_count / float(dte_count) * 100 : 0.0
+    float dte_avg_pct  = dte_count > 0 ? dte_pct_sum / dte_count : 0.0
+    table.cell(dte_table, 0, 0, "Win Rate", text_color=color.blue, text_size=size.small)
+    table.cell(dte_table, 1, 0, str.tostring(dte_win_rate, "#.#") + "%", text_color=color.blue, text_size=size.small)
+    table.cell(dte_table, 0, 1, "Avg DTE %", text_color=color.blue, text_size=size.small)
+    table.cell(dte_table, 1, 1, str.tostring(dte_avg_pct, "#.#") + "%", text_color=color.blue, text_size=size.small)
+    table.cell(dte_table, 0, 2, "Count", text_color=color.blue, text_size=size.small)
+    table.cell(dte_table, 1, 2, str.tostring(dte_count), text_color=color.blue, text_size=size.small)
