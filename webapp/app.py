@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+import webapp.build_universe as build_universe
 import webapp.data as data
 import webapp.optimizer as optimizer
 from webapp.scoring import evaluate
@@ -82,13 +83,24 @@ def compute_all() -> None:
         _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def reload_tickers() -> None:
-    """Re-read webapp/tickers.py so a build_universe.py rebuild takes effect
-    without a server restart. Called on manual refresh, not the background
-    stale-cache loop, since the ticker list only changes via manual rebuild."""
+def rebuild_universe() -> str | None:
+    """Re-screen Yahoo and overwrite webapp/tickers.py in-process, then reload
+    it into TICKERS. Runs the same screen as `python -m webapp.build_universe`
+    (same env-var-driven cap/vol/price/exchange defaults) but inline, so a
+    manual refresh in prod never requires SSH-ing in to run the CLI by hand.
+    Best-effort: the screener API rate-limits under repeated calls, and a
+    failed re-screen shouldn't block refreshing prices for the existing
+    universe. Returns an error string on failure, None on success."""
     global TICKERS
+    try:
+        candidates = build_universe.fetch_candidates()
+        passed = build_universe.screen_technicals(candidates)
+        build_universe.write_tickers_file(passed)
+    except Exception as e:  # noqa: BLE001 - fall back to the existing tickers.py
+        return str(e) or type(e).__name__
     importlib.reload(tickers_module)
     TICKERS = tickers_module.TICKERS
+    return None
 
 
 def refresh_and_compute() -> None:
@@ -133,8 +145,9 @@ def _with_fresh_optimized(payload: dict) -> dict:
 
 @app.get("/api/tickers")
 def tickers(refresh: int = 0):
+    universe_error = None
     if refresh:
-        reload_tickers()
+        universe_error = rebuild_universe()
         refresh_and_compute()
     with _compute_lock:
         computed_snapshot = list(_computed)
@@ -144,6 +157,7 @@ def tickers(refresh: int = 0):
         "cached": not refresh,
         "tickers": [_with_fresh_optimized(p) for p in computed_snapshot],
         "errors": errors,
+        "universe_error": universe_error,
     }
 
 
