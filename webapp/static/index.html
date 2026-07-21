@@ -70,6 +70,8 @@
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; }
   input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; width: 140px; }
+  input[type=number] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+           border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; width: 4em; }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
            padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; margin-left: auto; }
   button:disabled { opacity: 0.5; cursor: wait; }
@@ -258,7 +260,7 @@
     </select>
     <span class="sep"></span>
     <label for="minTradesFilter">Min trades</label>
-    <input type="number" id="minTradesFilter" min="0" step="1" value="0" style="width:4em">
+    <input type="number" id="minTradesFilter" min="0" step="1" value="0">
     <span class="sep"></span>
     <div class="advfilter" id="advFilter">
       <button id="advFilterToggle" class="advfilterbtn" type="button" aria-expanded="false">
@@ -507,6 +509,21 @@ function readTradeOnStrats() {
 }
 function matchesTradeOnFilter(r, strats) {
   return strats.length === 0 || strats.some(key => isStrategyActive(r, key));
+}
+
+// n_trades for one strategy view -- VEXH's is a top-level field; A/D/VCP/VCPO
+// use whichever candidate strategyChips would surface (BASE, since
+// training/holdout is flagged off and strategyCandidates() only ever
+// returns BASE), same "best candidate" concept used for O/T/WR/PF badges.
+function strategyNTrades(r, key) {
+  if (key === "vexh") return r.n_trades;
+  const s = r[ADV_STRAT_KEY[key]];
+  if (!s || !s.baseline) return null;
+  return pickBestCandidate(strategyCandidates(s)).n_trades;
+}
+function matchesMinTrades(r, minTrades) {
+  if (minTrades <= 0) return true;
+  return ["vexh", "vcp", "vcpo"].some(key => (strategyNTrades(r, key) ?? -1) >= minTrades);
 }
 
 // WR/PF get their own independent color grading (not the combined
@@ -761,7 +778,7 @@ function render(data) {
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => r.score >= minScore)
-    .filter(r => r.n_trades >= minTrades)
+    .filter(r => matchesMinTrades(r, minTrades))
     .filter(r => matchesAdvFilter(r, advBlocks))
     .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
     .sort((a, b) => {
