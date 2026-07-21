@@ -23,6 +23,11 @@ ET = ZoneInfo("America/New_York")
 REFRESH_INTERVAL_OPEN = 2 * 60 * 60  # 2 hours while market open
 CHECK_INTERVAL = 15 * 60             # how often the background loop wakes to check staleness
 FETCH_WORKERS = 30
+# Matches the start_date/startDate input default (1 Jan 2022) shared by all
+# three pine strategies (vcp.pine, vcpo.pine, strategy_d_volatility_
+# exhaustion.pine) -- keeps the app's backtest window aligned with the Pine
+# reference point instead of an arbitrary rolling window.
+HISTORY_START = "2022-01-01"
 
 _raw_cache: dict[str, pd.DataFrame] = {}
 _raw_errors: dict[str, str] = {}
@@ -68,7 +73,7 @@ FETCH_TIMEOUT = 20  # seconds -- one hung ticker must not block the whole bulk f
 
 def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, str | None]:
     try:
-        df = yf.download(ticker, period="10y", interval="1d", progress=False,
+        df = yf.download(ticker, start=HISTORY_START, interval="1d", progress=False,
                           auto_adjust=False, timeout=FETCH_TIMEOUT)
         if hasattr(df.columns, "get_level_values"):
             df.columns = df.columns.get_level_values(0)
