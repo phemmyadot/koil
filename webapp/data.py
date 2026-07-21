@@ -24,10 +24,11 @@ REFRESH_INTERVAL_OPEN = 2 * 60 * 60  # 2 hours while market open
 CHECK_INTERVAL = 15 * 60             # how often the background loop wakes to check staleness
 FETCH_WORKERS = 30
 # Matches the start_date/startDate input default (1 Jan 2022) shared by all
-# three pine strategies (vcp.pine, vcpo.pine, strategy_d_volatility_
-# exhaustion.pine) -- keeps the app's backtest window aligned with the Pine
-# reference point instead of an arbitrary rolling window.
-HISTORY_START = "2022-01-01"
+# three pine strategies. Fetches a year earlier than that so ATR (needs
+# ATR_LEN=22 + a 100-bar rolling average -- ~122 bars) and VEXH's SMA150 are
+# already warmed up by 2022-01-01, instead of computing on cold/incomplete
+# indicators for the first several months of the window.
+HISTORY_START = "2021-01-01"
 
 _raw_cache: dict[str, pd.DataFrame] = {}
 _raw_errors: dict[str, str] = {}

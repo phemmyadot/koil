@@ -91,16 +91,19 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
     for i in range(1, len(df)):
         if position is not None and pending_tp_at == i:
             position["tp_half_hit"] = True
-            position["half_pnl_pct"] = (o.iloc[i] - position["entry_price"]) / position["entry_price"] * 100
+            half_pnl_pct = (o.iloc[i] - position["entry_price"]) / position["entry_price"] * 100
+            # Recorded as its own trade, same as TradingView's List of Trades
+            # splits the TP-half fill and the final close into two rows for
+            # the one entry -- not blended into a single combined trade.
+            trades.append({"pnl_pct": round(float(half_pnl_pct), 2), "entry_i": position["entry_i"],
+                            "days": i - position["entry_i"]})
             pending_tp_at = None
 
         if position is not None and pending_exit_at is not None and pending_exit_at == i:
             entry_price = position["entry_price"]
             exit_price = o.iloc[i]
             final_pnl_pct = (exit_price - entry_price) / entry_price * 100
-            blended = (0.5 * position["half_pnl_pct"] + 0.5 * final_pnl_pct
-                       if position["tp_half_hit"] else final_pnl_pct)
-            trades.append({"pnl_pct": round(float(blended), 2), "entry_i": position["entry_i"],
+            trades.append({"pnl_pct": round(float(final_pnl_pct), 2), "entry_i": position["entry_i"],
                             "days": i - position["entry_i"]})
             position = None
             pending_exit_at = None
@@ -111,8 +114,7 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             entry_atr = atr.iloc[i]
             position = {"entry_i": i, "entry_price": entry_price,
                         "stop": entry_price - entry_atr * atr_mult,
-                        "high_since": h.iloc[i], "be_activated": False, "tp_half_hit": False,
-                        "half_pnl_pct": None}
+                        "high_since": h.iloc[i], "be_activated": False, "tp_half_hit": False}
             continue
 
         if position is None:
