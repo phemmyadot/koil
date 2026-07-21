@@ -21,6 +21,12 @@ MAX_BARS = 20
 EMA_LEN = 50
 VOL_MULT = 1.4
 VOL_AVG_LEN = 50
+# Matches vcp.pine's start_date input default and p.py's PortfolioSizedEngine.
+# webapp/data.py fetches a year earlier than this purely for indicator
+# warm-up (ATR's 100-bar rolling average, etc.) -- without this gate, entries
+# would fire on that warm-up year's not-yet-reliable indicators and show up
+# as phantom trades TradingView's List of Trades doesn't have.
+ENTRY_START = pd.Timestamp("2022-01-01")
 
 
 def wilder_atr(h, l, c, length):
@@ -109,13 +115,18 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             pending_exit_at = None
             continue
 
-        if position is None and breakout.iloc[i - 1] and not pd.isna(atr.iloc[i - 1]):
+        if (position is None and breakout.iloc[i - 1] and not pd.isna(atr.iloc[i - 1])
+                and df.index[i - 1] >= ENTRY_START):
             entry_price = o.iloc[i]
             entry_atr = atr.iloc[i]
             position = {"entry_i": i, "entry_price": entry_price,
                         "stop": entry_price - entry_atr * atr_mult,
                         "high_since": h.iloc[i], "be_activated": False, "tp_half_hit": False}
-            continue
+            # No `continue` here -- Pine evaluates breakeven/trail/TP/stop on
+            # the entry-fill bar itself too (the fill happens at this bar's
+            # open, before the rest of the bar's script runs, so
+            # position_size is already >0 for the whole bar). Falls through
+            # to Stage 4 below using this same bar's own high/low/close.
 
         if position is None:
             continue
