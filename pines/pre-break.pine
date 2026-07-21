@@ -122,12 +122,12 @@ else if isBullishTrend
 // 1. Shaded Background Signals
 bgcolor(state == "PRE-BREAKOUT" ? color.new(color.orange, 88) : state == "BREAKOUT" ? color.new(color.green, 85) : na)
 
-// 2. Structural Lines
-plot(resHigh, title="Key Resistance Line", color=color.new(color.red, 40), linewidth=1, style=plot.style_line)
-plot(emaTrend, title="Trend Baseline (EMA)", color=color.blue, linewidth=2, style=plot.style_line)
+// // 2. Structural Lines
+// plot(resHigh, title="Key Resistance Line", color=color.new(color.red, 40), linewidth=1, style=plot.style_line)
+// plot(emaTrend, title="Trend Baseline (EMA)", color=color.blue, linewidth=2, style=plot.style_line)
 
-// 3. Dynamic Measured Move Target Line
-plot(projectedTarget, title="Breakout Target", color=color.new(color.green, 20), linewidth=2, style=plot.style_line)
+// // 3. Dynamic Measured Move Target Line
+// plot(projectedTarget, title="Breakout Target", color=color.new(color.green, 20), linewidth=2, style=plot.style_line)
 
 // 4. On-Chart Dashboard HUD
 var table db = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 15), border_color=color.gray, border_width=1)
