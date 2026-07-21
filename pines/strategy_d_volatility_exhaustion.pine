@@ -120,6 +120,8 @@ if showDteFlag and array.size(dteEntryBars) > 0
 plotshape(entrySignal, title = "Long Signal", style = shape.triangleup,
      location = location.belowbar, color = color.new(color.purple, 0), size = size.small)
 plot(strategy.position_size > 0 ? entryPrice : na, color=color.purple, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
+plot(strategy.position_size > 0 ? macroSma : na, color=color.purple, style=plot.style_linebr, linewidth=1, title="Dynamic Tracking Floor")
+plot(strategy.position_size > 0 ? targetMid : na, color=color.purple, style=plot.style_circles, linewidth=1, title="Take Profit")
 
 var table dteTable = table.new(position.bottom_right, 2, 4, bgcolor=color.new(color.purple, 95), border_color=color.purple, border_width=1) // VEXH: bottom-right
 if showDteFlag and barstate.islastconfirmedhistory

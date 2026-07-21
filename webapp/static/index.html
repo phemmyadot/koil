@@ -392,10 +392,11 @@ const ADV_FILTER_STRATS = [
   { key: "adx", label: "ADX (Strategy A)", subs: ["base", "training", "holdout"] },
   { key: "vcpf", label: "VCPF (Strategy D)", subs: ["base", "training", "holdout"] },
   { key: "vcp", label: "VCP (VCP Master)", subs: ["base", "training", "holdout"] },
+  { key: "vcpo", label: "VCPO", subs: ["base", "training", "holdout"] },
 ].filter(s => SHOW_ADX_VCPF || (s.key !== "adx" && s.key !== "vcpf"));
 const ADV_SUB_LABEL = { base: "Base", training: "Training", holdout: "Holdout" };
 const ADV_SUB_SOURCE = { base: "BASE", training: "TRAIN", holdout: "HOLD" };
-const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp" };
+const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp", vcpo: "strategy_vcpo" };
 // WR is cumulative (Fair+ includes Good, same convention as the old filter);
 // Profit is exact tiers -- matches how the WR/PF badge colors already work.
 const ADV_WR_TIERS = [["bad", "Bad"], ["fair+", "Fair+"], ["good", "Good"]];
@@ -473,7 +474,7 @@ function matchesAdvFilter(r, blocks) {
 // Separate from Advance Filter, ANDed against it (just another .filter() in
 // the same chain) -- "is this ticker currently in an open trade on ANY of
 // the checked strategies" (OR among the checked strategies themselves).
-const TRADE_ON_STRATS = [["adx", "ADX"], ["vcp", "VCP"], ["vcpf", "VCPF"], ["vexh", "VEXH"]]
+const TRADE_ON_STRATS = [["adx", "ADX"], ["vcp", "VCP"], ["vcpo", "VCPO"], ["vcpf", "VCPF"], ["vexh", "VEXH"]]
   .filter(([key]) => SHOW_ADX_VCPF || (key !== "adx" && key !== "vcpf"));
 
 function buildTradeOnPanel() {
@@ -607,12 +608,12 @@ function pickBestCandidate(candidates) {
 }
 
 // Longest days-held across ALL open positions on this ticker -- Exhaustion's
-// own open_trade plus any active BASE/TRAIN/HOLD candidate on strategy A/D/VCP
+// own open_trade plus any active BASE/TRAIN/HOLD candidate on strategy A/D/VCP/VCPO
 // (a ticker can be "in trade" on more than one strategy at once). null if
 // nothing is open anywhere, so it can sort after tickers that do have one.
 function maxDaysInTrade(r) {
   let max = r.open_trade ? r.open_trade.bars_held : null;
-  for (const s of [r.strategy_a, r.strategy_d, r.strategy_vcp]) {
+  for (const s of [r.strategy_a, r.strategy_d, r.strategy_vcp, r.strategy_vcpo]) {
     if (!s || !s.baseline) continue;
     for (const c of strategyCandidates(s)) {
       if (c.active && c.openPosition && c.openPosition.days_held != null) {
@@ -758,6 +759,8 @@ function render(data) {
             <div class="strategybody">${strategyChips(r.strategy_d, "Strategy D")}</div></div>` : ""}
           <div class="strategycell"><span class="strategyname">VCP</span>
             <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
+          <div class="strategycell"><span class="strategyname">VCPO</span>
+            <div class="strategybody">${strategyChips(r.strategy_vcpo, "VCPO")}</div></div>
         </div></div>
       </div>
     </div>`;

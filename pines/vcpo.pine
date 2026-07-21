@@ -168,6 +168,8 @@ if show_dte_flag and array.size(dte_entry_bars) > 0
             array.remove(dte_entry_prices, i)
 
 plot(strategy.position_size > 0 ? entry_price : na, color=color.blue, style=plot.style_linebr, linestyle = plot.linestyle_dashed, linewidth=1, title="Execution Baseline")
+plot(strategy.position_size > 0 ? stop_price : na, color=color.blue, style=plot.style_linebr, linewidth=1, title="Dynamic Tracking Floor")
+plot(strategy.position_size > 0 ? entry_price * (1 + tp_target / 100) : na, color=color.blue, style=plot.style_circles, linewidth=1, title="Take Profit")
 
 
 plotshape(entry_signal, title = "Long Signal", style = shape.triangleup,
