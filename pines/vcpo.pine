@@ -12,8 +12,8 @@ var string G_DTE    = "Stage 6: DTE Elapsed Flag (visual only)"
 
 // Stage 0b Inputs - Date Filter
 bool use_date_filter = input.bool(false, title="Restrict Backtest to Date Range", group=G_DATE)
-int start_date        = input.time(timestamp("2022-01-01 00:00"), title="Start Date", group=G_DATE)
-int end_date           = input.time(timestamp("2069-12-31 00:00"), title="End Date", group=G_DATE)
+int start_date        = input.time(timestamp("1 Jan 2022 00:00 +0000"), title="Start Date", group=G_DATE)
+int end_date           = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="End Date", group=G_DATE)
 bool in_date_range     = not use_date_filter or (time >= start_date and time <= end_date)
 
 // Stage 1 Inputs - Validated Ranges
