@@ -133,24 +133,24 @@ bgcolor(state == "PRE-BREAKOUT" ? color.new(color.orange, 88) : state == "BREAKO
 var table db = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 15), border_color=color.gray, border_width=1)
 if barstate.islast
     // Headers
-    table.cell(db, 0, 0, "Signal Metric", text_color=color.white, bgcolor=color.gray)
-    table.cell(db, 1, 0, "Condition Status", text_color=color.white, bgcolor=color.gray)
+    table.cell(db, 0, 0, "Signal Metric", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(db, 1, 0, "Condition Status", text_color=color.white, bgcolor=color.gray, text_size=size.small)
     
     // Rows
-    table.cell(db, 0, 1, "Market Phase Score", text_color=color.white)
-    table.cell(db, 1, 1, state + " (" + str.tostring(score) + ")", text_color=color.white, bgcolor=stateColor)
+    table.cell(db, 0, 1, "Market Phase Score", text_color=color.white, text_size=size.small)
+    table.cell(db, 1, 1, state + " (" + str.tostring(score) + ")", text_color=color.white, bgcolor=stateColor, text_size=size.small)
     
-    table.cell(db, 0, 2, "Volatility Squeeze", text_color=color.white)
-    table.cell(db, 1, 2, bbSqueeze ? "COMPRESSED" : "EXPANDED", text_color=color.white, bgcolor=bbSqueeze ? color.orange : color.teal)
+    table.cell(db, 0, 2, "Volatility Squeeze", text_color=color.white, text_size=size.small)
+    table.cell(db, 1, 2, bbSqueeze ? "COMPRESSED" : "EXPANDED", text_color=color.white, bgcolor=bbSqueeze ? color.orange : color.teal, text_size=size.small)
     
-    table.cell(db, 0, 3, "Volume Dry-up", text_color=color.white)
-    table.cell(db, 1, 3, volDryUp ? "DRY (NO SELLERS)" : "NORMAL/HIGH", text_color=color.white, bgcolor=volDryUp ? color.orange : color.teal)
+    table.cell(db, 0, 3, "Volume Dry-up", text_color=color.white, text_size=size.small)
+    table.cell(db, 1, 3, volDryUp ? "DRY (NO SELLERS)" : "NORMAL/HIGH", text_color=color.white, bgcolor=volDryUp ? color.orange : color.teal, text_size=size.small)
     
-    table.cell(db, 0, 4, "Clustering At Ceiling", text_color=color.white)
-    table.cell(db, 1, 4, nearResistance ? "YES (COILING)" : "NO", text_color=color.white, bgcolor=nearResistance ? color.orange : color.teal)
+    table.cell(db, 0, 4, "Clustering At Ceiling", text_color=color.white, text_size=size.small)
+    table.cell(db, 1, 4, nearResistance ? "YES (COILING)" : "NO", text_color=color.white, bgcolor=nearResistance ? color.orange : color.teal, text_size=size.small)
 
-    table.cell(db, 0, 5, "Trend Filter", text_color=color.white)
-    table.cell(db, 1, 5, isBullishTrend ? "BULLISH" : "BEARISH", text_color=color.white, bgcolor=isBullishTrend ? color.blue : color.red)
+    table.cell(db, 0, 5, "Trend Filter", text_color=color.white, text_size=size.small)
+    table.cell(db, 1, 5, isBullishTrend ? "BULLISH" : "BEARISH", text_color=color.white, bgcolor=isBullishTrend ? color.blue : color.red, text_size=size.small)
     
-    table.cell(db, 0, 6, "Coil Energy Build-up", text_color=color.white)
-    table.cell(db, 1, 6, str.tostring(squeezeCounter) + " Bars", text_color=color.white, bgcolor=squeezeCounter > 30 ? color.purple : color.blue)
+    table.cell(db, 0, 6, "Coil Energy Build-up", text_color=color.white, text_size=size.small)
+    table.cell(db, 1, 6, str.tostring(squeezeCounter) + " Bars", text_color=color.white, bgcolor=squeezeCounter > 30 ? color.purple : color.blue, text_size=size.small)

@@ -257,6 +257,9 @@
       <option value="6">6/6 (entry only)</option>
     </select>
     <span class="sep"></span>
+    <label for="minTradesFilter">Min trades</label>
+    <input type="number" id="minTradesFilter" min="0" step="1" value="0" style="width:4em">
+    <span class="sep"></span>
     <div class="advfilter" id="advFilter">
       <button id="advFilterToggle" class="advfilterbtn" type="button" aria-expanded="false">
         Advance Filter<span class="advfiltercount" id="advFilterCount" style="display:none"></span>
@@ -436,7 +439,7 @@ function buildAdvFilterPanel() {
 function wrMatchesTier(wr, tier) {
   if (tier === "bad") return wr < 50;
   if (tier === "fair+") return wr >= 50;
-  if (tier === "good") return wr >= 75;
+  if (tier === "good") return wr >= 70;
   return false;
 }
 function pfMatchesTier(pf, tier) {
@@ -510,7 +513,7 @@ function matchesTradeOnFilter(r, strats) {
 // good/fair/bad quality tier) -- O is blue while active else neutral gray,
 // T is always neutral (just a count, not a quality signal).
 function wrColorClass(wr) {
-  if (wr >= 75) return "ok";
+  if (wr >= 70) return "ok";
   if (wr >= 50) return "mid";
   return "no";
 }
@@ -746,6 +749,7 @@ function render(data) {
   modalStore = {};
   modalCounter = 0;
   const minScore = Number(document.getElementById("scoreFilter").value);
+  const minTrades = Number(document.getElementById("minTradesFilter").value) || 0;
   const sortBy = document.getElementById("sortBy").value;
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
   const advBlocks = readAdvFilterBlocks();
@@ -757,6 +761,7 @@ function render(data) {
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => r.score >= minScore)
+    .filter(r => r.n_trades >= minTrades)
     .filter(r => matchesAdvFilter(r, advBlocks))
     .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
     .sort((a, b) => {
@@ -932,7 +937,7 @@ async function load(refresh) {
   }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));
-for (const id of ["sortBy", "scoreFilter"]) {
+for (const id of ["sortBy", "scoreFilter", "minTradesFilter"]) {
   document.getElementById(id).addEventListener("change", () => {
     currentPage = 1;
     if (lastData) render(lastData);
@@ -1006,6 +1011,7 @@ const clearTradeOnFilter = setupFilterPopover("tradeOnFilter", "tradeOnToggle", 
 document.getElementById("clearFilters").addEventListener("click", () => {
   document.getElementById("tickerSearch").value = "";
   document.getElementById("scoreFilter").value = "0";
+  document.getElementById("minTradesFilter").value = "0";
   clearAdvFilter();
   clearTradeOnFilter();
   currentPage = 1;
