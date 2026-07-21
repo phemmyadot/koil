@@ -21,6 +21,13 @@ MAX_BARS = 20
 EMA_LEN = 50
 VOL_MULT = 1.4
 VOL_AVG_LEN = 50
+# Matches vcp.pine's strategy() declaration and risk_pct input default.
+# Position size is risk-based (bigger size on a tight stop, smaller on a
+# wide one), not a flat % of equity -- profit factor is a dollar-weighted
+# metric, so sizing has to be modeled for it to match TradingView's number,
+# even though price-return-per-trade (validated separately) doesn't need it.
+INITIAL_CAPITAL = 1500.0
+RISK_PCT = 1.0
 # Matches vcp.pine's start_date input default and p.py's PortfolioSizedEngine.
 # webapp/data.py fetches a year earlier than this purely for indicator
 # warm-up (ATR's 100-bar rolling average, etc.) -- without this gate, entries
@@ -73,7 +80,7 @@ def compute_indicators(df: pd.DataFrame) -> dict:
 
 def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGER_PCT,
         trail_tier_pct=TRAIL_TIER_PCT, tp_target_pct=TP_TARGET_PCT, vol_mult=VOL_MULT,
-        max_bars=MAX_BARS):
+        max_bars=MAX_BARS, risk_pct=RISK_PCT, initial_capital=INITIAL_CAPITAL):
     """Returns (trades, signal_today, in_position, tp_hit, open_position).
     Parameters default to the validated baseline but can be overridden --
     used by optimize() to sweep configs without mutating shared module state.
@@ -93,24 +100,32 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
     position = None
     pending_tp_at = None
     pending_exit_at = None
+    equity = initial_capital
 
     for i in range(1, len(df)):
         if position is not None and pending_tp_at == i:
             position["tp_half_hit"] = True
-            half_pnl_pct = (o.iloc[i] - position["entry_price"]) / position["entry_price"] * 100
+            fill_price = o.iloc[i]
+            half_pnl_pct = (fill_price - position["entry_price"]) / position["entry_price"] * 100
+            leg_qty = position["qty"] * 0.5
+            dollar_pnl = leg_qty * (fill_price - position["entry_price"])
+            equity += dollar_pnl
             # Recorded as its own trade, same as TradingView's List of Trades
             # splits the TP-half fill and the final close into two rows for
             # the one entry -- not blended into a single combined trade.
-            trades.append({"pnl_pct": round(float(half_pnl_pct), 2), "entry_i": position["entry_i"],
-                            "days": i - position["entry_i"]})
+            trades.append({"pnl_pct": round(float(half_pnl_pct), 2), "dollar_pnl": float(dollar_pnl),
+                            "entry_i": position["entry_i"], "days": i - position["entry_i"]})
             pending_tp_at = None
 
         if position is not None and pending_exit_at is not None and pending_exit_at == i:
             entry_price = position["entry_price"]
             exit_price = o.iloc[i]
             final_pnl_pct = (exit_price - entry_price) / entry_price * 100
-            trades.append({"pnl_pct": round(float(final_pnl_pct), 2), "entry_i": position["entry_i"],
-                            "days": i - position["entry_i"]})
+            leg_qty = position["qty"] * 0.5 if position["tp_half_hit"] else position["qty"]
+            dollar_pnl = leg_qty * (exit_price - entry_price)
+            equity += dollar_pnl
+            trades.append({"pnl_pct": round(float(final_pnl_pct), 2), "dollar_pnl": float(dollar_pnl),
+                            "entry_i": position["entry_i"], "days": i - position["entry_i"]})
             position = None
             pending_exit_at = None
             continue
@@ -119,8 +134,14 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
                 and df.index[i - 1] >= ENTRY_START):
             entry_price = o.iloc[i]
             entry_atr = atr.iloc[i]
-            position = {"entry_i": i, "entry_price": entry_price,
-                        "stop": entry_price - entry_atr * atr_mult,
+            stop_distance = entry_atr * atr_mult
+            # Risk-based sizing, matching vcp.pine's risk_qty: position size
+            # is derived from the stop distance so every trade risks the
+            # same % of current equity, regardless of how tight or wide
+            # that entry's ATR stop is.
+            qty = (equity * risk_pct / 100) / stop_distance if stop_distance > 0 else 0.0
+            position = {"entry_i": i, "entry_price": entry_price, "qty": qty,
+                        "stop": entry_price - stop_distance,
                         "high_since": h.iloc[i], "be_activated": False, "tp_half_hit": False}
             # No `continue` here -- Pine evaluates breakeven/trail/TP/stop on
             # the entry-fill bar itself too (the fill happens at this bar's
@@ -184,10 +205,15 @@ OPTIMIZE_GRID = dict(
 
 
 def _summarize(trades: list[dict]) -> dict:
+    # Win rate is a plain count (unweighted, matching TradingView), but
+    # profit factor is dollar-weighted (Gross Profit $ / Gross Loss $) --
+    # trades vary in position size (risk-based sizing), so summing raw
+    # pnl_pct would implicitly treat every trade as equally sized, which
+    # doesn't match TradingView's actual (size-weighted) profit factor.
     wins = [t for t in trades if t["pnl_pct"] > 0]
     losses = [t for t in trades if t["pnl_pct"] <= 0]
-    gross_win = sum(t["pnl_pct"] for t in wins)
-    gross_loss = -sum(t["pnl_pct"] for t in losses)
+    gross_win = sum(t["dollar_pnl"] for t in wins)
+    gross_loss = -sum(t["dollar_pnl"] for t in losses)
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
     avg_days = round(sum(t["days"] for t in trades) / len(trades), 1) if trades else None
