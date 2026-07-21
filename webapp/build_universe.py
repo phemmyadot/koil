@@ -1,10 +1,12 @@
 """
 Rebuild webapp/tickers.py from scratch.
 
-Screens Yahoo's equity screener API for the same objective criteria used to
-originally curate p.py's target_universe:
-    cap 300M+, avg vol >500K, price $5-$50, above SMA200, SMA50 > SMA200,
-    weekly volatility > 5%
+Server-side filter narrows to cap/volume/price/exchange candidates via
+Yahoo's equity screener API; client-side filter then keeps only tickers
+whose latest close actually matches one of the three dashboard strategies'
+real entry conditions (VEXH, VCP, or VCPO -- see matches_vexh_setup/
+matches_vcp_setup/matches_vcpo_setup), instead of a generic trend/volatility
+stand-in unrelated to what the strategies look for.
 
 Run from the project root:
     .\\.venv\\Scripts\\python.exe -m webapp.build_universe
@@ -101,23 +103,71 @@ def fetch_candidates(min_cap: int = DEFAULT_MIN_CAP, min_vol: int = DEFAULT_MIN_
     return symbols
 
 
-def passes_technical_filters(close: pd.Series) -> bool:
-    """Client-side filter: SMA200/SMA50/weekly-volatility (not exposed by the screener API)."""
-    close = close.dropna()
-    if len(close) < 210:
+def _wilder_atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Series:
+    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / length, adjust=False).mean()
+
+
+def _rsi(close: pd.Series, length: int) -> pd.Series:
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(length).mean()
+    loss = (-delta.clip(upper=0)).rolling(length).mean()
+    return 100 - (100 / (1 + gain / (loss + 1e-9)))
+
+
+def matches_vexh_setup(df: pd.DataFrame) -> bool:
+    """Regime match for strategy_d_volatility_exhaustion.pine's setup, not
+    the exact same-day entry trigger (requiring all 6 gates at once is rare
+    on any given day across any universe). Keeps the two gates that define
+    the strategy's character -- bullish macro trend (close > SMA150) and a
+    washed-out RSI(14) <= 40 -- and drops the narrower same-bar BB-cross,
+    SMA-distance, and ATR-band gates so more candidates qualify."""
+    c = df["Close"].dropna()
+    if len(c) < 160:
         return False
-    sma200 = close.rolling(200).mean().iloc[-1]
-    sma50 = close.rolling(50).mean().iloc[-1]
-    price = close.iloc[-1]
-    if pd.isna(sma200) or pd.isna(sma50):
+    sma150 = c.rolling(150).mean()
+    rsi = _rsi(c, 14)
+    if pd.isna(sma150.iloc[-1]) or pd.isna(rsi.iloc[-1]):
         return False
-    if not (price > sma200 and sma50 > sma200):
+    macro_bullish = c.iloc[-1] > sma150.iloc[-1]
+    rsi_washed_out = rsi.iloc[-1] <= 40
+    return bool(macro_bullish and rsi_washed_out)
+
+
+def _matches_vcp_family_setup(df: pd.DataFrame) -> bool:
+    """Regime match for strategy_vcp.py/strategy_vcpo.py's setup, not the
+    exact same-day breakout trigger (requiring a fresh cross above the prior
+    20-bar high, same-bar, is rare on any given day). Keeps the two
+    conditions that define the strategy's character -- ATR(22) compressed
+    vs its 100-bar average, and price above EMA(50) -- and drops the
+    narrower same-bar resistance-cross and volume-confirmation gates."""
+    c, h, l = df["Close"].dropna(), df["High"], df["Low"]
+    if len(c) < 130:
         return False
-    weekly = close.resample("W-FRI").last().dropna()
-    weekly_ret = weekly.pct_change().dropna().tail(52)
-    if len(weekly_ret) < 10:
+    atr = _wilder_atr(h, l, c, 22)
+    atr_avg = atr.rolling(100).mean()
+    ema50 = c.ewm(span=50, adjust=False).mean()
+    if pd.isna(atr_avg.iloc[-1]):
         return False
-    return weekly_ret.std() * 100 > 5.0
+    compressed = atr.iloc[-1] <= atr_avg.iloc[-1] * 1.15
+    macro_bullish = c.iloc[-1] > ema50.iloc[-1]
+    return bool(compressed and macro_bullish)
+
+
+def matches_vcp_setup(df: pd.DataFrame) -> bool:
+    return _matches_vcp_family_setup(df)
+
+
+def matches_vcpo_setup(df: pd.DataFrame) -> bool:
+    return _matches_vcp_family_setup(df)
+
+
+def passes_technical_filters(df: pd.DataFrame) -> bool:
+    """Client-side filter: a ticker passes if its latest close matches ANY of
+    the three dashboard strategies' actual entry conditions (VEXH, VCP,
+    VCPO), rather than a generic SMA200/trend/volatility stand-in unrelated
+    to what the strategies themselves look for."""
+    return (matches_vexh_setup(df) or matches_vcp_setup(df) or matches_vcpo_setup(df))
 
 
 def screen_technicals(symbols: list[str]) -> list[str]:
@@ -134,7 +184,7 @@ def screen_technicals(symbols: list[str]) -> list[str]:
         for sym in chunk:
             try:
                 sub = df[sym] if len(chunk) > 1 else df
-                if passes_technical_filters(sub["Close"]):
+                if passes_technical_filters(sub):
                     passed.append(sym)
             except Exception:  # noqa: BLE001 - per-symbol data issues are expected/skippable
                 continue
@@ -149,9 +199,9 @@ def write_tickers_file(tickers: list[str], note: str = "") -> None:
         "Screened ticker universe for the exhaustion dashboard.",
         "",
         "Rebuild with: .venv/Scripts/python.exe -m webapp.build_universe",
-        "Base criteria: price $5-$50, above SMA200, SMA50 > SMA200, weekly",
-        "volatility > 5% -- matches the screen used to curate p.py's",
-        "target_universe. Cap/volume floor is tunable (see --min-cap/--min-vol).",
+        "Base criteria: cap/volume/price/exchange floor (tunable, see",
+        "--min-cap/--min-vol), then kept only if the latest close matches",
+        "VEXH's, VCP's, or VCPO's actual entry condition.",
     ]
     if note:
         lines.append(note)
