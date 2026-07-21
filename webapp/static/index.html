@@ -85,6 +85,7 @@
   .tickercard.err { opacity: 0.5; }
   .cardhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .cardhead .price { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
+  .cardcheck { cursor: pointer; width: 15px; height: 15px; flex: 0 0 auto; }
   .cardsection { display: flex; flex-direction: column; gap: 4px; }
   .cardsection .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
   .divider { border: 0; border-top: 1px solid var(--line); margin: 0; }
@@ -170,6 +171,8 @@
                 border-bottom: 1px solid var(--line); background: var(--bg);
                 border-radius: 12px 12px 0 0; }
   .modalbody { padding: 12px 18px 16px; display: flex; flex-direction: column; gap: 7px; }
+  .watchlistpicker { gap: 8px; }
+  .watchlistpickbtn { margin-left: 0; width: 100%; text-align: left; }
   .modalrow { display: flex; justify-content: space-between; align-items: baseline; gap: 14px;
               font-size: 13px; }
   .modalrow .modalrowlabel { color: var(--muted); font-size: 11px; text-transform: uppercase;
@@ -217,6 +220,11 @@
   <header>
     <h1>Exhaustion Dashboard</h1>
     <span class="meta" id="meta">loading&hellip;</span>
+    <a class="tklink" href="watchlist.html">Watchlists</a>
+    <button id="selectAllBtn" type="button">Select all (filtered)</button>
+    <button id="clearSelectionBtn" type="button">Clear selection</button>
+    <span class="meta" id="selectionCount"></span>
+    <button id="addToWatchlistBtn" type="button">Add to Watchlist</button>
     <button id="refresh">Refresh</button>
   </header>
   <div class="progresswrap" id="progresswrap" style="display:none">
@@ -378,6 +386,24 @@ function hideModal() {
   document.getElementById("modalBackdrop").style.display = "none";
 }
 document.getElementById("modalBackdrop").addEventListener("click", hideModal);
+
+// Watchlist picker -- a small interactive modal (not one of the read-only
+// info modals above), reusing the same backdrop/box since only one modal is
+// ever open at a time.
+function showWatchlistPicker() {
+  if (!selectedTickers.size) return;
+  const buttons = WATCHLIST_NAMES.map(name =>
+    `<button type="button" class="watchlistpickbtn" onclick="pickWatchlist('${name}')">${name}</button>`
+  ).join("");
+  document.getElementById("modalBox").innerHTML =
+    `<div class="modaltitle">Add ${selectedTickers.size} ticker(s) to&hellip;</div>
+     <div class="modalbody watchlistpicker">${buttons}</div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+}
+function pickWatchlist(name) {
+  addSelectedToWatchlist(name);
+  hideModal();
+}
 
 // Color coding: blue = an active/open trade right now, otherwise green/yellow/red
 // by how good the historical result actually is (independent of live status).
@@ -764,6 +790,36 @@ const PAGE_SIZE = 9;
 let lastData = null;
 let currentPage = 1;
 
+// Watchlist selection: an in-memory (not persisted -- only saved watchlists
+// themselves persist) set of tickers checked across however many pages/
+// filter changes the user has clicked through, plus whatever the current
+// filter matched last render (for "Select all (filtered)").
+let selectedTickers = new Set();
+let lastFilteredRows = [];
+const WATCHLIST_NAMES = ["VCP List", "VEXH List", "VCPO List"];
+
+function loadWatchlists() {
+  try {
+    return JSON.parse(localStorage.getItem("watchlists")) || {};
+  } catch {
+    return {};
+  }
+}
+function saveWatchlists(lists) {
+  localStorage.setItem("watchlists", JSON.stringify(lists));
+}
+function addSelectedToWatchlist(name) {
+  const lists = loadWatchlists();
+  const existing = new Set(lists[name] || []);
+  for (const tk of selectedTickers) existing.add(tk);
+  lists[name] = [...existing].sort();
+  saveWatchlists(lists);
+}
+function updateSelectionCount() {
+  document.getElementById("selectionCount").textContent =
+    selectedTickers.size ? `${selectedTickers.size} selected` : "";
+}
+
 // The server now precomputes every ticker in the background (see
 // webapp/data.py + app.py's compute_all()) and this endpoint just returns
 // the full in-memory result set -- so sort/filter/paginate happen here,
@@ -806,6 +862,7 @@ function render(data) {
       return (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct);
     });
 
+  lastFilteredRows = allRows;
   const pageCount = Math.max(1, Math.ceil(allRows.length / PAGE_SIZE));
   currentPage = Math.min(Math.max(1, currentPage), pageCount);
   const rows = allRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
@@ -820,6 +877,7 @@ function render(data) {
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
         ${scorebar(r.score, r.earnings_risk, r.conditions)}
+        <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>
       <div class="cardsection">
         <span class="lbl">Conditions</span>
@@ -851,6 +909,7 @@ function render(data) {
   if (!rows.length && !realErrors.length)
     html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
+  updateSelectionCount();
   const open = allRows.filter(r => r.open_trade).length;
   const filtered = minScore > 0 || !!tickerQuery || advBlocks.length > 0 || tradeOnStrats.length > 0;
   const countText = filtered
@@ -1045,6 +1104,27 @@ document.getElementById("clearFilters").addEventListener("click", () => {
   currentPage = 1;
   if (lastData) render(lastData);
 });
+
+// Watchlist selection controls. Checkboxes are delegated (cards are
+// rebuilt from scratch on every render, so per-checkbox listeners would
+// leak) -- selection itself survives across pages/re-renders since it's
+// keyed by ticker, not by DOM node.
+document.getElementById("rows").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("cardcheck")) return;
+  const tk = e.target.dataset.ticker;
+  if (e.target.checked) selectedTickers.add(tk); else selectedTickers.delete(tk);
+  updateSelectionCount();
+});
+document.getElementById("selectAllBtn").addEventListener("click", () => {
+  for (const r of lastFilteredRows) selectedTickers.add(r.ticker);
+  if (lastData) render(lastData);
+});
+document.getElementById("clearSelectionBtn").addEventListener("click", () => {
+  selectedTickers.clear();
+  if (lastData) render(lastData);
+});
+document.getElementById("addToWatchlistBtn").addEventListener("click", showWatchlistPicker);
+
 load(false);
 </script>
 </body>

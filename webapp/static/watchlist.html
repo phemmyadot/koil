@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchlists</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1a2333; --muted: #67718a;
+    --line: #e3e7ee; --green: #157f3d; --green-bg: #e5f4ea; --red: #b3261e;
+    --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
+      --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
+      --red-bg: #391513; --accent: #7ba3f7; --accent-bg: #1a2540;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 14px 10px 24px; }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; }
+  h1 { font-size: 19px; margin: 0; }
+  a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a.back:hover { text-decoration: underline; }
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  .col { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .colhead { display: flex; justify-content: space-between; align-items: baseline;
+             margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .colhead h2 { font-size: 14px; margin: 0; }
+  .colhead .count { color: var(--muted); font-size: 12px; }
+  .wlrow { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+           padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .wlrow:last-child { border-bottom: 0; }
+  .wlrow a.tk { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted);
+                font-weight: 700; font-size: 13px; }
+  .wlrow a.tk:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .wlstats { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+  .wlstats .wr-ok { color: var(--green); }
+  .wlstats .wr-bad { color: var(--red); }
+  .rmbtn { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px;
+           line-height: 1; padding: 2px 4px; }
+  .rmbtn:hover { color: var(--red); }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Watchlists</h1>
+    <a class="back" href="index.html">&larr; Back to dashboard</a>
+  </header>
+  <div class="cols" id="cols">
+    <p class="empty">Loading&hellip;</p>
+  </div>
+</div>
+<script>
+const WATCHLIST_NAMES = ["VCP List", "VEXH List", "VCPO List"];
+// Which strategy's stats to show per list -- "vexh" reads top-level fields,
+// the others read that strategy's baseline stats object.
+const LIST_STRAT_KEY = { "VCP List": "strategy_vcp", "VEXH List": null, "VCPO List": "strategy_vcpo" };
+
+function loadWatchlists() {
+  try {
+    return JSON.parse(localStorage.getItem("watchlists")) || {};
+  } catch {
+    return {};
+  }
+}
+function saveWatchlists(lists) {
+  localStorage.setItem("watchlists", JSON.stringify(lists));
+}
+function removeFromWatchlist(name, ticker) {
+  const lists = loadWatchlists();
+  lists[name] = (lists[name] || []).filter(t => t !== ticker);
+  saveWatchlists(lists);
+  render();
+}
+
+// Same T/WR/PF format used on the dashboard's badges, minus the O (open)
+// badge -- this page is a static list, not a live in-trade indicator.
+function statsText(stats) {
+  if (!stats) return { text: "no data", cls: "" };
+  const wins = Math.round(stats.win_rate / 100 * stats.n_trades);
+  const cls = stats.win_rate >= 70 ? "wr-ok" : stats.win_rate < 50 ? "wr-bad" : "";
+  return { text: `T${stats.n_trades} WR${stats.win_rate}%(${wins}/${stats.n_trades}) PF${stats.profit_factor}`, cls };
+}
+function statsFor(row, listName) {
+  if (!row) return null;
+  const key = LIST_STRAT_KEY[listName];
+  if (key === null) return { n_trades: row.n_trades, win_rate: row.win_rate, profit_factor: row.profit_factor };
+  const s = row[key];
+  if (!s || !s.baseline) return null;
+  return s.baseline;
+}
+
+let byTicker = {};
+
+function render() {
+  const lists = loadWatchlists();
+  const cols = document.getElementById("cols");
+  cols.innerHTML = WATCHLIST_NAMES.map(name => {
+    const tickers = (lists[name] || []).slice().sort();
+    const rowsHtml = tickers.length
+      ? tickers.map(tk => {
+          const stats = statsFor(byTicker[tk], name);
+          const { text, cls } = statsText(stats);
+          return `<div class="wlrow">
+            <a class="tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tk)}" target="_blank" rel="noopener noreferrer">${tk}</a>
+            <span class="wlstats ${cls}">${text}</span>
+            <button class="rmbtn" type="button" title="Remove" onclick="removeFromWatchlist('${name}', '${tk}')">&times;</button>
+          </div>`;
+        }).join("")
+      : `<p class="empty">No tickers yet -- add some from the dashboard.</p>`;
+    return `<div class="col">
+      <div class="colhead"><h2>${name}</h2><span class="count">${tickers.length}</span></div>
+      ${rowsHtml}
+    </div>`;
+  }).join("");
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/tickers");
+    const data = await res.json();
+    byTicker = Object.fromEntries((data.tickers || []).map(r => [r.ticker, r]));
+  } catch {
+    byTicker = {};
+  }
+  render();
+}
+load();
+</script>
+</body>
+</html>
