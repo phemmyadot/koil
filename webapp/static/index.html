@@ -521,9 +521,19 @@ function strategyNTrades(r, key) {
   if (!s || !s.baseline) return null;
   return pickBestCandidate(strategyCandidates(s)).n_trades;
 }
-function matchesMinTrades(r, minTrades) {
+// Min Trades only makes sense scoped to whichever strategy you're actually
+// looking at via Trade On / Advance Filter -- otherwise it's dominated by
+// whichever strategy happens to trade most often (VCP fires far more than
+// VEXH's strict 6-gate setup, so an unscoped "any" filter never reflects
+// VEXH's count at all). Falls back to all three only when neither Trade On
+// nor Advance Filter narrows to specific strategies.
+function activeMinTradesStrats(tradeOnStrats, advBlocks) {
+  const strats = new Set([...tradeOnStrats, ...advBlocks.map(b => b.strat)]);
+  return strats.size ? [...strats] : ["vexh", "vcp", "vcpo"];
+}
+function matchesMinTrades(r, minTrades, strats) {
   if (minTrades <= 0) return true;
-  return ["vexh", "vcp", "vcpo"].some(key => (strategyNTrades(r, key) ?? -1) >= minTrades);
+  return strats.some(key => (strategyNTrades(r, key) ?? -1) >= minTrades);
 }
 
 // WR/PF get their own independent color grading (not the combined
@@ -771,6 +781,7 @@ function render(data) {
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
   const advBlocks = readAdvFilterBlocks();
   const tradeOnStrats = readTradeOnStrats();
+  const minTradesStrats = activeMinTradesStrats(tradeOnStrats, advBlocks);
   // Every checked Advance Filter block narrows the result further (AND across
   // blocks); within one block, checking multiple WR/PF tiers is OR. Trade On
   // is a separate filter ANDed against Advance Filter (its own .filter() in
@@ -778,7 +789,7 @@ function render(data) {
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => r.score >= minScore)
-    .filter(r => matchesMinTrades(r, minTrades))
+    .filter(r => matchesMinTrades(r, minTrades, minTradesStrats))
     .filter(r => matchesAdvFilter(r, advBlocks))
     .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
     .sort((a, b) => {
