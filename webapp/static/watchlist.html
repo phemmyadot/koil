@@ -179,11 +179,26 @@ let byTicker = {};
 // dashboard's own ticker selection).
 const selected = Object.fromEntries(WATCHLIST_NAMES.map(n => [n, new Set()]));
 
+// Active (in-trade) tickers first, sorted by days held closest to 0 (most
+// recently entered); everything else follows, sorted by win rate descending.
+// No-data tickers sort to the very end.
+function sortByLatestTrade(tickers, listName) {
+  return tickers.slice().sort((a, b) => {
+    const sa = statsFor(byTicker[a], listName), sb = statsFor(byTicker[b], listName);
+    if (!sa && !sb) return a.localeCompare(b);
+    if (!sa) return 1;
+    if (!sb) return -1;
+    if (sa.active !== sb.active) return sa.active ? -1 : 1;
+    if (sa.active) return (sa.days ?? Infinity) - (sb.days ?? Infinity);
+    return sb.win_rate - sa.win_rate;
+  });
+}
+
 function render() {
   const lists = loadWatchlists();
   const cols = document.getElementById("cols");
   cols.innerHTML = WATCHLIST_NAMES.map(name => {
-    const tickers = (lists[name] || []).slice().sort();
+    const tickers = sortByLatestTrade(lists[name] || [], name);
     const rowsHtml = tickers.length
       ? tickers.map(tk => {
           const stats = statsFor(byTicker[tk], name);
