@@ -292,6 +292,13 @@
 // backend change, just re-shows both columns.
 const SHOW_ADX_VCPF = false;
 
+// Feature flag: Training/Holdout sub-filters hidden from the Advanced Filter
+// panel. Mirrors SHOW_TRAINING_HOLDOUT in webapp/optimizer.py -- keep both in
+// sync by hand (this one can't read the backend's env var); with the backend
+// flag off, optimizer.get_optimized() always returns None anyway, so these
+// checkboxes would just sit inert if left visible.
+const SHOW_TRAINING_HOLDOUT = false;
+
 const COND_LABELS = { trend:"TREND", band:"BAND", rsi:"RSI", sma_dist:"DIST", vol_ceil:"VCEIL", vol_floor:"VFLR" };
 
 const TIER_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
@@ -393,7 +400,9 @@ const ADV_FILTER_STRATS = [
   { key: "vcpf", label: "VCPF (Strategy D)", subs: ["base", "training", "holdout"] },
   { key: "vcp", label: "VCP (VCP Master)", subs: ["base", "training", "holdout"] },
   { key: "vcpo", label: "VCPO", subs: ["base", "training", "holdout"] },
-].filter(s => SHOW_ADX_VCPF || (s.key !== "adx" && s.key !== "vcpf"));
+]
+  .filter(s => SHOW_ADX_VCPF || (s.key !== "adx" && s.key !== "vcpf"))
+  .map(s => SHOW_TRAINING_HOLDOUT ? s : { ...s, subs: s.subs.filter(sub => sub === "base") });
 const ADV_SUB_LABEL = { base: "Base", training: "Training", holdout: "Holdout" };
 const ADV_SUB_SOURCE = { base: "BASE", training: "TRAIN", holdout: "HOLD" };
 const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp", vcpo: "strategy_vcpo" };
@@ -675,6 +684,39 @@ function strategyColumnsModal(name, candidates) {
   return registerModal(name, [`<div class="modalcolgrid">${cols}</div>`]);
 }
 
+// Flat single-column modal, same row structure/order as exhaustionChip's
+// "Exhaustion" modal -- used whenever there's only one candidate (always the
+// case for A/D/VCP/VCPO now that training/holdout is flagged off, since
+// strategyCandidates() then only ever returns BASE). No Cfg/Since rows
+// (VEXH's modal doesn't have them either); "To TP %" and "Entry confidence"
+// stay omitted since they're Exhaustion-specific fields with no VCP/VCPO
+// equivalent (see strategyColumnsModal's comment for why).
+function singleCandidateModal(name, c) {
+  const rows = [
+    modalRow("Trades", c.n_trades),
+    modalRow("Profit factor", c.pf),
+    modalRow("Win rate", c.wr + "%"),
+  ];
+  if (c.openPosition) {
+    const op = c.openPosition;
+    const sign = op.unrealized_pct >= 0 ? "+" : "";
+    rows.push('<div class="modalsep"></div>');
+    rows.push(modalRow("Entry", op.entry_price));
+    rows.push(modalRow("Target", op.target));
+    if (op.unrealized_pct != null) rows.push(modalRow("Unrealized", `${sign}${op.unrealized_pct}%`));
+    rows.push(modalRow("Bars held", op.days_held));
+  }
+  rows.push('<div class="modalsep"></div>');
+  rows.push(modalRow("Avg Days", c.avgTradeDays ?? "&mdash;"));
+  rows.push('<div class="modalsep"></div>');
+  rows.push(modalRow("Last 5 TP %", last5(c.last5Trades)));
+  if (c.verdict) {
+    rows.push('<div class="modalsep"></div>');
+    rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
+  }
+  return registerModal(name, rows);
+}
+
 // A/D/VCP row: whichever of BASE/TRAIN/HOLD is active (or best-quality if
 // none are) drives 4 separate O/T/WR/PF badges (see statBadges). Which
 // source it actually is (BASE/TRAIN/HOLD) is only shown in the modal.
@@ -682,7 +724,9 @@ function strategyChips(s, name) {
   if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
   const candidates = strategyCandidates(s);
   const best = pickBestCandidate(candidates);
-  const id = strategyColumnsModal(name, candidates);
+  const id = candidates.length === 1
+    ? singleCandidateModal(name, candidates[0])
+    : strategyColumnsModal(name, candidates);
   const days = best.active && best.openPosition ? best.openPosition.days_held : null;
   return statBadges(best.active, days, best.n_trades, best.wr, best.pf, id);
 }
