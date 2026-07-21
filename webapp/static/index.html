@@ -15,7 +15,7 @@
     :root {
       --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
       --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
-      --red-bg: #391513; --accent: #7ba3f7; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
+      --red-bg: #391513; --accent: #0b3191; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
       --blue: #4d9dff; --blue-bg: #0f2c52;
     }
   }
@@ -30,6 +30,9 @@
   header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 18px;
            flex: 0 0 auto; }
   h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .headeractions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                   justify-content: flex-end; margin-left: auto; }
+  .headeractions button { margin-left: 0; }
   .meta { color: var(--muted); font-size: 12.5px; }
   .filterbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex: 0 0 auto; }
   .filterbar label { color: var(--muted); font-size: 12.5px; }
@@ -189,8 +192,9 @@
     .wrap { padding: 10px 8px 24px; }
     header { gap: 8px 12px; margin-bottom: 12px; }
     h1 { font-size: 17px; }
-    .meta { font-size: 11.5px; flex-basis: 100%; }
+    #meta { font-size: 11.5px; flex-basis: 100%; }
     button { padding: 8px 14px; }
+    .headeractions { flex-wrap: nowrap; justify-content: space-between; width: 100%; }
     .filterbar { flex-direction: column; align-items: stretch; }
     .filtertoggle { display: flex; align-items: center; justify-content: space-between;
                      margin-left: 0; }
@@ -221,11 +225,13 @@
     <h1>Exhaustion Dashboard</h1>
     <span class="meta" id="meta">loading&hellip;</span>
     <a class="tklink" href="watchlist.html">Watchlists</a>
-    <button id="selectAllBtn" type="button">Select all (filtered)</button>
-    <button id="clearSelectionBtn" type="button">Clear selection</button>
-    <span class="meta" id="selectionCount"></span>
-    <button id="addToWatchlistBtn" type="button">Add to Watchlist</button>
-    <button id="refresh">Refresh</button>
+    <div class="headeractions">
+      <button id="selectAllBtn" type="button">Select all</button>
+      <span class="meta" id="selectionCount"></span>
+      <button id="clearSelectionBtn" type="button" style="display:none">Clear</button>
+      <button id="addToWatchlistBtn" type="button" style="display:none">Add</button>
+      <button id="refresh">Refresh</button>
+    </div>
   </header>
   <div class="progresswrap" id="progresswrap" style="display:none">
     <div class="progressbar"><div class="progressfill" id="progressfill"></div></div>
@@ -816,8 +822,11 @@ function addSelectedToWatchlist(name) {
   saveWatchlists(lists);
 }
 function updateSelectionCount() {
-  document.getElementById("selectionCount").textContent =
-    selectedTickers.size ? `${selectedTickers.size} selected` : "";
+  const has = selectedTickers.size > 0;
+  document.getElementById("selectionCount").textContent = has ? `${selectedTickers.size} selected` : "";
+  document.getElementById("clearSelectionBtn").style.display = has ? "" : "none";
+  document.getElementById("addToWatchlistBtn").style.display = has ? "" : "none";
+  document.getElementById("refresh").style.display = has ? "none" : "";
 }
 
 // The server now precomputes every ticker in the background (see

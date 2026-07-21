@@ -8,13 +8,15 @@
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1a2333; --muted: #67718a;
     --line: #e3e7ee; --green: #157f3d; --green-bg: #e5f4ea; --red: #b3261e;
-    --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb;
+    --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb; --gold-bg: #fdf3d8; --gold: #8a6d1a;
+    --blue: #0d6efd; --blue-bg: #e3f0ff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
       --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
-      --red-bg: #391513; --accent: #7ba3f7; --accent-bg: #1a2540;
+      --red-bg: #391513; --accent: #0b3191; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
+      --blue: #4d9dff; --blue-bg: #0f2c52;
     }
   }
   * { box-sizing: border-box; }
@@ -28,23 +30,47 @@
   .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
   .col { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
-  .colhead { display: flex; justify-content: space-between; align-items: baseline;
+  .colhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
              margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-  .colhead h2 { font-size: 14px; margin: 0; }
+  .colhead h2 { font-size: 14px; margin: 0; flex: 1 1 auto; }
   .colhead .count { color: var(--muted); font-size: 12px; }
+  .colhead input[type=checkbox] { cursor: pointer; }
+  .colactions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .rmselbtn { background: none; border: 1px solid var(--line); color: var(--muted);
+              border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+  .rmselbtn:hover { color: var(--red); border-color: var(--red); }
   .wlrow { display: flex; align-items: center; justify-content: space-between; gap: 8px;
            padding: 6px 0; border-bottom: 1px solid var(--line); }
   .wlrow:last-child { border-bottom: 0; }
+  .wlrow input[type=checkbox] { cursor: pointer; flex: 0 0 auto; }
+  .wlrow .tk { flex: 0 0 auto; }
+  .wlrow .badgerow { flex: 1 1 auto; justify-content: flex-end; }
   .wlrow a.tk { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted);
                 font-weight: 700; font-size: 13px; }
   .wlrow a.tk:hover { color: var(--accent); border-bottom-color: var(--accent); }
-  .wlstats { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
-  .wlstats .wr-ok { color: var(--green); }
-  .wlstats .wr-bad { color: var(--red); }
+  .chip { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px;
+          padding: 2px 6px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .chip.ok { background: var(--green-bg); color: var(--green); }
+  .chip.no { background: var(--red-bg); color: var(--red); }
+  .chip.mid { background: var(--gold-bg); color: var(--gold); }
+  .chip.neutral { background: var(--line); color: var(--muted); }
+  .chip.active { background: var(--blue-bg); color: var(--blue); }
+  .badgerow { display: flex; flex-wrap: wrap; gap: 4px; }
   .rmbtn { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px;
            line-height: 1; padding: 2px 4px; }
   .rmbtn:hover { color: var(--red); }
   .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 10px 8px 24px; }
+    header { flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+    h1 { font-size: 16px; }
+    .col { padding: 12px; }
+    .wlrow { flex-wrap: wrap; }
+    .wlrow .badgerow { flex-basis: 100%; justify-content: flex-start; order: 3; }
+    .colactions { justify-content: flex-start; }
+    .rmselbtn { padding: 6px 10px; }
+  }
 </style>
 </head>
 <body>
@@ -77,27 +103,81 @@ function removeFromWatchlist(name, ticker) {
   const lists = loadWatchlists();
   lists[name] = (lists[name] || []).filter(t => t !== ticker);
   saveWatchlists(lists);
+  selected[name].delete(ticker);
   render();
 }
+function removeSelected(name) {
+  const lists = loadWatchlists();
+  lists[name] = (lists[name] || []).filter(t => !selected[name].has(t));
+  saveWatchlists(lists);
+  selected[name].clear();
+  render();
+}
+function toggleTicker(name, ticker, checked) {
+  if (checked) selected[name].add(ticker); else selected[name].delete(ticker);
+  updateColActions(name);
+}
+function toggleAll(name, checked) {
+  const lists = loadWatchlists();
+  const tickers = lists[name] || [];
+  if (checked) tickers.forEach(t => selected[name].add(t));
+  else selected[name].clear();
+  render();
+}
+function slug(name) { return name.replace(/\s+/g, "_"); }
+function updateColActions(name) {
+  const actions = document.getElementById(`actions_${slug(name)}`);
+  if (actions) actions.style.display = selected[name].size ? "flex" : "none";
+  const all = document.getElementById(`selall_${slug(name)}`);
+  if (all) {
+    const lists = loadWatchlists();
+    const total = (lists[name] || []).length;
+    all.checked = total > 0 && selected[name].size === total;
+  }
+}
 
-// Same T/WR/PF format used on the dashboard's badges, minus the O (open)
-// badge -- this page is a static list, not a live in-trade indicator.
-function statsText(stats) {
-  if (!stats) return { text: "no data", cls: "" };
-  const wins = Math.round(stats.win_rate / 100 * stats.n_trades);
-  const cls = stats.win_rate >= 70 ? "wr-ok" : stats.win_rate < 50 ? "wr-bad" : "";
-  return { text: `T${stats.n_trades} WR${stats.win_rate}%(${wins}/${stats.n_trades}) PF${stats.profit_factor}`, cls };
+// Same color grading/badge shape as the dashboard's statBadges() -- O is
+// blue while active else omitted, T is neutral gray, WR/PF get their own
+// independent ok/mid/no grading.
+function wrColorClass(wr) {
+  if (wr >= 70) return "ok";
+  if (wr >= 50) return "mid";
+  return "no";
+}
+function pfColorClass(pf) {
+  if (pf >= 2.0) return "ok";
+  if (pf >= 1.0) return "mid";
+  return "no";
+}
+function statBadgesHtml(active, days, nTrades, wr, pf) {
+  const wins = Math.round(wr / 100 * nTrades);
+  const badges = [];
+  if (active) badges.push(["active", `O-${days}`]);
+  badges.push(["neutral", `T${nTrades}`]);
+  badges.push([wrColorClass(wr), `WR${wr}%(${wins}/${nTrades})`]);
+  badges.push([pfColorClass(pf), `PF${pf}`]);
+  return `<span class="badgerow">` + badges.map(([cls, text]) =>
+    `<span class="chip ${cls}">${text}</span>`
+  ).join("") + `</span>`;
 }
 function statsFor(row, listName) {
   if (!row) return null;
   const key = LIST_STRAT_KEY[listName];
-  if (key === null) return { n_trades: row.n_trades, win_rate: row.win_rate, profit_factor: row.profit_factor };
+  if (key === null) {
+    return { n_trades: row.n_trades, win_rate: row.win_rate, profit_factor: row.profit_factor,
+             active: !!row.open_trade, days: row.open_trade ? row.open_trade.bars_held : null };
+  }
   const s = row[key];
   if (!s || !s.baseline) return null;
-  return s.baseline;
+  const b = s.baseline;
+  return { n_trades: b.n_trades, win_rate: b.win_rate, profit_factor: b.profit_factor,
+           active: b.in_position, days: b.open_position ? b.open_position.days_held : null };
 }
 
 let byTicker = {};
+// Per-list selection (not persisted -- ephemeral working state, same as the
+// dashboard's own ticker selection).
+const selected = Object.fromEntries(WATCHLIST_NAMES.map(n => [n, new Set()]));
 
 function render() {
   const lists = loadWatchlists();
@@ -107,16 +187,29 @@ function render() {
     const rowsHtml = tickers.length
       ? tickers.map(tk => {
           const stats = statsFor(byTicker[tk], name);
-          const { text, cls } = statsText(stats);
+          const badges = stats
+            ? statBadgesHtml(stats.active, stats.days, stats.n_trades, stats.win_rate, stats.profit_factor)
+            : `<span class="chip neutral">no data</span>`;
+          const checked = selected[name].has(tk) ? "checked" : "";
           return `<div class="wlrow">
+            <input type="checkbox" ${checked} onchange="toggleTicker('${name}', '${tk}', this.checked)">
             <a class="tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tk)}" target="_blank" rel="noopener noreferrer">${tk}</a>
-            <span class="wlstats ${cls}">${text}</span>
+            ${badges}
             <button class="rmbtn" type="button" title="Remove" onclick="removeFromWatchlist('${name}', '${tk}')">&times;</button>
           </div>`;
         }).join("")
       : `<p class="empty">No tickers yet -- add some from the dashboard.</p>`;
+    const allChecked = tickers.length > 0 && selected[name].size === tickers.length;
     return `<div class="col">
-      <div class="colhead"><h2>${name}</h2><span class="count">${tickers.length}</span></div>
+      <div class="colhead">
+        <input type="checkbox" id="selall_${slug(name)}" ${allChecked ? "checked" : ""}
+               title="Select all" onchange="toggleAll('${name}', this.checked)" ${tickers.length ? "" : "disabled"}>
+        <h2>${name}</h2>
+        <span class="count">${tickers.length}</span>
+      </div>
+      <div class="colactions" id="actions_${slug(name)}" style="display:${selected[name].size ? "flex" : "none"}">
+        <button class="rmselbtn" type="button" onclick="removeSelected('${name}')">Remove selected</button>
+      </div>
       ${rowsHtml}
     </div>`;
   }).join("");
