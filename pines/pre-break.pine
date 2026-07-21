@@ -1,5 +1,5 @@
 //@version=6
-indicator("Ultimate Pre-Breakout Scorer & Target Projector", overlay=true, max_labels_count=500)
+indicator("UPB", overlay=true)
 
 // ==========================================
 // USER INPUTS
@@ -51,12 +51,24 @@ var int squeezeCounter = 0
 var float projectedTarget = na
 var int projectedDuration = na
 var int breakoutBarIndex = na
+var float breakoutLevel = na
+var line coilStartLine = na
 
-// Count how long the market has been compressing
+// Count how long the market has been compressing. Resets whenever neither
+// condition holds, regardless of trend -- previously only reset on a
+// bearish-trend flip, so the counter could freeze at a stale value through
+// an extended bullish run that was no longer actually coiling.
 if bbSqueeze or nearResistance
+    if squeezeCounter == 0
+        // New coil starting -- drop a vertical marker at this bar and
+        // replace whatever marked the previous coil's start.
+        if not na(coilStartLine)
+            line.delete(coilStartLine)
+        coilStartLine := line.new(bar_index, low, bar_index, high, extend=extend.both,
+             color=color.new(color.navy, 40), style=line.style_dashed, width=1)
     squeezeCounter := squeezeCounter + 1
-else if not isBullishTrend
-    squeezeCounter := 0 // Reset if trend fails
+else
+    squeezeCounter := 0
 
 // On active breakout, lock in the mathematical targets
 if isBreakout
@@ -64,11 +76,17 @@ if isBreakout
     projectedTarget := resHigh + baseDepth // 1:1 Measured Move Target
     projectedDuration := int(squeezeCounter * 0.75) // Expected bull duration is ~75% of base building time
     breakoutBarIndex := bar_index
+    breakoutLevel := resHigh // the level that was actually broken, for failure detection below
 
-// Manage target rendering timeout (clear lines if pattern fails or reaches destination)
-if close < emaTrend or ta.change(resHigh) != 0
+// Clear the target once the thesis resolves: trend fails, price falls back
+// below the level it broke out from, or the target is reached. Previously
+// cleared on ta.change(resHigh) != 0, which fires from ordinary rolling-window
+// churn (the breakout bar's own high enters that window within a couple of
+// bars) -- the target line almost never survived long enough to be useful.
+if not na(projectedTarget) and (close < emaTrend or close < breakoutLevel or close >= projectedTarget)
     projectedTarget := na
     projectedDuration := na
+    breakoutLevel := na
 
 // ==========================================
 // STATE SCORING LOGIC
