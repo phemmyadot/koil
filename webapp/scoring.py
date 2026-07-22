@@ -19,6 +19,13 @@ warnings.filterwarnings("ignore", message="Some trades remain open")
 
 E = PortfolioSizedEngine  # production config constants live on the engine class
 
+# Legacy per-gate condition chips (TREND/BAND/RSI/DIST/VCEIL/VFLR) are being
+# replaced by a new scoring system -- on by default (unchanged behavior)
+# until that lands, then flip to false. `score` still gets computed either
+# way (sorting/the "fire" tag depend on it and have no replacement yet) --
+# this only controls whether the per-condition detail dict is exposed/shown.
+SHOW_LEGACY_CONDITIONS = os.environ.get("SHOW_LEGACY_CONDITIONS", "true").strip().lower() in ("1", "true", "yes", "on")
+
 # Earnings dates are known well in advance and don't change intraday, unlike price
 # data -- a much longer TTL than the 15-min price cache is safe here.
 _EARNINGS_CACHE_TTL = 24 * 60 * 60
@@ -227,7 +234,7 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
         "price": round(price, 4),
         "date": str(df.index[-1].date()),
         "score": score,
-        "conditions": conditions,
+        "conditions": conditions if SHOW_LEGACY_CONDITIONS else None,
         "to_tp_pct": round(100 * (basis / price - 1), 2),
         # Not one of the 6 score gates (keeps score comparable to the pre-existing
         # UI/semantics) but a real, validated block on live entries in p.py's

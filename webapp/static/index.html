@@ -306,9 +306,11 @@
 </div>
 <script>
 // Feature flag: ADX (Strategy A) and VCPF (Strategy D) hidden from the card
-// grid and the Trade On filter while they're not the focus -- data is still
-// computed server-side and cached, so flipping this back to true needs no
-// backend change, just re-shows both columns.
+// grid and the Trade On filter. Mirrors SHOW_ADX_VCPF in webapp/optimizer.py
+// -- keep both in sync by hand (this one can't read the backend's env var).
+// With the backend flag off, strategy_a/strategy_d aren't imported or
+// computed at all anymore, not just hidden here -- flipping this back to
+// true also requires flipping the backend env var to actually get data.
 const SHOW_ADX_VCPF = false;
 
 // Feature flag: Training/Holdout sub-filters hidden from the Advanced Filter
@@ -317,6 +319,14 @@ const SHOW_ADX_VCPF = false;
 // flag off, optimizer.get_optimized() always returns None anyway, so these
 // checkboxes would just sit inert if left visible.
 const SHOW_TRAINING_HOLDOUT = false;
+
+// Feature flag: legacy per-gate condition chips (TREND/BAND/RSI/DIST/VCEIL/
+// VFLR), being replaced by a new scoring system. Mirrors SHOW_LEGACY_CONDITIONS
+// in webapp/scoring.py -- keep both in sync by hand. On by default (unchanged
+// behavior) until the new system lands; with the backend flag off, r.conditions
+// is null, so this must also be off or the Conditions row would try to render
+// null and throw.
+const SHOW_LEGACY_CONDITIONS = true;
 
 const COND_LABELS = { trend:"TREND", band:"BAND", rsi:"RSI", sma_dist:"DIST", vol_ceil:"VCEIL", vol_floor:"VFLR" };
 
@@ -888,10 +898,10 @@ function render(data) {
         ${scorebar(r.score, r.earnings_risk, r.conditions)}
         <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>
-      <div class="cardsection">
+      ${SHOW_LEGACY_CONDITIONS && r.conditions ? `<div class="cardsection">
         <span class="lbl">Conditions</span>
         <span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span>
-      </div>
+      </div>` : ""}
       <hr class="divider">
       <div class="scoresections">
         <div class="scorebox"><div class="strategygrid2 ${SHOW_ADX_VCPF ? "" : "solo"}">

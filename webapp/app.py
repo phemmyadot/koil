@@ -26,8 +26,6 @@ import webapp.data as data
 import webapp.optimizer as optimizer
 from webapp.scoring import evaluate
 import webapp.tickers as tickers_module
-import webapp.strategy_a as strategy_a
-import webapp.strategy_d as strategy_d
 import webapp.strategy_vcp as strategy_vcp
 import webapp.strategy_vcpo as strategy_vcpo
 
@@ -39,8 +37,15 @@ _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
 _compute_lock = threading.Lock()
 
-_STRATEGY_MODULES = {"strategy_a": strategy_a, "strategy_d": strategy_d, "strategy_vcp": strategy_vcp,
-                      "strategy_vcpo": strategy_vcpo}
+_STRATEGY_MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
+if optimizer.SHOW_ADX_VCPF:
+    # Mirrors the frontend's SHOW_ADX_VCPF flag -- when it's off there, these
+    # never get displayed, so skip computing them at all rather than paying
+    # for a backtest per ticker per refresh cycle for a hidden feature.
+    import webapp.strategy_a as strategy_a
+    import webapp.strategy_d as strategy_d
+    _STRATEGY_MODULES["strategy_a"] = strategy_a
+    _STRATEGY_MODULES["strategy_d"] = strategy_d
 
 
 def _eval_other_strategy(key: str, module, ticker: str, bars) -> dict | None:
