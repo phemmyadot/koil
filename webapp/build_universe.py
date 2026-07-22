@@ -74,6 +74,17 @@ DEFAULT_PRICE_MAX = int(os.environ.get("BUILD_UNIVERSE_PRICE_MAX", 50))
 DEFAULT_MERGE = _env_bool("BUILD_UNIVERSE_MERGE")
 DEFAULT_ALLOW_OTC = _env_bool("BUILD_UNIVERSE_ALLOW_OTC")
 
+# Combine each strategy's two regime conditions with "or" (looser, lets more
+# candidates through) or "and" (stricter, both must hold). Override via
+# BUILD_UNIVERSE_MATCH_MODE.
+DEFAULT_MATCH_MODE = os.environ.get("BUILD_UNIVERSE_MATCH_MODE", "or").strip().lower()
+if DEFAULT_MATCH_MODE not in ("and", "or"):
+    raise ValueError(f"BUILD_UNIVERSE_MATCH_MODE must be 'and' or 'or', got {DEFAULT_MATCH_MODE!r}")
+
+
+def _combine(a: bool, b: bool, mode: str) -> bool:
+    return (a and b) if mode == "and" else (a or b)
+
 
 def fetch_candidates(min_cap: int = DEFAULT_MIN_CAP, min_vol: int = DEFAULT_MIN_VOL,
                       price_range: tuple[int, int] = (DEFAULT_PRICE_MIN, DEFAULT_PRICE_MAX),
@@ -115,13 +126,14 @@ def _rsi(close: pd.Series, length: int) -> pd.Series:
     return 100 - (100 / (1 + gain / (loss + 1e-9)))
 
 
-def matches_vexh_setup(df: pd.DataFrame) -> bool:
+def matches_vexh_setup(df: pd.DataFrame, mode: str = DEFAULT_MATCH_MODE) -> bool:
     """Regime match for strategy_d_volatility_exhaustion.pine's setup, not
     the exact same-day entry trigger (requiring all 6 gates at once is rare
-    on any given day across any universe). Keeps the two gates that define
-    the strategy's character -- bullish macro trend (close > SMA150) and a
-    washed-out RSI(14) <= 40 -- and drops the narrower same-bar BB-cross,
-    SMA-distance, and ATR-band gates so more candidates qualify."""
+    on any given day across any universe). Combines a bullish macro trend
+    (close > SMA150) and a washed-out RSI(14) <= 40 via `mode` ("or" --
+    either one alone is enough, looser; "and" -- both required, stricter).
+    Drops the narrower same-bar BB-cross, SMA-distance, and ATR-band gates
+    entirely either way."""
     c = df["Close"].dropna()
     if len(c) < 160:
         return False
@@ -131,16 +143,17 @@ def matches_vexh_setup(df: pd.DataFrame) -> bool:
         return False
     macro_bullish = c.iloc[-1] > sma150.iloc[-1]
     rsi_washed_out = rsi.iloc[-1] <= 40
-    return bool(macro_bullish and rsi_washed_out)
+    return _combine(macro_bullish, rsi_washed_out, mode)
 
 
-def _matches_vcp_family_setup(df: pd.DataFrame) -> bool:
+def _matches_vcp_family_setup(df: pd.DataFrame, mode: str) -> bool:
     """Regime match for strategy_vcp.py/strategy_vcpo.py's setup, not the
     exact same-day breakout trigger (requiring a fresh cross above the prior
-    20-bar high, same-bar, is rare on any given day). Keeps the two
-    conditions that define the strategy's character -- ATR(22) compressed
-    vs its 100-bar average, and price above EMA(50) -- and drops the
-    narrower same-bar resistance-cross and volume-confirmation gates."""
+    20-bar high, same-bar, is rare on any given day). Combines ATR(22)
+    compression vs its 100-bar average and price above EMA(50) via `mode`
+    ("or" -- either one alone is enough, looser; "and" -- both required,
+    stricter). Drops the narrower same-bar resistance-cross and
+    volume-confirmation gates entirely either way."""
     c, h, l = df["Close"].dropna(), df["High"], df["Low"]
     if len(c) < 130:
         return False
@@ -151,15 +164,15 @@ def _matches_vcp_family_setup(df: pd.DataFrame) -> bool:
         return False
     compressed = atr.iloc[-1] <= atr_avg.iloc[-1] * 1.15
     macro_bullish = c.iloc[-1] > ema50.iloc[-1]
-    return bool(compressed and macro_bullish)
+    return _combine(compressed, macro_bullish, mode)
 
 
-def matches_vcp_setup(df: pd.DataFrame) -> bool:
-    return _matches_vcp_family_setup(df)
+def matches_vcp_setup(df: pd.DataFrame, mode: str = DEFAULT_MATCH_MODE) -> bool:
+    return _matches_vcp_family_setup(df, mode)
 
 
-def matches_vcpo_setup(df: pd.DataFrame) -> bool:
-    return _matches_vcp_family_setup(df)
+def matches_vcpo_setup(df: pd.DataFrame, mode: str = DEFAULT_MATCH_MODE) -> bool:
+    return _matches_vcp_family_setup(df, mode)
 
 
 def passes_technical_filters(df: pd.DataFrame) -> bool:
