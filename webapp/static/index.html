@@ -328,6 +328,39 @@ const SHOW_TRAINING_HOLDOUT = false;
 // null and throw.
 const SHOW_LEGACY_CONDITIONS = true;
 
+// Feature flag: pre-breakout state chip (ported from pines/pre-break.pine),
+// applies across all strategies (ticker-level, not strategy-specific). On
+// by default; r.prebreak is null if the backend evaluator failed/had
+// insufficient history for that ticker.
+const SHOW_PREBREAK = true;
+
+// 6 chips mirroring pre-break.pine's own HUD table rows exactly (Market
+// Phase Score / Volatility Squeeze / Volume Dry-up / Clustering At Ceiling /
+// Trend Filter / Coil Energy Build-up), same visual pattern as the legacy
+// Conditions grid instead of one combined badge.
+const PREBREAK_STATE_CLASS = {
+  BEARISH: "no", NEUTRAL: "neutral", BULLISH: "mid",
+  "COILING (BULL)": "mid", "PRE-BREAKOUT": "mid", BREAKOUT: "ok",
+};
+
+function prebreakChips(pb) {
+  if (!pb) return "";
+  const stateCls = PREBREAK_STATE_CLASS[pb.state] || "neutral";
+  const stateTitle = pb.projected_target != null
+    ? `Target ${pb.projected_target} (~${pb.projected_duration}b)` : pb.state;
+  const chips = [
+    [stateCls, `${pb.state} (${pb.score})`, stateTitle],
+    [pb.bb_squeeze ? "mid" : "ok", pb.bb_squeeze ? "COMPRESSED" : "EXPANDED", "Volatility Squeeze"],
+    [pb.vol_dry_up ? "mid" : "ok", pb.vol_dry_up ? "DRY" : "NORMAL/HIGH", "Volume Dry-up"],
+    [pb.near_resistance ? "mid" : "ok", pb.near_resistance ? "COILING" : "CLEAR", "Clustering At Ceiling"],
+    [pb.is_bullish_trend ? "mid" : "no", pb.is_bullish_trend ? "BULLISH" : "BEARISH", "Trend Filter"],
+    [pb.squeeze_counter > 30 ? "active" : "neutral", `${pb.squeeze_counter}B`, "Coil Energy Build-up"],
+  ];
+  return chips.map(([cls, text, title]) =>
+    `<span class="chip ${cls}" title="${String(title).replace(/"/g, "&quot;")}">${text}</span>`
+  ).join("");
+}
+
 const COND_LABELS = { trend:"TREND", band:"BAND", rsi:"RSI", sma_dist:"DIST", vol_ceil:"VCEIL", vol_floor:"VFLR" };
 
 const TIER_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
@@ -901,6 +934,10 @@ function render(data) {
       ${SHOW_LEGACY_CONDITIONS && r.conditions ? `<div class="cardsection">
         <span class="lbl">Conditions</span>
         <span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span>
+      </div>` : ""}
+      ${SHOW_PREBREAK && r.prebreak ? `<div class="cardsection">
+        <span class="lbl">Pre-Breakout</span>
+        <span class="condgrid">${prebreakChips(r.prebreak)}</span>
       </div>` : ""}
       <hr class="divider">
       <div class="scoresections">

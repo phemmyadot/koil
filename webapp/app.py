@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 import webapp.build_universe as build_universe
 import webapp.data as data
 import webapp.optimizer as optimizer
+import webapp.prebreak as prebreak
 from webapp.scoring import evaluate
 import webapp.tickers as tickers_module
 import webapp.strategy_vcp as strategy_vcp
@@ -72,6 +73,13 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
         payload = evaluate(ticker, bars)
         for key, module in _STRATEGY_MODULES.items():
             payload[key] = _eval_other_strategy(key, module, ticker, bars)
+        # Ticker-level, not strategy-specific -- applies across VEXH/VCP/VCPO
+        # alike, same as the Pine indicator overlays regardless of which
+        # strategy you're trading. A failure here shouldn't drop the ticker.
+        try:
+            payload["prebreak"] = prebreak.evaluate(ticker, bars)
+        except Exception:  # noqa: BLE001
+            payload["prebreak"] = None
         return ticker, payload, None
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
         return ticker, None, str(e) or type(e).__name__
