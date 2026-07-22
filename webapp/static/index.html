@@ -258,19 +258,18 @@
       <option value="default">Default</option>
       <option value="days_desc">Days in trade (longest first)</option>
       <option value="days_asc">Days in trade (newest first)</option>
-      <option value="condition_desc">Condition (highest first)</option>
-      <option value="condition_asc">Condition (lowest first)</option>
+      <option value="condition_desc">Pre-breakout score (highest first)</option>
+      <option value="condition_asc">Pre-breakout score (lowest first)</option>
     </select>
     <span class="sep"></span>
     <label for="scoreFilter">Min score</label>
     <select id="scoreFilter">
-      <option value="0">All</option>
-      <option value="1">&ge; 1/6</option>
-      <option value="2">&ge; 2/6</option>
-      <option value="3">&ge; 3/6</option>
-      <option value="4">&ge; 4/6</option>
-      <option value="5">&ge; 5/6</option>
-      <option value="6">6/6 (entry only)</option>
+      <option value="-Infinity">All</option>
+      <option value="0">&ge; 0/5 (NEUTRAL+)</option>
+      <option value="1">&ge; 1/5 (BULLISH+)</option>
+      <option value="2">&ge; 2/5 (COILING+)</option>
+      <option value="4">&ge; 4/5 (PRE-BREAKOUT+)</option>
+      <option value="5">5/5 (BREAKOUT only)</option>
     </select>
     <span class="sep"></span>
     <label for="minTradesFilter">Min trades</label>
@@ -290,6 +289,14 @@
         <span class="filtertogglearrow">&#9662;</span>
       </button>
       <div class="advfilterpanel" id="tradeOnPanel" style="display:none"></div>
+    </div>
+    <span class="sep"></span>
+    <div class="advfilter" id="prebreakFilter">
+      <button id="prebreakToggle" class="advfilterbtn" type="button" aria-expanded="false">
+        Pre-Breakout<span class="advfiltercount" id="prebreakCount" style="display:none"></span>
+        <span class="filtertogglearrow">&#9662;</span>
+      </button>
+      <div class="advfilterpanel" id="prebreakPanel" style="display:none"></div>
     </div>
     <span class="sep"></span>
     <button id="clearFilters" class="clearfilters" type="button">Clear filters</button>
@@ -334,6 +341,14 @@ const SHOW_LEGACY_CONDITIONS = true;
 // insufficient history for that ticker.
 const SHOW_PREBREAK = true;
 
+// Ticker-level score is now pre-breakout's (r.score, the old 6-gate VEXH
+// count, is no longer used for sorting/filtering/the fire highlight).
+// -Infinity for a missing prebreak so those tickers never pass a positive
+// min-score filter and always sort last.
+function pbScore(r) {
+  return r.prebreak ? r.prebreak.score : -Infinity;
+}
+
 // 6 chips mirroring pre-break.pine's own HUD table rows exactly (Market
 // Phase Score / Volatility Squeeze / Volume Dry-up / Clustering At Ceiling /
 // Trend Filter / Coil Energy Build-up), same visual pattern as the legacy
@@ -354,7 +369,7 @@ function prebreakChips(pb) {
     [pb.vol_dry_up ? "mid" : "ok", pb.vol_dry_up ? "DRY" : "NORMAL/HIGH", "Volume Dry-up"],
     [pb.near_resistance ? "mid" : "ok", pb.near_resistance ? "COILING" : "CLEAR", "Clustering At Ceiling"],
     [pb.is_bullish_trend ? "mid" : "no", pb.is_bullish_trend ? "BULLISH" : "BEARISH", "Trend Filter"],
-    [pb.squeeze_counter > 30 ? "active" : "neutral", `${pb.squeeze_counter}B`, "Coil Energy Build-up"],
+    [pb.squeeze_counter > 30 ? "active" : "neutral", `${pb.squeeze_counter} Bars`, "Coil Energy Build-up"],
   ];
   return chips.map(([cls, text, title]) =>
     `<span class="chip ${cls}" title="${String(title).replace(/"/g, "&quot;")}">${text}</span>`
@@ -372,28 +387,30 @@ function chip(key, c) {
   }
   return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
 }
-function scorebar(n, earningsRisk, conditions) {
-  // Combined tooltip so the score values are visible without hovering each
-  // individual condition chip separately.
-  const tooltip = conditions
-    ? Object.entries(conditions).map(([k, c]) =>
-        `${COND_LABELS[k]}: ${c.pass ? "PASS" : "FAIL"} (${c.value})`).join(" | ")
-    : "";
+function scorebar(pb, earningsRisk) {
+  // Score is now pre-breakout's (BEARISH -2 / NEUTRAL 0 / BULLISH 1 /
+  // COILING 2 / PRE-BREAKOUT 4 / BREAKOUT 5), not the old 6-gate count.
+  if (!pb) return `<span class="scorebar"></span>&mdash;/5`;
+  const n = pb.score;
+  const tooltip = [
+    `State: ${pb.state}`,
+    `Squeeze: ${pb.bb_squeeze ? "COMPRESSED" : "EXPANDED"}`,
+    `Volume: ${pb.vol_dry_up ? "DRY" : "NORMAL/HIGH"}`,
+    `Near resistance: ${pb.near_resistance ? "YES" : "NO"}`,
+    `Trend: ${pb.is_bullish_trend ? "BULLISH" : "BEARISH"}`,
+    `Coil energy: ${pb.squeeze_counter} bars`,
+  ].join(" | ");
   let s = `<span class="scorebar" title="${String(tooltip).replace(/"/g, "&quot;")}">`;
-  // sma_dist contributes graduated credit (0/0.5/1, see scoring.py's
-  // _DIST_TIER_CREDIT) so n can be a half-point value like 5.5 -- light full
-  // dots up to floor(n), and give the next dot a half-fill for the .5 case.
-  const fullDots = Math.floor(n);
-  for (let i = 0; i < 6; i++) {
-    const cls = i < fullDots ? "on" : (i < n ? "half" : "");
-    s += `<i class="${cls}"></i>`;
+  // Score can go negative (BEARISH = -2) -- clamp dots at 0 lit but still
+  // show the real signed number in the text label below.
+  const fullDots = Math.max(0, Math.floor(n));
+  for (let i = 0; i < 5; i++) {
+    s += `<i class="${i < fullDots ? "on" : ""}"></i>`;
   }
-  s += `</span>${n}/6`;
-  if (n === 6) {
-    // A 6/6 now requires HIGH-tier sma_dist (the only way to earn the full
-    // point there), so the old "weak entry at LOW/MEDIUM tier but still
-    // 6/6" case this used to special-case can no longer happen -- earnings
-    // risk is the only remaining reason a 6/6 wouldn't actually fire live.
+  s += `</span>${n}/5`;
+  if (n === 5) {
+    // BREAKOUT is the new top state -- same "ENTRY" firetag role the old
+    // 6/6 gate had, still gated on the separate earnings-risk flag.
     s += earningsRisk
       ? '<span class="firetag weak" title="earnings report within the entry-avoid window -- engine will not take this entry (validated: holding through earnings drops win rate 62%->51%)">ENTRY (earnings risk)</span>'
       : '<span class="firetag">ENTRY</span>';
@@ -584,6 +601,28 @@ function readTradeOnStrats() {
 }
 function matchesTradeOnFilter(r, strats) {
   return strats.length === 0 || strats.some(key => isStrategyActive(r, key));
+}
+
+// ---------------- Pre-Breakout filter ----------------
+// Separate from Advance Filter and Trade On, ANDed against both (another
+// .filter() in the same chain) -- "is this ticker's pre-breakout state ANY
+// of the checked ones" (OR among the checked states themselves). BEARISH is
+// deliberately not offered as a checkbox -- this tool is about finding
+// bullish setups, not filtering for bearish ones.
+const PREBREAK_STATES = ["NEUTRAL", "BULLISH", "COILING (BULL)", "PRE-BREAKOUT", "BREAKOUT"];
+
+function buildPrebreakPanel() {
+  const boxes = PREBREAK_STATES.map(state =>
+    `<label class="advcheck"><input type="checkbox" data-state="${state}"> ${state}</label>`
+  ).join("");
+  return `<div class="advmetric">${boxes}</div>`
+    + `<div class="advfilterfoot"><button id="prebreakClearBtn" class="clearfilters" type="button">Clear</button></div>`;
+}
+function readPrebreakStates() {
+  return [...document.querySelectorAll("#prebreakPanel input[type=checkbox]:checked")].map(cb => cb.dataset.state);
+}
+function matchesPrebreakFilter(r, states) {
+  return states.length === 0 || (!!r.prebreak && states.includes(r.prebreak.state));
 }
 
 // n_trades for one strategy view -- VEXH's is a top-level field; A/D/VCP/VCPO
@@ -889,17 +928,20 @@ function render(data) {
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
   const advBlocks = readAdvFilterBlocks();
   const tradeOnStrats = readTradeOnStrats();
+  const prebreakStates = readPrebreakStates();
   const minTradesStrats = activeMinTradesStrats(tradeOnStrats, advBlocks);
   // Every checked Advance Filter block narrows the result further (AND across
   // blocks); within one block, checking multiple WR/PF tiers is OR. Trade On
-  // is a separate filter ANDed against Advance Filter (its own .filter() in
-  // the chain); within Trade On, checking multiple strategies is OR.
+  // and Pre-Breakout are each their own filter ANDed against Advance Filter
+  // and each other (separate .filter() calls in the chain); within each,
+  // checking multiple strategies/states is OR.
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
-    .filter(r => r.score >= minScore)
+    .filter(r => pbScore(r) >= minScore)
     .filter(r => matchesMinTrades(r, minTrades, minTradesStrats))
     .filter(r => matchesAdvFilter(r, advBlocks))
     .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
+    .filter(r => matchesPrebreakFilter(r, prebreakStates))
     .sort((a, b) => {
       if (sortBy === "days_desc" || sortBy === "days_asc") {
         const da = maxDaysInTrade(a), db = maxDaysInTrade(b);
@@ -909,9 +951,9 @@ function render(data) {
         if (db === null) return -1;
         return sortBy === "days_desc" ? db - da : da - db;
       }
-      if (sortBy === "condition_desc") return b.score - a.score;
-      if (sortBy === "condition_asc") return a.score - b.score;
-      return (!!b.open_trade - !!a.open_trade) || (b.score - a.score) || (b.to_tp_pct - a.to_tp_pct);
+      if (sortBy === "condition_desc") return pbScore(b) - pbScore(a);
+      if (sortBy === "condition_asc") return pbScore(a) - pbScore(b);
+      return (!!b.open_trade - !!a.open_trade) || (pbScore(b) - pbScore(a)) || (b.to_tp_pct - a.to_tp_pct);
     });
 
   lastFilteredRows = allRows;
@@ -921,14 +963,14 @@ function render(data) {
 
   let html = "";
   for (const r of rows) {
-    // A 6/6 now requires HIGH-tier sma_dist by construction (see scorebar()),
-    // so score alone is enough to gate the fire-card highlight.
-    const isFire = r.score === 6 && !r.earnings_risk;
+    // BREAKOUT (score 5) is the new top state -- fire-card highlight fires
+    // on that instead of the old 6/6 gate count.
+    const isFire = !!r.prebreak && r.prebreak.score === 5 && !r.earnings_risk;
     html += `<div class="tickercard ${isFire ? "fire" : ""}">
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
-        ${scorebar(r.score, r.earnings_risk, r.conditions)}
+        ${scorebar(r.prebreak, r.earnings_risk)}
         <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>
       ${SHOW_LEGACY_CONDITIONS && r.conditions ? `<div class="cardsection">
@@ -1150,13 +1192,16 @@ const clearAdvFilter = setupFilterPopover("advFilter", "advFilterToggle", "advFi
   "advFilterCount", "advFilterClearBtn", buildAdvFilterPanel);
 const clearTradeOnFilter = setupFilterPopover("tradeOnFilter", "tradeOnToggle", "tradeOnPanel",
   "tradeOnCount", "tradeOnClearBtn", buildTradeOnPanel);
+const clearPrebreakFilter = setupFilterPopover("prebreakFilter", "prebreakToggle", "prebreakPanel",
+  "prebreakCount", "prebreakClearBtn", buildPrebreakPanel);
 
 document.getElementById("clearFilters").addEventListener("click", () => {
   document.getElementById("tickerSearch").value = "";
-  document.getElementById("scoreFilter").value = "0";
+  document.getElementById("scoreFilter").value = "-Infinity";
   document.getElementById("minTradesFilter").value = "0";
   clearAdvFilter();
   clearTradeOnFilter();
+  clearPrebreakFilter();
   currentPage = 1;
   if (lastData) render(lastData);
 });
