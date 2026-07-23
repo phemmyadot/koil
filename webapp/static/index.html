@@ -1011,7 +1011,10 @@ function render(data) {
   document.getElementById("rows").innerHTML = html;
   updateSelectionCount();
   const open = allRows.filter(r => r.open_trade).length;
-  const filtered = minScore > 0 || !!tickerQuery || advBlocks.length > 0 || tradeOnStrats.length > 0;
+  const advActive = adv.wrMin > WR_STEPS[0] || adv.pfMin > PF_STEPS[0];
+  const prebreakActive = prebreak.phaseMin !== PHASE_STEPS[PHASE_DEFAULT_INDEX][1]
+    || prebreak.coilMin > COIL_STEPS[0] || Object.values(prebreak.switches).some(Boolean);
+  const filtered = minTrades > 0 || !!tickerQuery || advActive || tradeOnStrats.length > 0 || prebreakActive;
   const countText = filtered
     ? `${allRows.length} of ${data.tickers.length} tickers (filtered)`
     : `${data.tickers.length} tickers`;
