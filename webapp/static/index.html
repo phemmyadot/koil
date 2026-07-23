@@ -68,8 +68,16 @@
   .advradiorow { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
   .advsliderrow { display: flex; align-items: flex-start; gap: 10px; }
   .advslider { flex: 1 1 0; min-width: 0; }
-  .advslider input[type=range] { width: 100%; margin: 4px 0 2px; }
-  .advslidersteps { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+  .advslider input[type=range] { display: block; width: 100%; margin: 4px 0 2px; box-sizing: border-box; }
+  /* Equal-width flex cells (not justify-content:space-between) so each label
+     lines up roughly under its step regardless of step count, and long
+     labels (Phase's "PRE-BREAKOUT"/"COILING (BULL)") wrap within their own
+     cell instead of overflowing past the slider's actual width. */
+  .advslidersteps { display: flex; font-size: 10.5px; color: var(--muted); gap: 2px; }
+  .advslidersteps span { flex: 1 1 0; min-width: 0; text-align: center; white-space: normal;
+                          overflow-wrap: break-word; }
+  .advslidersteps span:first-child { text-align: left; }
+  .advslidersteps span:last-child { text-align: right; }
   .advand { align-self: center; font-size: 10.5px; color: var(--muted); font-weight: 700;
             padding-top: 22px; }
   .switchgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-top: 4px; }
