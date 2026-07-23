@@ -68,7 +68,7 @@
   .advradiorow { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
   .advsliderrow { display: flex; align-items: flex-start; gap: 10px; }
   .advslider { flex: 1 1 0; min-width: 0; }
-  .advslider input[type=range] { display: block; width: 100%; margin: 4px 0 2px; box-sizing: border-box; }
+  .advslider input[type=range], .advfilterpanel input[type=range] { display: block; width: 100%; margin: 4px 0 2px; box-sizing: border-box; }
   /* Equal-width flex cells (not justify-content:space-between) so each label
      lines up roughly under its step regardless of step count, and long
      labels (Phase's "PRE-BREAKOUT"/"COILING (BULL)") wrap within their own
@@ -533,6 +533,10 @@ function readAdvFilter() {
   };
 }
 function matchesAdvFilter(r, adv) {
+  // True no-op at default (both sliders at index 0) -- don't exclude a
+  // ticker just for lacking data for whichever strategy happens to be
+  // selected if nothing is actually being filtered on yet.
+  if (adv.wrMin <= WR_STEPS[0] && adv.pfMin <= PF_STEPS[0]) return true;
   const stats = advStrategyStats(r, adv.strategy);
   if (!stats) return false;
   return stats.wr >= adv.wrMin && stats.pf >= adv.pfMin;
@@ -615,7 +619,11 @@ function readPrebreakFilter() {
 }
 function matchesPrebreakFilter(r, sel) {
   const pb = r.prebreak;
-  if (!pb) return false;
+  // Fail OPEN on missing data (backend couldn't evaluate -- insufficient
+  // history, transient error, etc.) rather than hard-excluding the ticker.
+  // Consistent with how the rest of the app treats missing per-ticker data
+  // (e.g. isStrategyActive returns false gracefully instead of penalizing).
+  if (!pb) return true;
   if (pb.score < sel.phaseMin) return false;
   if (pb.squeeze_counter < sel.coilMin) return false;
   for (const [key, , field] of PREBREAK_SWITCHES) {
