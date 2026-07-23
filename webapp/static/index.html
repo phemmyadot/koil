@@ -56,19 +56,33 @@
                      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
                      box-shadow: 0 12px 32px rgba(0,0,0,0.25); padding: 10px;
                      width: 340px; max-height: 70vh; overflow-y: auto; }
-  .advstrat { border-bottom: 1px solid var(--line); padding: 6px 0; }
-  .advstrat:last-of-type { border-bottom: 0; }
-  .advstrat > summary { cursor: pointer; font-weight: 700; font-size: 12.5px; padding: 4px 2px; }
-  .advsub { padding: 4px 2px 8px 12px; }
-  .advsublabel { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
-                 letter-spacing: 0.04em; margin: 6px 0 2px; }
   .advmetric { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px;
                padding: 2px 0; }
-  .advmetriclabel { flex: 0 0 60px; color: var(--muted); }
   .advcheck { display: flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
   .advcheck input { cursor: pointer; }
   .advfilterfoot { display: flex; justify-content: flex-end; padding-top: 8px; margin-top: 4px;
                     border-top: 1px solid var(--line); }
+  .advsectionlabel { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+                      letter-spacing: 0.04em; margin: 10px 0 4px; }
+  .advsectionlabel:first-child { margin-top: 2px; }
+  .advradiorow { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+  .advsliderrow { display: flex; align-items: flex-start; gap: 10px; }
+  .advslider { flex: 1 1 0; min-width: 0; }
+  .advslider input[type=range] { width: 100%; margin: 4px 0 2px; }
+  .advslidersteps { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+  .advand { align-self: center; font-size: 10.5px; color: var(--muted); font-weight: 700;
+            padding-top: 22px; }
+  .switchgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-top: 4px; }
+  .switchrow { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+               font-size: 12px; cursor: pointer; }
+  .switch { position: relative; display: inline-block; width: 30px; height: 17px; flex: 0 0 auto; }
+  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switchtrack { position: absolute; inset: 0; background: var(--line); border-radius: 999px;
+                 transition: background 0.15s; }
+  .switchtrack::before { content: ""; position: absolute; width: 13px; height: 13px; left: 2px; top: 2px;
+                          background: #fff; border-radius: 50%; transition: transform 0.15s; }
+  .switch input:checked + .switchtrack { background: var(--accent); }
+  .switch input:checked + .switchtrack::before { transform: translateX(13px); }
   select { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; }
   input[type=text] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
@@ -253,25 +267,6 @@
     <div class="filtercontrols" id="filterControls">
     <input type="text" id="tickerSearch" placeholder="Search ticker&hellip;" autocomplete="off">
     <span class="sep"></span>
-    <label for="sortBy">Sort</label>
-    <select id="sortBy">
-      <option value="default">Default</option>
-      <option value="days_desc">Days in trade (longest first)</option>
-      <option value="days_asc">Days in trade (newest first)</option>
-      <option value="condition_desc">Pre-breakout score (highest first)</option>
-      <option value="condition_asc">Pre-breakout score (lowest first)</option>
-    </select>
-    <span class="sep"></span>
-    <label for="scoreFilter">Min score</label>
-    <select id="scoreFilter">
-      <option value="-Infinity">All</option>
-      <option value="0">&ge; 0/5 (NEUTRAL+)</option>
-      <option value="1">&ge; 1/5 (BULLISH+)</option>
-      <option value="2">&ge; 2/5 (COILING+)</option>
-      <option value="4">&ge; 4/5 (PRE-BREAKOUT+)</option>
-      <option value="5">5/5 (BREAKOUT only)</option>
-    </select>
-    <span class="sep"></span>
     <label for="minTradesFilter">Min trades</label>
     <input type="number" id="minTradesFilter" min="0" step="1" value="0">
     <span class="sep"></span>
@@ -340,14 +335,6 @@ const SHOW_LEGACY_CONDITIONS = true;
 // by default; r.prebreak is null if the backend evaluator failed/had
 // insufficient history for that ticker.
 const SHOW_PREBREAK = true;
-
-// Ticker-level score is now pre-breakout's (r.score, the old 6-gate VEXH
-// count, is no longer used for sorting/filtering/the fire highlight).
-// -Infinity for a missing prebreak so those tickers never pass a positive
-// min-score filter and always sort last.
-function pbScore(r) {
-  return r.prebreak ? r.prebreak.score : -Infinity;
-}
 
 // 6 chips mirroring pre-break.pine's own HUD table rows exactly (Market
 // Phase Score / Volatility Squeeze / Volume Dry-up / Clustering At Ceiling /
@@ -485,95 +472,62 @@ const QUALITY_CSS = { good: "ok", fair: "mid", bad: "no" };
 const QUALITY_RANK = { bad: 0, fair: 1, good: 2 };
 
 // ---------------- Advance Filter ----------------
-// Nested tree: strategy -> sub-view (BASE always; TRAIN/HOLD only for the 3
-// optimized strategies) -> Win Rate / Profit checkbox groups. Combination
-// logic: OR between checked tiers of the SAME metric (WR bad+good checked
-// means "WR is bad OR good"), AND between WR and PF within one sub-view, AND
-// across every block that has at least one box checked -- every checked
-// group narrows the result further, ticker must satisfy ALL of them.
-const ADV_FILTER_STRATS = [
-  { key: "vexh", label: "VEXH", subs: ["base"] },
-  { key: "adx", label: "ADX (Strategy A)", subs: ["base", "training", "holdout"] },
-  { key: "vcpf", label: "VCPF (Strategy D)", subs: ["base", "training", "holdout"] },
-  { key: "vcp", label: "VCP (VCP Master)", subs: ["base", "training", "holdout"] },
-  { key: "vcpo", label: "VCPO", subs: ["base", "training", "holdout"] },
-]
-  .filter(s => SHOW_ADX_VCPF || (s.key !== "adx" && s.key !== "vcpf"))
-  .map(s => SHOW_TRAINING_HOLDOUT ? s : { ...s, subs: s.subs.filter(sub => sub === "base") });
-const ADV_SUB_LABEL = { base: "Base", training: "Training", holdout: "Holdout" };
-const ADV_SUB_SOURCE = { base: "BASE", training: "TRAIN", holdout: "HOLD" };
+// Flat: one Strategy radio (which strategy's stats to read) + Win Rate AND
+// Profit minimum-threshold sliders. Base/Training/Holdout sub-views are
+// gone -- always reads baseline stats. See FILTER_ARCHITECTURE.md.
+const ADV_STRATEGIES = [["adx", "ADX"], ["vcpf", "VCPF"], ["vcp", "VCP"], ["vcpo", "VCPO"], ["vexh", "VEXH"]]
+  .filter(([key]) => SHOW_ADX_VCPF || (key !== "adx" && key !== "vcpf"));
 const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp", vcpo: "strategy_vcpo" };
-// WR is cumulative (Fair+ includes Good, same convention as the old filter);
-// Profit is exact tiers -- matches how the WR/PF badge colors already work.
-const ADV_WR_TIERS = [["bad", "Bad"], ["fair+", "Fair+"], ["good", "Good"]];
-const ADV_PF_TIERS = [["bad", "Bad"], ["fair", "Fair"], ["good", "Good"]];
+const WR_STEPS = [0, 50, 75];
+const PF_STEPS = [0, 1, 1.5, 2];
 
-function advMetricRow(strat, sub, metric, label, tiers) {
-  const boxes = tiers.map(([tier, tlabel]) =>
-    `<label class="advcheck"><input type="checkbox" data-strat="${strat}" data-sub="${sub}" data-metric="${metric}" data-tier="${tier}"> ${tlabel}</label>`
-  ).join("");
-  return `<div class="advmetric"><span class="advmetriclabel">${label}</span>${boxes}</div>`;
+function sliderStepsHtml(steps, suffix) {
+  return steps.map(v => `<span>${v}${suffix}</span>`).join("");
 }
 function buildAdvFilterPanel() {
-  let html = "";
-  for (const strat of ADV_FILTER_STRATS) {
-    html += `<details class="advstrat" open><summary>${strat.label}</summary>`;
-    for (const sub of strat.subs) {
-      html += `<div class="advsub"><div class="advsublabel">${ADV_SUB_LABEL[sub]}</div>`
-        + advMetricRow(strat.key, sub, "wr", "Win Rate", ADV_WR_TIERS)
-        + advMetricRow(strat.key, sub, "pf", "Profit", ADV_PF_TIERS)
-        + `</div>`;
-    }
-    html += `</details>`;
-  }
-  html += `<div class="advfilterfoot"><button id="advFilterClearBtn" class="clearfilters" type="button">Clear</button></div>`;
-  return html;
+  const stratRadios = ADV_STRATEGIES.map(([key, label], i) =>
+    `<label class="advcheck"><input type="radio" name="advStrategy" data-strat="${key}" ${i === 0 ? "checked" : ""}> ${label}</label>`
+  ).join("");
+  return `<div class="advsectionlabel">Strategy</div>
+    <div class="advradiorow">${stratRadios}</div>
+    <div class="advsliderrow">
+      <div class="advslider">
+        <div class="advsectionlabel">Win Rate</div>
+        <input type="range" id="advWrSlider" min="0" max="${WR_STEPS.length - 1}" step="1" value="0">
+        <div class="advslidersteps">${sliderStepsHtml(WR_STEPS, "%")}</div>
+      </div>
+      <span class="advand">AND</span>
+      <div class="advslider">
+        <div class="advsectionlabel">Profit</div>
+        <input type="range" id="advPfSlider" min="0" max="${PF_STEPS.length - 1}" step="1" value="0">
+        <div class="advslidersteps">${sliderStepsHtml(PF_STEPS, "")}</div>
+      </div>
+    </div>
+    <div class="advfilterfoot"><button id="advFilterClearBtn" class="clearfilters" type="button">Clear</button></div>`;
 }
 
-function wrMatchesTier(wr, tier) {
-  if (tier === "bad") return wr < 50;
-  if (tier === "fair+") return wr >= 50;
-  if (tier === "good") return wr >= 70;
-  return false;
-}
-function pfMatchesTier(pf, tier) {
-  if (tier === "bad") return pf < 1.0;
-  if (tier === "fair") return pf >= 1.0 && pf < 2.0;
-  if (tier === "good") return pf >= 2.0;
-  return false;
-}
-// A block's WR/PF stats for one ticker -- null if that (strategy, sub-view)
-// doesn't exist for this ticker (e.g. TRAIN/HOLD when the optimizer never
-// beat baseline), which makes the block fail to match (see matchesAdvFilter).
-function getAdvBlockStats(r, strat, sub) {
+// Baseline WR/PF for one strategy -- null if that strategy has no data for
+// this ticker, which makes the filter fail to match (see matchesAdvFilter).
+function advStrategyStats(r, strat) {
   if (strat === "vexh") return { wr: r.win_rate, pf: r.profit_factor };
   const s = r[ADV_STRAT_KEY[strat]];
   if (!s || !s.baseline) return null;
-  const want = ADV_SUB_SOURCE[sub];
-  const cand = strategyCandidates(s).find(c => c.source === want);
-  return cand ? { wr: cand.wr, pf: cand.pf } : null;
+  return { wr: s.baseline.win_rate, pf: s.baseline.profit_factor };
 }
-// Reads all checked boxes into { strat_sub: {strat, sub, wr:Set, pf:Set} } blocks.
-function readAdvFilterBlocks() {
-  const panel = document.getElementById("advFilterPanel");
-  const blocks = {};
-  panel.querySelectorAll("input[type=checkbox]:checked").forEach(cb => {
-    const { strat, sub, metric, tier } = cb.dataset;
-    const key = `${strat}_${sub}`;
-    if (!blocks[key]) blocks[key] = { strat, sub, wr: new Set(), pf: new Set() };
-    blocks[key][metric].add(tier);
-  });
-  return Object.values(blocks);
+function readAdvFilter() {
+  const stratEl = document.querySelector('#advFilterPanel input[name="advStrategy"]:checked');
+  const wrEl = document.getElementById("advWrSlider");
+  const pfEl = document.getElementById("advPfSlider");
+  return {
+    strategy: stratEl ? stratEl.dataset.strat : ADV_STRATEGIES[0][0],
+    wrMin: WR_STEPS[wrEl ? Number(wrEl.value) : 0],
+    pfMin: PF_STEPS[pfEl ? Number(pfEl.value) : 0],
+  };
 }
-function advBlockMatches(r, block) {
-  const stats = getAdvBlockStats(r, block.strat, block.sub);
+function matchesAdvFilter(r, adv) {
+  const stats = advStrategyStats(r, adv.strategy);
   if (!stats) return false;
-  const wrOk = block.wr.size === 0 || [...block.wr].some(t => wrMatchesTier(stats.wr, t));
-  const pfOk = block.pf.size === 0 || [...block.pf].some(t => pfMatchesTier(stats.pf, t));
-  return wrOk && pfOk;
-}
-function matchesAdvFilter(r, blocks) {
-  return blocks.every(b => advBlockMatches(r, b));
+  return stats.wr >= adv.wrMin && stats.pf >= adv.pfMin;
 }
 
 // ---------------- Trade On filter ----------------
@@ -604,25 +558,62 @@ function matchesTradeOnFilter(r, strats) {
 }
 
 // ---------------- Pre-Breakout filter ----------------
-// Separate from Advance Filter and Trade On, ANDed against both (another
-// .filter() in the same chain) -- "is this ticker's pre-breakout state ANY
-// of the checked ones" (OR among the checked states themselves). BEARISH is
-// deliberately not offered as a checkbox -- this tool is about finding
-// bullish setups, not filtering for bearish ones.
-const PREBREAK_STATES = ["NEUTRAL", "BULLISH", "COILING (BULL)", "PRE-BREAKOUT", "BREAKOUT"];
+// Separate from Advance Filter and Trade On, ANDed against both. Phase and
+// Coil Energy are minimum-threshold sliders; the 4 boolean metrics are
+// switches (off = no filter, on = require true). All 6 AND together. See
+// FILTER_ARCHITECTURE.md -- Phase's default (NEUTRAL) is a real floor, not
+// a true no-op: BEARISH tickers are hidden even with nothing else touched.
+const PHASE_STEPS = [
+  ["BEARISH", -2], ["NEUTRAL", 0], ["BULLISH", 1],
+  ["COILING (BULL)", 2], ["PRE-BREAKOUT", 4], ["BREAKOUT", 5],
+];
+const PHASE_DEFAULT_INDEX = 1; // NEUTRAL
+const COIL_STEPS = [0, 5, 8, 12, 15];
+const PREBREAK_SWITCHES = [
+  ["squeeze", "Volatility Squeeze", "bb_squeeze"],
+  ["volume", "Volume Dry-up", "vol_dry_up"],
+  ["resistance", "Clustering At Ceiling", "near_resistance"],
+  ["trend", "Trend Filter", "is_bullish_trend"],
+];
 
 function buildPrebreakPanel() {
-  const boxes = PREBREAK_STATES.map(state =>
-    `<label class="advcheck"><input type="checkbox" data-state="${state}"> ${state}</label>`
+  const phaseLabels = sliderStepsHtml(PHASE_STEPS.map(([name]) => name), "");
+  const coilLabels = COIL_STEPS.map((v, i) => `<span>${i === 0 ? "0(off)" : v + "+"}</span>`).join("");
+  const switches = PREBREAK_SWITCHES.map(([key, label]) =>
+    `<label class="switchrow">${label}<span class="switch"><input type="checkbox" data-switch="${key}"><span class="switchtrack"></span></span></label>`
   ).join("");
-  return `<div class="advmetric">${boxes}</div>`
-    + `<div class="advfilterfoot"><button id="prebreakClearBtn" class="clearfilters" type="button">Clear</button></div>`;
+  return `<div class="advsectionlabel">Phase</div>
+    <input type="range" id="prebreakPhaseSlider" min="0" max="${PHASE_STEPS.length - 1}" step="1" value="${PHASE_DEFAULT_INDEX}">
+    <div class="advslidersteps">${phaseLabels}</div>
+    <div class="switchgrid">${switches}</div>
+    <div class="advsectionlabel">Coil Energy Build-up</div>
+    <input type="range" id="prebreakCoilSlider" min="0" max="${COIL_STEPS.length - 1}" step="1" value="0">
+    <div class="advslidersteps">${coilLabels}</div>
+    <div class="advfilterfoot"><button id="prebreakClearBtn" class="clearfilters" type="button">Clear</button></div>`;
 }
-function readPrebreakStates() {
-  return [...document.querySelectorAll("#prebreakPanel input[type=checkbox]:checked")].map(cb => cb.dataset.state);
+function readPrebreakFilter() {
+  const phaseEl = document.getElementById("prebreakPhaseSlider");
+  const coilEl = document.getElementById("prebreakCoilSlider");
+  const switches = {};
+  for (const [key] of PREBREAK_SWITCHES) {
+    const cb = document.querySelector(`#prebreakPanel input[data-switch="${key}"]`);
+    switches[key] = !!(cb && cb.checked);
+  }
+  return {
+    phaseMin: PHASE_STEPS[phaseEl ? Number(phaseEl.value) : PHASE_DEFAULT_INDEX][1],
+    coilMin: COIL_STEPS[coilEl ? Number(coilEl.value) : 0],
+    switches,
+  };
 }
-function matchesPrebreakFilter(r, states) {
-  return states.length === 0 || (!!r.prebreak && states.includes(r.prebreak.state));
+function matchesPrebreakFilter(r, sel) {
+  const pb = r.prebreak;
+  if (!pb) return false;
+  if (pb.score < sel.phaseMin) return false;
+  if (pb.squeeze_counter < sel.coilMin) return false;
+  for (const [key, , field] of PREBREAK_SWITCHES) {
+    if (sel.switches[key] && !pb[field]) return false;
+  }
+  return true;
 }
 
 // n_trades for one strategy view -- VEXH's is a top-level field; A/D/VCP/VCPO
@@ -640,9 +631,13 @@ function strategyNTrades(r, key) {
 // whichever strategy happens to trade most often (VCP fires far more than
 // VEXH's strict 6-gate setup, so an unscoped "any" filter never reflects
 // VEXH's count at all). Falls back to all three only when neither Trade On
-// nor Advance Filter narrows to specific strategies.
-function activeMinTradesStrats(tradeOnStrats, advBlocks) {
-  const strats = new Set([...tradeOnStrats, ...advBlocks.map(b => b.strat)]);
+// nor Advance Filter narrows to specific strategies. Advance Filter's
+// Strategy radio only counts as "narrowing" once a slider has actually
+// moved off its true no-op default (0), not just because a radio is always
+// selected.
+function activeMinTradesStrats(tradeOnStrats, adv) {
+  const strats = new Set(tradeOnStrats);
+  if (adv.wrMin > WR_STEPS[0] || adv.pfMin > PF_STEPS[0]) strats.add(adv.strategy);
   return strats.size ? [...strats] : ["vexh", "vcp", "vcpo"];
 }
 function matchesMinTrades(r, minTrades, strats) {
@@ -922,38 +917,29 @@ function render(data) {
   // would otherwise accumulate forever -- start clean each time.
   modalStore = {};
   modalCounter = 0;
-  const minScore = Number(document.getElementById("scoreFilter").value);
   const minTrades = Number(document.getElementById("minTradesFilter").value) || 0;
-  const sortBy = document.getElementById("sortBy").value;
   const tickerQuery = document.getElementById("tickerSearch").value.trim().toUpperCase();
-  const advBlocks = readAdvFilterBlocks();
+  const adv = readAdvFilter();
   const tradeOnStrats = readTradeOnStrats();
-  const prebreakStates = readPrebreakStates();
-  const minTradesStrats = activeMinTradesStrats(tradeOnStrats, advBlocks);
-  // Every checked Advance Filter block narrows the result further (AND across
-  // blocks); within one block, checking multiple WR/PF tiers is OR. Trade On
-  // and Pre-Breakout are each their own filter ANDed against Advance Filter
-  // and each other (separate .filter() calls in the chain); within each,
-  // checking multiple strategies/states is OR.
+  const prebreak = readPrebreakFilter();
+  const minTradesStrats = activeMinTradesStrats(tradeOnStrats, adv);
+  // Advance Filter, Trade On, and Pre-Breakout each AND against each other
+  // (separate .filter() calls); within Trade On, checking multiple
+  // strategies is OR. No user-facing sort control anymore -- always sorted
+  // by days-in-trade, newest first (smallest days_held; no open trade
+  // anywhere sorts last).
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
-    .filter(r => pbScore(r) >= minScore)
     .filter(r => matchesMinTrades(r, minTrades, minTradesStrats))
-    .filter(r => matchesAdvFilter(r, advBlocks))
+    .filter(r => matchesAdvFilter(r, adv))
     .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
-    .filter(r => matchesPrebreakFilter(r, prebreakStates))
+    .filter(r => matchesPrebreakFilter(r, prebreak))
     .sort((a, b) => {
-      if (sortBy === "days_desc" || sortBy === "days_asc") {
-        const da = maxDaysInTrade(a), db = maxDaysInTrade(b);
-        // No open trade anywhere sorts last regardless of direction.
-        if (da === null && db === null) return 0;
-        if (da === null) return 1;
-        if (db === null) return -1;
-        return sortBy === "days_desc" ? db - da : da - db;
-      }
-      if (sortBy === "condition_desc") return pbScore(b) - pbScore(a);
-      if (sortBy === "condition_asc") return pbScore(a) - pbScore(b);
-      return (!!b.open_trade - !!a.open_trade) || (pbScore(b) - pbScore(a)) || (b.to_tp_pct - a.to_tp_pct);
+      const da = maxDaysInTrade(a), db = maxDaysInTrade(b);
+      if (da === null && db === null) return 0;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da - db;
     });
 
   lastFilteredRows = allRows;
@@ -1122,12 +1108,10 @@ async function load(refresh) {
   }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));
-for (const id of ["sortBy", "scoreFilter", "minTradesFilter"]) {
-  document.getElementById(id).addEventListener("change", () => {
-    currentPage = 1;
-    if (lastData) render(lastData);
-  });
-}
+document.getElementById("minTradesFilter").addEventListener("change", () => {
+  currentPage = 1;
+  if (lastData) render(lastData);
+});
 document.getElementById("tickerSearch").addEventListener("input", () => {
   currentPage = 1;
   if (lastData) render(lastData);
@@ -1145,15 +1129,24 @@ document.getElementById("filterToggle").addEventListener("click", () => {
 // build the panel HTML, keep the count badge in sync, toggle open/closed,
 // close on outside click, and re-render on every checkbox change. Returns
 // a clearAll() so the page-level "Clear filters" button can reset both.
-function setupFilterPopover(containerId, toggleId, panelId, countId, clearBtnId, buildFn) {
+function setupFilterPopover(containerId, toggleId, panelId, countId, clearBtnId, buildFn, opts = {}) {
   const panel = document.getElementById(panelId);
   const toggle = document.getElementById(toggleId);
   const container = document.getElementById(containerId);
   const countBadge = document.getElementById(countId);
   panel.innerHTML = buildFn();
 
+  // Default (checkbox-based, used by Trade On): count = checked boxes,
+  // reset = uncheck all. Advance Filter/Pre-Breakout pass their own
+  // countActive/resetToDefault since sliders/radios have no "unchecked"
+  // state -- "default" for them means "at the lowest/no-op position".
+  const countActive = opts.countActive
+    || (() => panel.querySelectorAll("input[type=checkbox]:checked").length);
+  const resetToDefault = opts.resetToDefault
+    || (() => panel.querySelectorAll("input[type=checkbox]:checked").forEach(cb => cb.checked = false));
+
   function updateCount() {
-    const n = panel.querySelectorAll("input[type=checkbox]:checked").length;
+    const n = countActive();
     countBadge.textContent = n;
     countBadge.style.display = n > 0 ? "inline-block" : "none";
   }
@@ -1162,12 +1155,12 @@ function setupFilterPopover(containerId, toggleId, panelId, countId, clearBtnId,
     toggle.setAttribute("aria-expanded", "false");
   }
   function clearAll() {
-    panel.querySelectorAll("input[type=checkbox]:checked").forEach(cb => cb.checked = false);
+    resetToDefault();
     updateCount();
   }
 
   panel.addEventListener("change", (e) => {
-    if (!e.target.matches('input[type=checkbox]')) return;
+    if (!e.target.matches('input')) return;
     updateCount();
     currentPage = 1;
     if (lastData) render(lastData);
@@ -1189,15 +1182,53 @@ function setupFilterPopover(containerId, toggleId, panelId, countId, clearBtnId,
   return clearAll;
 }
 const clearAdvFilter = setupFilterPopover("advFilter", "advFilterToggle", "advFilterPanel",
-  "advFilterCount", "advFilterClearBtn", buildAdvFilterPanel);
+  "advFilterCount", "advFilterClearBtn", buildAdvFilterPanel, {
+    // Strategy radio doesn't count as "active" on its own (always selected,
+    // filters nothing by itself) -- only the sliders moving off their true
+    // no-op (index 0) counts.
+    countActive: () => {
+      const adv = readAdvFilter();
+      return (adv.wrMin > WR_STEPS[0] ? 1 : 0) + (adv.pfMin > PF_STEPS[0] ? 1 : 0);
+    },
+    resetToDefault: () => {
+      const first = document.querySelector('#advFilterPanel input[name="advStrategy"]');
+      if (first) first.checked = true;
+      const wrEl = document.getElementById("advWrSlider");
+      const pfEl = document.getElementById("advPfSlider");
+      if (wrEl) wrEl.value = "0";
+      if (pfEl) pfEl.value = "0";
+    },
+  });
 const clearTradeOnFilter = setupFilterPopover("tradeOnFilter", "tradeOnToggle", "tradeOnPanel",
   "tradeOnCount", "tradeOnClearBtn", buildTradeOnPanel);
 const clearPrebreakFilter = setupFilterPopover("prebreakFilter", "prebreakToggle", "prebreakPanel",
-  "prebreakCount", "prebreakClearBtn", buildPrebreakPanel);
+  "prebreakCount", "prebreakClearBtn", buildPrebreakPanel, {
+    // Phase's default (NEUTRAL) is a real floor, not a true no-op (see
+    // FILTER_ARCHITECTURE.md), but it still doesn't count as "active" here
+    // -- the badge reflects deliberate user narrowing, not the built-in floor.
+    // Compared by INDEX (not value) since Phase can move either direction
+    // off its default (e.g. down to BEARISH), not just upward.
+    countActive: () => {
+      const phaseEl = document.getElementById("prebreakPhaseSlider");
+      const coilEl = document.getElementById("prebreakCoilSlider");
+      const phaseIdx = phaseEl ? Number(phaseEl.value) : PHASE_DEFAULT_INDEX;
+      const coilIdx = coilEl ? Number(coilEl.value) : 0;
+      let n = (phaseIdx !== PHASE_DEFAULT_INDEX ? 1 : 0) + (coilIdx !== 0 ? 1 : 0);
+      const sel = readPrebreakFilter();
+      for (const [key] of PREBREAK_SWITCHES) if (sel.switches[key]) n++;
+      return n;
+    },
+    resetToDefault: () => {
+      const phaseEl = document.getElementById("prebreakPhaseSlider");
+      const coilEl = document.getElementById("prebreakCoilSlider");
+      if (phaseEl) phaseEl.value = String(PHASE_DEFAULT_INDEX);
+      if (coilEl) coilEl.value = "0";
+      document.querySelectorAll('#prebreakPanel input[data-switch]').forEach(cb => cb.checked = false);
+    },
+  });
 
 document.getElementById("clearFilters").addEventListener("click", () => {
   document.getElementById("tickerSearch").value = "";
-  document.getElementById("scoreFilter").value = "-Infinity";
   document.getElementById("minTradesFilter").value = "0";
   clearAdvFilter();
   clearTradeOnFilter();
