@@ -3,13 +3,14 @@
 Run from the project root:
     .\\.venv\\Scripts\\python.exe -m uvicorn webapp.app:app --port 8123
 
-Architecture: fetch and compute are decoupled from the request path.
-webapp/data.py owns a shared raw-OHLCV cache (one fetch serves all four
-strategy evaluators, refreshed on a market-hours-aware schedule -- see that
-module for the exact rule). On startup, and whenever the background
-refresher decides the cache is stale, every ticker's full payload (all four
-strategies) is recomputed once and held in memory. A page request is then
-just a fast in-memory read -- no network call, no per-request backtest run.
+Architecture: fetch and compute are decoupled from the request path entirely
+-- see webapp/refresh_architecture.md for the full rules. webapp/data.py
+owns a shared raw-OHLCV cache, gap-fetched on a fixed background-loop
+cadence (no per-request or per-page-load fetch ever happens). Whatever
+tickers' prices actually changed get recomputed; everything else is reused
+from the last compute pass. A page request is always just a fast in-memory
+read -- no network call, no per-request backtest run, regardless of how
+stale or fresh the underlying data happens to be at that moment.
 """
 import importlib
 import os
@@ -38,12 +39,15 @@ TICKERS = tickers_module.TICKERS
 _computed: list[dict] = []
 _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
-# The data.py _fetched_at epoch each ticker's _computed entry was computed
-# against -- lets a fresh process tell "this cached result still matches the
-# current price data" (data.py's bars haven't been refetched for this ticker
-# since) apart from "this cached result is for stale/old price data and must
-# be recomputed," without needing to actually recompute to find out.
-_computed_source_fetch: dict[str, float] = {}
+# The last_bar_date each ticker's _computed entry was computed against --
+# lets a fresh process tell "this cached result still matches the current
+# price data" (db.get_last_bar_date(ticker) hasn't advanced since) apart
+# from "this cached result is for stale/old price data and must be
+# recomputed," without needing to actually recompute to find out. Keyed off
+# last_bar_date, NOT a fetch timestamp -- a gap-fetch attempt always
+# advances a fetch timestamp even when zero new rows come back, which would
+# make every ticker look "changed" on every background-loop wake.
+_computed_source_fetch: dict[str, str] = {}
 _compute_lock = threading.Lock()
 
 
@@ -139,9 +143,16 @@ def compute_all() -> None:
     warm and nothing had actually changed, since _computed itself used to
     be pure in-memory state with nothing backing it on disk.
 
-    Staleness is keyed off data.get_fetched_at(ticker) -- data.py's own
-    per-ticker fetch timestamp -- not a separate TTL, so this can never
-    disagree with what data.py considers "this ticker's bars are current.\""""
+    Staleness is keyed off db.get_last_bar_date(ticker) -- the most recent
+    date actually stored for this ticker -- NOT data.get_fetched_at(ticker).
+    A gap-fetch attempt (data.py's warm_cache, every background-loop wake)
+    always advances fetched_at, even when Yahoo returns zero new rows (e.g.
+    re-checking mid-day, weekends, market closed) -- keying off fetched_at
+    would treat every single wake as "new data" for every ticker and
+    recompute the entire universe every 2 hours regardless of whether
+    anything actually changed. last_bar_date only advances when a real new
+    row was actually stored, which is the correct "did this ticker's data
+    change" signal."""
     global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
 
     with _compute_lock:
@@ -151,19 +162,19 @@ def compute_all() -> None:
 
     to_compute = []
     reused_payloads: dict[str, dict] = {}
-    reused_source_fetch: dict[str, float] = {}
+    reused_source_fetch: dict[str, str] = {}
     reused_errors: dict[str, str] = {}
     for tk in TICKERS:
-        fetched_at = data.get_fetched_at(tk)
-        if fetched_at is not None and prior_source_fetch.get(tk) == fetched_at:
+        last_bar_date = db.get_last_bar_date(tk)
+        if last_bar_date is not None and prior_source_fetch.get(tk) == last_bar_date:
             # Bars unchanged since this ticker was last computed -- reuse
             # whichever prior outcome it had (a payload, or a compute error).
             if tk in prior_by_ticker:
                 reused_payloads[tk] = prior_by_ticker[tk]
-                reused_source_fetch[tk] = fetched_at
+                reused_source_fetch[tk] = last_bar_date
             elif tk in prior_errors:
                 reused_errors[tk] = prior_errors[tk]
-                reused_source_fetch[tk] = fetched_at
+                reused_source_fetch[tk] = last_bar_date
             else:
                 to_compute.append(tk)  # stale bookkeeping, e.g. after a cache format change
         else:
@@ -181,7 +192,7 @@ def compute_all() -> None:
                     with _compute_lock:
                         _compute_progress["done"] += 1
         with _compute_lock:
-            new_source_fetch = {tk: data.get_fetched_at(tk) for tk, payload, err in results
+            new_source_fetch = {tk: db.get_last_bar_date(tk) for tk, payload, err in results
                                  if payload is not None or err is not None}
             _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
             _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}
@@ -209,10 +220,10 @@ def rebuild_universe() -> str | None:
     failed re-screen shouldn't block refreshing prices for the existing
     universe. Returns an error string on failure, None on success.
 
-    Always does the real work when called -- the once-a-day gate lives in
-    the background loop (see _daily_universe_refresh_if_needed), not here,
-    so the manual Refresh button always forces a real re-screen regardless
-    of when the last automatic one ran."""
+    Always does the real work when called -- the interval gate lives in
+    the background loop (see _universe_refresh_if_needed), not here, so the
+    manual Refresh button always forces a real re-screen regardless of when
+    the last automatic one ran."""
     global TICKERS
     try:
         candidates = build_universe.fetch_candidates()
@@ -222,36 +233,39 @@ def rebuild_universe() -> str | None:
         return str(e) or type(e).__name__
     importlib.reload(tickers_module)
     TICKERS = tickers_module.TICKERS
-    db.set_last_screened_date(datetime.now(timezone.utc).date().isoformat())
+    db.set_last_screened_at(time.time())
     return None
 
 
-def _daily_universe_refresh_if_needed() -> None:
+UNIVERSE_REFRESH_INTERVAL = 2 * 60 * 60  # matches data.CHECK_INTERVAL -- see refresh_architecture.md
+
+
+def _universe_refresh_if_needed() -> None:
     """Automatic counterpart to the manual Refresh button -- re-screens the
-    ticker universe at most once per calendar day (UTC), so the list of
-    tradeable tickers doesn't go stale for weeks just because nobody clicked
-    Refresh, but also doesn't re-run the ~60-90s Yahoo screen on every
-    background-loop wakeup. Errors are logged, not raised -- a failed
-    automatic re-screen should never take down the price-refresh loop."""
-    today = datetime.now(timezone.utc).date().isoformat()
-    if db.get_last_screened_date() == today:
+    ticker universe at most once every UNIVERSE_REFRESH_INTERVAL, so the
+    list of tradeable tickers doesn't go stale for hours just because nobody
+    clicked Refresh, but also doesn't re-run the ~60-90s Yahoo screen on
+    every background-loop wakeup if wakeups ever become more frequent than
+    this interval. Errors are logged, not raised -- a failed automatic
+    re-screen should never take down the price-refresh loop."""
+    last_screened = db.get_last_screened_at()
+    if last_screened is not None and time.time() - last_screened < UNIVERSE_REFRESH_INTERVAL:
         return
     err = rebuild_universe()
     if err:
-        print(f"app: automatic daily universe refresh failed ({err}); keeping existing tickers.py")
+        print(f"app: automatic universe refresh failed ({err}); keeping existing tickers.py")
 
 
 def refresh_and_compute(force: bool = False) -> None:
-    """Fetch (if needed) then recompute. Called once at startup, by the
-    background refresher whenever webapp.data says the cache is stale, and
-    by the manual Refresh button (force=True, via ?refresh=1).
+    """Gap-fetch prices then recompute whatever changed. Called by the
+    background loop on every wake, and by the manual Refresh button
+    (force=True, via ?refresh=1).
 
-    force=False (startup/background): data.warm_cache() only re-fetches
-    tickers whose on-disk cached bars are missing/stale (see data.py's
-    per-ticker TTL) -- a container rebuild reuses today's already-fetched
-    bars instead of re-fetching all ~2000 tickers from Yahoo every deploy.
-    force=True: re-fetches every ticker regardless of TTL, same blocking
-    full refresh as before the disk cache existed.
+    force=False (background loop): data.warm_cache() gap-fetches every
+    ticker unconditionally (see data.py) -- cheap even for already-current
+    tickers, so no separate staleness check gates this call itself.
+    force=True (manual Refresh): every ticker's FULL history is re-fetched
+    regardless of what's already stored.
 
     Explicitly passes this module's live TICKERS -- data.py's own TICKERS
     is bound once at import time (`from webapp.tickers import TICKERS`), so
@@ -265,26 +279,21 @@ def refresh_and_compute(force: bool = False) -> None:
 
 @app.on_event("startup")
 def _on_startup():
-    # The first fetch+compute pass used to run inline here, which meant
-    # uvicorn didn't start accepting connections until it finished -- on a
-    # cold cache (first-ever start) that's a genuine unavoidable wait, but on
-    # every redeploy after that it was a needless delay before the port even
-    # opened, despite most/all data already being on disk. Now it runs in the
-    # background so the server (and /api/meta, /api/tickers) is reachable
-    # immediately; the frontend polls "asof"/"total_tickers" and shows a
-    # loading state until the first pass actually lands.
+    # See webapp/refresh_architecture.md. App load itself (the HTTP request
+    # path -- GET /api/tickers etc.) never fetches or computes anything, only
+    # reads whatever's already in memory/DB. This background thread is what
+    # actually keeps that data fresh, on its own schedule, decoupled from any
+    # request. The first pass runs immediately (not after waiting a full
+    # CHECK_INTERVAL) so a cold DB doesn't sit empty for 2 hours after a
+    # fresh deploy -- the frontend's loading state covers that first wait.
+    # Every pass after that fires on a fixed CHECK_INTERVAL cadence, not
+    # gated by any staleness check -- see data.warm_cache's docstring for why
+    # gap-fetching an already-current ticker is cheap enough not to skip.
     def loop():
-        refresh_and_compute()
         while True:
+            _universe_refresh_if_needed()
+            refresh_and_compute()
             time.sleep(data.CHECK_INTERVAL)
-            # Ticker universe: re-screened at most once per day, automatically
-            # -- was previously only refreshed by a manual Refresh click, so
-            # it could go stale for weeks with nobody noticing.
-            _daily_universe_refresh_if_needed()
-            # Prices: independent cadence (see data.is_stale) -- around
-            # market open, every couple hours while open, once after close.
-            if data.is_stale():
-                refresh_and_compute()
     threading.Thread(target=loop, daemon=True).start()
 
     # Per-ticker parameter optimization runs on its own slow (daily) cadence,

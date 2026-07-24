@@ -4,23 +4,27 @@ all tickers' price history in bulk; every strategy evaluator reads from this
 cache instead of hitting yfinance itself, so a page request never triggers a
 network call.
 
-Staleness rule: refetch every 2 hours while the US market is open, and at
-most once after each close (to pick up the final EOD candle) -- otherwise the
-cache is left alone, so a closed market means zero fetch traffic.
+Refresh rule (see webapp/refresh_architecture.md): the background loop wakes
+every CHECK_INTERVAL and gap-fetches every ticker unconditionally -- no
+same-day/market-hours staleness check. This is safe and cheap because a
+gap-fetch of an already-current ticker just asks Yahoo for "anything after
+my last stored date," gets an empty response, and bumps the fetch timestamp;
+there's no meaningful cost saved by skipping it. App load itself never
+fetches anything -- it's a pure read of whatever's already in the DB/memory;
+only the background loop (and the manual Refresh button) ever hit Yahoo.
 
 Persistence: webapp/db.py (SQLite) is the durable backing store. _raw_cache
 stays the hot-path in-memory dict a page request actually reads from (no
 per-request DB query) -- loaded from the DB once on import, kept in sync on
 every fetch. Fetches are incremental: each ticker only requests bars newer
 than its last stored date (db.get_last_bar_date), not the full history every
-time, so a normal day's refresh asks Yahoo for ~1 new row per ticker instead
-of ~4.5 years of unchanged history. See webapp/db_implementation.md.
+time, so a normal refresh asks Yahoo for ~1 new row per ticker instead of
+~4.5 years of unchanged history. See webapp/db_implementation.md.
 """
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -29,14 +33,11 @@ from yfinance.exceptions import YFRateLimitError
 import webapp.db as db
 from webapp.tickers import TICKERS
 
-ET = ZoneInfo("America/New_York")
-REFRESH_INTERVAL_OPEN = 2 * 60 * 60  # 2 hours while market open
-# How often the background loop wakes to check staleness. is_stale() only
-# returns True around market open, every REFRESH_INTERVAL_OPEN while open,
-# and once right after close -- 30 min is frequent enough to catch each of
-# those boundaries promptly without polling every few minutes all day for
-# a market that's closed 17+ hours out of 24.
-CHECK_INTERVAL = 30 * 60
+# How often the background loop wakes to gap-fetch prices, re-check the
+# ticker universe, and re-check earnings dates. One shared interval for all
+# three -- each still has its own independent all-or-nothing rule for
+# whether it actually does anything on a given wake (see refresh_architecture.md).
+CHECK_INTERVAL = 2 * 60 * 60
 FETCH_WORKERS = 30
 
 # Cold-fetch (ticker never seen before) starting point. Matches the
@@ -51,7 +52,8 @@ HISTORY_START = "2021-01-01"
 
 _raw_cache: dict[str, pd.DataFrame] = {}
 _raw_errors: dict[str, str] = {}
-_fetched_at: dict[str, float] = {}  # per-ticker fetch epoch, for the TTL check
+_fetched_at: dict[str, float] = {}  # per-ticker fetch epoch -- used by app.py to
+                                      # decide whether a computed result is stale
 _last_fetch_time: float | None = None
 _lock = threading.Lock()
 
@@ -81,55 +83,6 @@ def _load_from_db() -> None:
 
 
 _load_from_db()
-
-
-def _cache_is_fresh(ticker: str, now: float) -> bool:
-    """Same-day (ET) TTL -- a bar fetched anytime today is good enough; a
-    stale/missing one needs a real fetch. Matches is_stale()'s own
-    once-per-close-plus-2h-while-open cadence, just applied per ticker."""
-    fetched_at = _fetched_at.get(ticker)
-    if fetched_at is None or ticker not in _raw_cache:
-        return False
-    fetched_dt = datetime.fromtimestamp(fetched_at, ET)
-    now_dt = datetime.fromtimestamp(now, ET)
-    if fetched_dt.date() != now_dt.date():
-        return False
-    if market_is_open(now_dt) and now - fetched_at > REFRESH_INTERVAL_OPEN:
-        return False
-    return True
-
-
-def market_is_open(now: datetime | None = None) -> bool:
-    """US equity market hours, Mon-Fri 9:30-16:00 ET.
-    Known simplification: does not account for market holidays."""
-    now = (now or datetime.now(ET)).astimezone(ET)
-    if now.weekday() >= 5:
-        return False
-    open_t = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_t = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return open_t <= now <= close_t
-
-
-def _most_recent_close(now: datetime | None = None) -> datetime:
-    """The most recent weekday 16:00 ET that is <= now."""
-    now = (now or datetime.now(ET)).astimezone(ET)
-    d = now
-    for _ in range(10):  # a week+ of lookback is always enough
-        candidate = d.replace(hour=16, minute=0, second=0, microsecond=0)
-        if d.weekday() < 5 and candidate <= now:
-            return candidate
-        d = d - timedelta(days=1)
-    raise RuntimeError("could not find a recent market close")
-
-
-def is_stale() -> bool:
-    if _last_fetch_time is None:
-        return True
-    now = time.time()
-    if market_is_open():
-        return now - _last_fetch_time > REFRESH_INTERVAL_OPEN
-    last_fetch_dt = datetime.fromtimestamp(_last_fetch_time, ET)
-    return last_fetch_dt < _most_recent_close()
 
 
 FETCH_TIMEOUT = 20  # seconds -- one hung ticker must not block the whole bulk fetch
@@ -178,16 +131,16 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
     + background refresher) except for the manual Refresh button, which
     passes force=True and accepts the wait.
 
-    force=False (startup/background): only fetches tickers whose cached bars
-    are missing, corrupted (fails to load), or past today's TTL -- everything
-    else is served straight from RAM (backed by the DB). Of those that DO get
-    fetched, each requests only the gap since its last stored bar (see
-    _fetch_one), not the full history. force=True (Refresh button):
-    re-fetches everything, full history, regardless of TTL."""
+    Every ticker is gap-fetched on every call, no per-ticker staleness check
+    -- an already-current ticker's gap-fetch just returns an empty response
+    from Yahoo (see _fetch_one) and costs one cheap request, so there's
+    nothing meaningful to save by skipping it. force=False (background loop):
+    each ticker requests only the gap since its last stored bar. force=True
+    (manual Refresh button): every ticker gets the full HISTORY_START window
+    re-fetched, regardless of what's already stored."""
     global _last_fetch_time, _fetch_progress
-    tickers = tickers or TICKERS
+    to_fetch = tickers or TICKERS
     now = time.time()
-    to_fetch = tickers if force else [tk for tk in tickers if not _cache_is_fresh(tk, now)]
 
     if to_fetch:
         with _lock:
@@ -267,15 +220,3 @@ def get_fetched_at(ticker: str) -> float | None:
 
 def last_fetch_time() -> float | None:
     return _last_fetch_time
-
-
-def start_background_refresher() -> None:
-    """Daemon thread: sleeps, checks the staleness rule, refetches everything
-    if stale. No-ops (no network calls) whenever the market is closed and
-    we've already captured that day's close."""
-    def loop():
-        while True:
-            time.sleep(CHECK_INTERVAL)
-            if is_stale():
-                warm_cache()
-    threading.Thread(target=loop, daemon=True).start()

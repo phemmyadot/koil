@@ -58,7 +58,7 @@ def _init_schema() -> None:
             CREATE TABLE IF NOT EXISTS computed_results (
                 ticker TEXT PRIMARY KEY,
                 payload TEXT,
-                source_fetched_at REAL NOT NULL,
+                source_bar_date TEXT NOT NULL,
                 computed_at REAL NOT NULL,
                 error TEXT
             );
@@ -73,9 +73,58 @@ def _init_schema() -> None:
 
             CREATE TABLE IF NOT EXISTS universe_meta (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                last_screened_date TEXT NOT NULL
+                last_screened_at REAL NOT NULL
             );
         """)
+    _migrate_universe_meta_date_to_epoch()
+    _migrate_computed_results_fetch_epoch_to_bar_date()
+
+
+def _migrate_universe_meta_date_to_epoch() -> None:
+    """One-time migration: universe_meta used to store last_screened_date
+    (a date string, from the once-per-calendar-day rule) before the refresh
+    architecture changed to a rolling interval keyed off an epoch timestamp
+    (last_screened_at). If a pre-migration DB still has the old column,
+    convert its value to an epoch (midnight UTC of that date) so the new
+    interval check has something sane to compare against instead of
+    treating an old DB as "never screened" and forcing an immediate re-screen."""
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(universe_meta)").fetchall()]
+        if "last_screened_date" not in cols:
+            return
+        if "last_screened_at" not in cols:
+            # CREATE TABLE IF NOT EXISTS is a no-op against an existing
+            # pre-migration table, so the new column was never actually
+            # added -- add it explicitly before writing to it below.
+            _conn.execute("ALTER TABLE universe_meta ADD COLUMN last_screened_at REAL")
+        row = _conn.execute("SELECT last_screened_date FROM universe_meta WHERE id = 1").fetchone()
+        if row and row[0]:
+            # UPDATE, not INSERT -- the row already exists (we just read it),
+            # and the old last_screened_date column is still NOT NULL at
+            # this point, which an INSERT (even one that resolves via
+            # ON CONFLICT) would need to satisfy for the whole row.
+            epoch = pd.Timestamp(row[0], tz="UTC").timestamp()
+            _conn.execute("UPDATE universe_meta SET last_screened_at = ? WHERE id = 1", (epoch,))
+        _conn.execute("ALTER TABLE universe_meta DROP COLUMN last_screened_date")
+
+
+def _migrate_computed_results_fetch_epoch_to_bar_date() -> None:
+    """One-time migration: computed_results used to key staleness off
+    source_fetched_at (an epoch -- data.py's fetch attempt timestamp, which
+    advances on every gap-fetch even when zero new rows come back) before
+    switching to source_bar_date (the actual last stored bar date, which
+    only advances on real new data). There's no reliable way to derive what
+    each ticker's last_bar_date WAS at the time of that old fetch timestamp,
+    so rather than fabricate a mapping, this just clears the stale rows --
+    every ticker recomputes once on the next compute_all() pass (same cost
+    as any other cold-start recompute) and re-populates correctly keyed
+    going forward."""
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(computed_results)").fetchall()]
+        if "source_fetched_at" not in cols:
+            return
+        _conn.execute("DELETE FROM computed_results")
+        _conn.execute("ALTER TABLE computed_results DROP COLUMN source_fetched_at")
 
 
 _init_schema()
@@ -197,32 +246,35 @@ def load_all_fetch_meta() -> tuple[dict[str, float], dict[str, str]]:
 
 # ─────────────────────────── computed results ───────────────────────────
 
-def get_computed(ticker: str) -> tuple[dict | None, float | None, str | None]:
-    """Returns (payload, source_fetched_at, error) for one ticker. payload
-    is None if the last compute attempt for this ticker errored."""
+def get_computed(ticker: str) -> tuple[dict | None, str | None, str | None]:
+    """Returns (payload, source_bar_date, error) for one ticker. payload
+    is None if the last compute attempt for this ticker errored.
+    source_bar_date is the last_bar_date this result was computed from --
+    the staleness key: recompute only if get_last_bar_date(ticker) no
+    longer matches this value."""
     with _lock:
         row = _conn.execute(
-            "SELECT payload, source_fetched_at, error FROM computed_results WHERE ticker = ?",
+            "SELECT payload, source_bar_date, error FROM computed_results WHERE ticker = ?",
             (ticker,)
         ).fetchone()
     if row is None:
         return None, None, None
-    payload_json, source_fetched_at, error = row
+    payload_json, source_bar_date, error = row
     payload = json.loads(payload_json) if payload_json else None
-    return payload, source_fetched_at, error
+    return payload, source_bar_date, error
 
 
-def upsert_computed(ticker: str, payload: dict | None, source_fetched_at: float,
+def upsert_computed(ticker: str, payload: dict | None, source_bar_date: str,
                      computed_at: float, error: str | None) -> None:
     with _lock, _conn:
         _conn.execute("""
-            INSERT INTO computed_results (ticker, payload, source_fetched_at, computed_at, error)
+            INSERT INTO computed_results (ticker, payload, source_bar_date, computed_at, error)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
-                payload=excluded.payload, source_fetched_at=excluded.source_fetched_at,
+                payload=excluded.payload, source_bar_date=excluded.source_bar_date,
                 computed_at=excluded.computed_at, error=excluded.error
         """, (ticker, json.dumps(payload) if payload is not None else None,
-              source_fetched_at, computed_at, error))
+              source_bar_date, computed_at, error))
 
 
 def get_max_computed_at() -> float | None:
@@ -235,17 +287,17 @@ def get_max_computed_at() -> float | None:
     return row[0] if row and row[0] is not None else None
 
 
-def load_all_computed() -> tuple[list[dict], dict[str, str], dict[str, float]]:
-    """Returns (computed_list, errors_by_ticker, source_fetch_by_ticker) --
-    mirrors app.py's old _computed / _computed_errors / _computed_source_fetch
+def load_all_computed() -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    """Returns (computed_list, errors_by_ticker, source_bar_date_by_ticker)
+    -- mirrors app.py's _computed / _computed_errors / _computed_source_fetch
     for the startup bulk-load."""
     with _lock:
         rows = _conn.execute(
-            "SELECT ticker, payload, source_fetched_at, error FROM computed_results"
+            "SELECT ticker, payload, source_bar_date, error FROM computed_results"
         ).fetchall()
     computed, errors, source_fetch = [], {}, {}
-    for ticker, payload_json, source_fetched_at, error in rows:
-        source_fetch[ticker] = source_fetched_at
+    for ticker, payload_json, source_bar_date, error in rows:
+        source_fetch[ticker] = source_bar_date
         if payload_json:
             computed.append(json.loads(payload_json))
         if error:
@@ -295,15 +347,15 @@ def upsert_earnings_dates(ticker: str, dates: pd.DatetimeIndex, fetched_at: floa
 
 # ─────────────────────────── universe marker ───────────────────────────
 
-def get_last_screened_date() -> str | None:
+def get_last_screened_at() -> float | None:
     with _lock:
-        row = _conn.execute("SELECT last_screened_date FROM universe_meta WHERE id = 1").fetchone()
+        row = _conn.execute("SELECT last_screened_at FROM universe_meta WHERE id = 1").fetchone()
     return row[0] if row else None
 
 
-def set_last_screened_date(date: str) -> None:
+def set_last_screened_at(epoch: float) -> None:
     with _lock, _conn:
         _conn.execute("""
-            INSERT INTO universe_meta (id, last_screened_date) VALUES (1, ?)
-            ON CONFLICT(id) DO UPDATE SET last_screened_date=excluded.last_screened_date
-        """, (date,))
+            INSERT INTO universe_meta (id, last_screened_at) VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET last_screened_at=excluded.last_screened_at
+        """, (epoch,))

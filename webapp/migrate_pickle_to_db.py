@@ -16,6 +16,8 @@ deploy that includes it:
 import os
 import pickle
 
+import pandas as pd
+
 import webapp.db as db
 
 _HERE = os.path.dirname(__file__)
@@ -45,29 +47,21 @@ def migrate_price_cache() -> None:
 
 
 def migrate_computed_cache() -> None:
+    """Deliberately does NOT migrate old computed_cache.pkl rows: that file
+    keyed staleness off a fetch-attempt epoch, and the DB now keys off
+    last_bar_date (the actual last stored bar date) -- there's no reliable
+    way to derive one from the other after the fact. Every ticker just
+    recomputes once on the next compute_all() pass and re-populates
+    correctly keyed, same cost as any other cold-start recompute. Left as a
+    no-op (rather than removed) so migrate_pickle_to_db.py's __main__ block
+    doesn't need editing if this file happens to still be present."""
     path = os.path.join(_HERE, "computed_cache.pkl")
-    if not os.path.isfile(path):
+    if os.path.isfile(path):
+        print("migrate: computed_cache.pkl found but not migrated (staleness key changed "
+              "from fetch-epoch to last_bar_date) -- every ticker will recompute once "
+              "on the next pass instead.")
+    else:
         print("migrate: no computed_cache.pkl found, skipping.")
-        return
-    try:
-        with open(path, "rb") as f:
-            payload = pickle.load(f)
-    except Exception as e:  # noqa: BLE001
-        print(f"migrate: computed_cache.pkl unreadable ({e}), skipping.")
-        return
-    computed = payload.get("computed", [])
-    errors = payload.get("errors", {})
-    source_fetch = payload.get("source_fetch", {})
-    by_ticker = {p["ticker"]: p for p in computed}
-    n = 0
-    for ticker, sfa in source_fetch.items():
-        if sfa is None:
-            continue
-        payload_dict = by_ticker.get(ticker)
-        error = errors.get(ticker)
-        db.upsert_computed(ticker, payload_dict, sfa, sfa, error)
-        n += 1
-    print(f"migrate: computed_cache.pkl -> {n} tickers' computed results migrated.")
 
 
 def migrate_earnings_cache() -> None:
@@ -96,8 +90,9 @@ def migrate_universe_marker() -> None:
     with open(path) as f:
         date = f.read().strip()
     if date:
-        db.set_last_screened_date(date)
-        print(f"migrate: universe_last_screened.txt -> marker set to {date}.")
+        epoch = pd.Timestamp(date, tz="UTC").timestamp()
+        db.set_last_screened_at(epoch)
+        print(f"migrate: universe_last_screened.txt -> marker set to {date} ({epoch}).")
 
 
 if __name__ == "__main__":
