@@ -1585,11 +1585,12 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
-// Real server-side progress (data.fetch_progress via /api/meta) while a
-// fetch is actually in flight -- overrides the time-based estimate in
-// startProgress/tick with real "N of M" counts when available. Falls back
-// to whatever the estimate-based bar was already showing once the fetch
-// phase completes and compute_all() (no per-item counter) takes over.
+// Real server-side progress via /api/meta -- two distinct sequential stages
+// (fetch_progress then compute_progress, matching refresh_and_compute()'s
+// data.warm_cache() -> compute_all() order), each with its own label, instead
+// of one loader silently covering both with no indication which is running.
+// Overrides the time-based estimate in startProgress/tick with real "N of M"
+// counts when available.
 let realProgressTimer = null;
 function startRealProgressPolling() {
   const wrap = document.getElementById("progresswrap");
@@ -1600,10 +1601,15 @@ function startRealProgressPolling() {
     try {
       const meta = await (await fetch("/api/meta")).json();
       const fp = meta.fetch_progress;
-      if (fp && fp.total > 0) {
+      const cp = meta.compute_progress;
+      if (cp && cp.total > 0) {
+        const pct = Math.min(99, (cp.done / cp.total) * 100);
+        fill.style.width = pct.toFixed(1) + "%";
+        label.textContent = `Now computing… ${cp.done} of ${cp.total} tickers`;
+      } else if (fp && fp.total > 0) {
         const pct = Math.min(99, (fp.done / fp.total) * 100);
         fill.style.width = pct.toFixed(1) + "%";
-        label.textContent = `${fp.done} of ${fp.total} tickers fetched`;
+        label.textContent = `Now fetching tickers… ${fp.done} of ${fp.total}`;
       }
     } catch (e) { /* keep showing the last known state */ }
   };
@@ -1664,13 +1670,17 @@ async function load(refresh) {
     render(data);
     hidePageOverlay();
     btn.disabled = false;
-    if (refresh) finishProgress();
+    // Unconditional, not gated on refresh -- startRealProgressPolling() shows
+    // progresswrap on BOTH the manual-Refresh and cold-start paths, so hiding
+    // it only "if (refresh)" left it stuck visible forever once a cold start
+    // finished (the code path that never called finishProgress() at all).
+    finishProgress();
   } catch (e) {
     stopRealProgressPolling();
     document.getElementById("meta").textContent = "failed to load: " + e;
     hidePageOverlay();
     btn.disabled = false;
-    if (refresh) finishProgress();
+    finishProgress();
   }
 }
 document.getElementById("refresh").addEventListener("click", () => load(true));

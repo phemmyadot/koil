@@ -15,7 +15,7 @@ import importlib
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -38,6 +38,17 @@ _computed: list[dict] = []
 _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
 _compute_lock = threading.Lock()
+
+# Live progress for the current compute_all() call, if one is in flight --
+# mirrors data.py's fetch_progress so the frontend can show a separate
+# "now computing" stage after "now fetching tickers" finishes, instead of
+# one loader that silently covers both phases.
+_compute_progress: dict[str, int] | None = None
+
+
+def compute_progress() -> dict[str, int] | None:
+    with _compute_lock:
+        return dict(_compute_progress) if _compute_progress is not None else None
 
 _STRATEGY_MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
 
@@ -92,13 +103,24 @@ def compute_all() -> None:
     """Recompute every ticker's full payload from whatever's currently in the
     raw cache. Pure CPU work, no network -- safe to call from a background
     thread without blocking request handling."""
-    global _computed, _computed_errors, _computed_asof
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        results = list(pool.map(_compute_one, TICKERS))
+    global _computed, _computed_errors, _computed_asof, _compute_progress
     with _compute_lock:
-        _computed = [p for _, p, _ in results if p is not None]
-        _computed_errors = {t: e for t, _, e in results if e is not None}
-        _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _compute_progress = {"done": 0, "total": len(TICKERS)}
+    try:
+        results = []
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            futures = [pool.submit(_compute_one, tk) for tk in TICKERS]
+            for future in as_completed(futures):
+                results.append(future.result())
+                with _compute_lock:
+                    _compute_progress["done"] += 1
+        with _compute_lock:
+            _computed = [p for _, p, _ in results if p is not None]
+            _computed_errors = {t: e for t, _, e in results if e is not None}
+            _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    finally:
+        with _compute_lock:
+            _compute_progress = None
 
 
 _UNIVERSE_DATE_PATH = os.path.join(os.path.dirname(__file__), "universe_last_screened.txt")
@@ -218,6 +240,14 @@ def meta():
         # lets the frontend show real "N of M loaded" progress during the
         # first post-deploy fetch instead of a bare spinner.
         "fetch_progress": data.fetch_progress(),
+        # Same shape, next stage -- non-null only while compute_all() is
+        # actively running the strategy evaluations over already-fetched
+        # bars. Fetching and computing are sequential (refresh_and_compute
+        # calls warm_cache then compute_all), so these two are never both
+        # non-null at once -- frontend can show "now fetching" then "now
+        # computing" as two distinct stages instead of one loader covering
+        # both with no visibility into which phase is actually running.
+        "compute_progress": compute_progress(),
     }
 
 
