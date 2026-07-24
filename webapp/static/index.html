@@ -1585,10 +1585,18 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
-// A plain page load just reads the server's already-precomputed cache (fast).
+// A plain page load usually just reads the server's already-precomputed
+// cache (fast) -- but the server now starts accepting requests immediately
+// on boot rather than blocking startup on the first fetch+compute pass (see
+// app.py's _on_startup), so right after a fresh deploy/restart the very
+// first request(s) can legitimately come back with asof=null and zero
+// tickers while that first pass is still running in the background. Poll in
+// that case instead of rendering an empty grid.
 // refresh=1 forces the server to re-fetch + recompute the WHOLE universe
 // synchronously before responding, which is genuinely slow -- that's the
-// only case that still needs the progress bar / overlay.
+// other case that needs the progress bar / overlay.
+const FIRST_LOAD_POLL_MS = 3000;
+
 async function load(refresh) {
   const btn = document.getElementById("refresh");
   btn.disabled = true;
@@ -1606,10 +1614,24 @@ async function load(refresh) {
     const res = await fetch("/api/tickers" + params);
     const data = await res.json();
     if (refresh) updateAvgMsPerTicker(Date.now() - t0, tickerCount);
+
+    if (!refresh && data.asof === null) {
+      // Server is up but hasn't finished its first background fetch+compute
+      // pass yet -- show a loader and poll instead of rendering nothing.
+      // Deliberately skips the finally block below (early return, not a
+      // fallthrough) so it doesn't hide the overlay it just showed.
+      showPageOverlay("Loading first dataset…");
+      btn.disabled = false;
+      setTimeout(() => load(false), FIRST_LOAD_POLL_MS);
+      return;
+    }
+
     render(data);
+    hidePageOverlay();
+    btn.disabled = false;
+    if (refresh) finishProgress();
   } catch (e) {
     document.getElementById("meta").textContent = "failed to load: " + e;
-  } finally {
     hidePageOverlay();
     btn.disabled = false;
     if (refresh) finishProgress();

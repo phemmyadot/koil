@@ -182,9 +182,16 @@ def refresh_and_compute(force: bool = False) -> None:
 
 @app.on_event("startup")
 def _on_startup():
-    refresh_and_compute()
-
+    # The first fetch+compute pass used to run inline here, which meant
+    # uvicorn didn't start accepting connections until it finished -- on a
+    # cold cache (first-ever start) that's a genuine unavoidable wait, but on
+    # every redeploy after that it was a needless delay before the port even
+    # opened, despite most/all data already being on disk. Now it runs in the
+    # background so the server (and /api/meta, /api/tickers) is reachable
+    # immediately; the frontend polls "asof"/"total_tickers" and shows a
+    # loading state until the first pass actually lands.
     def loop():
+        refresh_and_compute()
         while True:
             time.sleep(data.CHECK_INTERVAL)
             # Ticker universe: re-screened at most once per day, automatically
