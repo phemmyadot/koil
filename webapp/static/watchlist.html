@@ -137,23 +137,33 @@ function updateColActions(name) {
 }
 
 // Same color grading/badge shape as the dashboard's statBadges() -- O is
-// blue while active else omitted, T is neutral gray, WR/PF get their own
-// independent ok/mid/no grading.
+// blue while active else omitted, WR/PF/T each get their own independent
+// grading. WR/PF tiers mirror the scoring system's dimension-1 breakpoints
+// (3/2/1/0 points at 75/70/65% WR, 3.5/2.5/2.0 PF). Keep in sync with
+// index.html's copy of these same four functions -- see color-code.md.
 function wrColorClass(wr) {
-  if (wr >= 70) return "ok";
-  if (wr >= 50) return "mid";
+  if (wr >= 75) return "ok";
+  if (wr >= 70) return "mid";
+  if (wr >= 65) return "neutral";
   return "no";
 }
 function pfColorClass(pf) {
-  if (pf >= 2.0) return "ok";
-  if (pf >= 1.0) return "mid";
+  if (pf >= 3.5) return "ok";
+  if (pf >= 2.5) return "mid";
+  if (pf >= 2.0) return "neutral";
+  return "no";
+}
+function tradeCountColorClass(n) {
+  if (n >= 25) return "ok";
+  if (n >= 20) return "mid";
+  if (n >= 15) return "neutral";
   return "no";
 }
 function statBadgesHtml(active, days, nTrades, wr, pf) {
   const wins = Math.round(wr / 100 * nTrades);
   const badges = [];
   if (active) badges.push(["active", `O-${days}`]);
-  badges.push(["neutral", `T${nTrades}`]);
+  badges.push([tradeCountColorClass(nTrades), `T${nTrades}`]);
   badges.push([wrColorClass(wr), `WR${wr}%(${wins}/${nTrades})`]);
   badges.push([pfColorClass(pf), `PF${pf}`]);
   return `<span class="badgerow">` + badges.map(([cls, text]) =>
