@@ -1646,6 +1646,15 @@ function stopRealProgressPolling() {
 // synchronously before responding, which is genuinely slow -- that's the
 // other case that needs the progress bar / overlay.
 const FIRST_LOAD_POLL_MS = 3000;
+// Ceiling on how long the cold-start poll will retry before giving up and
+// showing an honest "still not ready" message instead of polling forever
+// with no feedback. 100 * 3s = 5 minutes -- generous (a real cold fetch+
+// compute of ~2000 tickers can take a few minutes), but finite: if the
+// backend genuinely never finishes (e.g. a startup bug leaves asof stuck
+// at null), the user sees that something is wrong instead of a page that
+// looks frozen.
+const FIRST_LOAD_MAX_ATTEMPTS = 100;
+let firstLoadAttempts = 0;
 
 async function load(refresh) {
   const btn = document.getElementById("refresh");
@@ -1672,6 +1681,18 @@ async function load(refresh) {
     if (refresh) updateAvgMsPerTicker(Date.now() - t0, tickerCount);
 
     if (!refresh && data.asof === null) {
+      firstLoadAttempts++;
+      if (firstLoadAttempts >= FIRST_LOAD_MAX_ATTEMPTS) {
+        // Genuinely give up rather than poll forever -- the backend has had
+        // FIRST_LOAD_MAX_ATTEMPTS * FIRST_LOAD_POLL_MS (5 min) and still
+        // reports nothing computed. Show an honest, actionable message
+        // instead of leaving the loader spinning indefinitely, which reads
+        // as "the page is frozen" with no way to tell what's actually wrong.
+        stopRealProgressPolling();
+        showPageOverlay("Still waiting on the server after 5 minutes — something may be stuck. Reloading the page will try again.");
+        btn.disabled = false;
+        return;
+      }
       // Server is up but hasn't finished its first background fetch+compute
       // pass yet -- show a loader and poll instead of rendering nothing.
       // Deliberately skips the finally block below (early return, not a
@@ -1687,6 +1708,7 @@ async function load(refresh) {
       return;
     }
 
+    firstLoadAttempts = 0;
     stopRealProgressPolling();
     render(data);
     hidePageOverlay();

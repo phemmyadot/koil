@@ -155,6 +155,19 @@ def has_any_bars() -> bool:
     return row is not None
 
 
+def has_any_computed() -> bool:
+    """True if computed_results has ANY row at all -- same pure existence
+    check as has_any_bars(), for the same reason: bars can exist (so the
+    startup fetch is correctly skipped) while computed_results is still
+    empty (e.g. wiped by a schema migration, or a prior process crashed
+    before ever completing a compute pass) -- without this, the app would
+    sit with asof=null until the next 2h loop wake, with nothing to trigger
+    a compute pass in the meantime."""
+    with _lock:
+        row = _conn.execute("SELECT 1 FROM computed_results LIMIT 1").fetchone()
+    return row is not None
+
+
 def get_last_bar_date(ticker: str) -> str | None:
     """Most recent date actually stored for this ticker -- the anchor for
     incremental fetch (fetch only start=last_bar_date+1 onward). None if

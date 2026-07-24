@@ -342,17 +342,15 @@ def _on_startup():
     # path -- GET /api/tickers etc.) never fetches or computes anything, only
     # reads whatever's already in memory/DB.
     #
-    # Simple, deliberate rule (no staleness/duration math here at all): if
-    # ANY data already exists in the DB, do nothing on startup -- just return
-    # and let the 2h background loop handle freshness in its own time,
-    # whenever it naturally gets to it. Only a genuinely EMPTY DB (nothing in
-    # `bars` at all -- true first-ever start) triggers an eager fetch+compute
-    # before the loop begins, so a fresh deploy doesn't sit with a totally
-    # blank page for up to 2 hours. This intentionally does NOT special-case
-    # "bars exist but computed_results doesn't" -- that's left for the loop's
-    # normal cadence to catch up, on purpose, to keep this check a single
-    # existence test rather than reasoning about which of several tables
-    # might be behind.
+    # Simple, deliberate rule (no staleness/duration math here at all): two
+    # independent existence checks, not one. If bars is completely empty
+    # (true first-ever start), fetch+compute everything. Separately, if
+    # computed_results is empty even though bars has data (e.g. wiped by a
+    # schema migration, or a prior process crashed before ever completing a
+    # compute pass), run compute_all() alone -- no fetch needed, bars are
+    # already there. Without this second check, "bars exist" alone would
+    # make startup do nothing, and asof would stay null (frontend stuck
+    # polling forever) until the next 2h loop wake happened to run compute.
     if not db.has_any_bars():
         print("app: DB is empty (no bars at all) -- running an eager fetch+compute "
               "before starting the background loop.")
@@ -361,6 +359,14 @@ def _on_startup():
             refresh_and_compute()
         except Exception as e:  # noqa: BLE001 - the loop below still starts either way
             print(f"app: eager startup fetch+compute failed ({e}); "
+                  f"the background loop will retry on its normal cadence.")
+    elif not db.has_any_computed():
+        print("app: bars exist but computed_results is empty -- running compute_all() "
+              "immediately (no fetch needed) before starting the background loop.")
+        try:
+            compute_all()
+        except Exception as e:  # noqa: BLE001 - the loop below still starts either way
+            print(f"app: eager startup compute_all() failed ({e}); "
                   f"the background loop will retry on its normal cadence.")
 
     def loop():
