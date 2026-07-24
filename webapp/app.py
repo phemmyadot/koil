@@ -19,6 +19,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+# _compute_one() is CPU-bound (backtesting.py's Backtest.run() dominates),
+# with a small I/O component (local SQLite lookups for bars/earnings, not
+# network) -- unlike data.py's FETCH_WORKERS=30 (network-bound, IO-wait
+# dominates, so a high worker count is free), too many compute workers on a
+# small box just adds context-switching overhead without real parallelism.
+# os.cpu_count() can return None in some sandboxed/containerized
+# environments; fall back to a reasonable default rather than crash.
+COMPUTE_WORKERS = os.cpu_count() or 4
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
@@ -185,13 +194,20 @@ def compute_all() -> None:
     try:
         results = []
         if to_compute:
-            with ThreadPoolExecutor(max_workers=16) as pool:
+            with ThreadPoolExecutor(max_workers=COMPUTE_WORKERS) as pool:
                 futures = [pool.submit(_compute_one, tk) for tk in to_compute]
                 for future in as_completed(futures):
                     results.append(future.result())
                     with _compute_lock:
                         _compute_progress["done"] += 1
         with _compute_lock:
+            # Lock-ordering invariant: _compute_lock is always acquired
+            # before db._lock (never the reverse) -- db.get_last_bar_date()
+            # and db.upsert_computed() below both acquire db._lock
+            # internally while _compute_lock is already held. If any future
+            # codepath ever needs both locks in the opposite order, this
+            # becomes a deadlock risk. Keep _compute_lock as the outer lock
+            # everywhere both are needed together.
             new_source_fetch = {tk: db.get_last_bar_date(tk) for tk, payload, err in results
                                  if payload is not None or err is not None}
             _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
