@@ -913,14 +913,18 @@ function showPlCalculator() {
 // by how good the historical result actually is (independent of live status).
 // qualityLabel is the single source of truth for the good/fair/bad thresholds --
 // both the chip color (via QUALITY_CSS) and the strategy score filter read it.
+// Same PF/WR breakpoints as pfColorClass/wrColorClass (scoring system's
+// dimension-1 tiers) so this modal's chip color agrees with the card badges
+// instead of using its own separate scale. See color-code.md.
 function qualityLabel(pf, wr) {
-  if (pf >= 2.0 && wr >= 45) return "good";
-  if (pf >= 1.0) return "fair";
+  if (pf >= 3.5 && wr >= 75) return "good";
+  if (pf >= 2.5 && wr >= 70) return "fair";
+  if (pf >= 2.0 && wr >= 65) return "borderline";
   return "bad";
 }
-const QUALITY_CSS = { good: "ok", fair: "mid", bad: "no" };
+const QUALITY_CSS = { good: "ok", fair: "mid", borderline: "neutral", bad: "no" };
 
-const QUALITY_RANK = { bad: 0, fair: 1, good: 2 };
+const QUALITY_RANK = { bad: 0, borderline: 1, fair: 2, good: 3 };
 
 // ---------------- Advance Filter ----------------
 // Flat: one Strategy radio (which strategy's stats to read) + Win Rate AND
