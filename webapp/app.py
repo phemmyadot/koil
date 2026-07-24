@@ -108,17 +108,15 @@ def compute_progress() -> dict[str, int] | None:
 _STRATEGY_MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
 
 
-def _eval_other_strategy(key: str, module, ticker: str, bars) -> dict | None:
+def _eval_other_strategy(key: str, module, ticker: str, bars, ind: dict | None) -> dict | None:
     """Independently error-isolated -- one strategy failing on a ticker
     shouldn't drop the other strategies' results for that same ticker.
-    Note: "optimized" is NOT looked up here -- it's overlaid fresh at request
-    time (see _with_fresh_optimized below), since this function's result is
-    baked into the static _computed snapshot at compute_all() time, which
-    only reruns every 2h/on refresh. The optimizer finishes on its own,
-    unrelated cadence, so baking its result in here would mean newly-swept
-    configs sit invisible until the next unrelated price refresh."""
+    "optimized" is overlaid fresh at request time instead (see
+    _with_fresh_optimized), not baked in here.
+
+    ind: shared pre-computed indicators (see _compute_one)."""
     try:
-        baseline = module.evaluate(ticker, bars)
+        baseline = module.evaluate(ticker, bars, ind=ind)
     except Exception:  # noqa: BLE001
         return None
     return {"baseline": baseline, "baseline_config": module.BASELINE_CONFIG}
@@ -130,8 +128,15 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
         return ticker, None, data.get_error(ticker) or "no data"
     try:
         payload = evaluate(ticker, bars)
+        # VCP/VCPO need identical ATR/EMA/resistance -- compute once, share
+        # the dict, instead of each evaluate() recomputing it (~17ms/ticker
+        # saved). Falls back to per-module computation (ind=None) on failure.
+        try:
+            shared_ind = strategy_vcp.compute_indicators(bars)
+        except Exception:  # noqa: BLE001
+            shared_ind = None
         for key, module in _STRATEGY_MODULES.items():
-            payload[key] = _eval_other_strategy(key, module, ticker, bars)
+            payload[key] = _eval_other_strategy(key, module, ticker, bars, shared_ind)
         # Ticker-level, not strategy-specific -- applies across VEXH/VCP/VCPO
         # alike, same as the Pine indicator overlays regardless of which
         # strategy you're trading. A failure here shouldn't drop the ticker.

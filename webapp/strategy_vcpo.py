@@ -288,11 +288,14 @@ def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_
     return best
 
 
-def evaluate(ticker: str, df: pd.DataFrame) -> dict:
+def evaluate(ticker: str, df: pd.DataFrame, ind: dict | None = None) -> dict:
+    """ind: optional pre-computed indicators (VCP's compute_indicators() is a
+    safe superset -- see app.py's _compute_one). Computed here if omitted."""
     if len(df) < 250:
         raise ValueError("insufficient history")
 
-    ind = compute_indicators(df)
+    if ind is None:
+        ind = compute_indicators(df)
     trades, signal_today, in_position, tp_hit, open_position = run(df, ind)
 
     stats = _summarize(trades)

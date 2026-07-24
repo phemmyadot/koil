@@ -10,11 +10,11 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import pandas as pd
-from backtesting import Backtest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from p import PortfolioSizedEngine, RSI, ATR, fetch_earnings_dates, earnings_flags_from_dates  # noqa: E402
 import webapp.db as db  # noqa: E402
+import webapp.vexh_engine as vexh_engine  # noqa: E402
 
 warnings.filterwarnings("ignore", message="Some trades remain open")
 
@@ -64,75 +64,65 @@ def _with_earnings_flags(bars: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return df
 
 
-def _summarize_trades(closed) -> dict:
-    """PF/WR from closed trades' ReturnPct -- same percentage-based formula
-    strategy_a.py/strategy_d.py/strategy_vcp.py use, so Exhaustion's baseline
-    chip can be colored on the same good/fair/bad scale as the other 3."""
-    if len(closed) == 0:
-        return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0}
-    returns_pct = closed.ReturnPct * 100
-    wins = returns_pct[returns_pct > 0]
-    losses = returns_pct[returns_pct <= 0]
-    gross_win = float(wins.sum())
-    gross_loss = float(-losses.sum())
-    pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
-    wr = len(wins) / len(returns_pct) * 100
-    return {"n_trades": len(returns_pct), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
-
-
 def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict], dict]:
-    """Single backtest run (finalize_trades=False): closed trades come from
-    result["_trades"] as before; a still-open position (if any) is read
-    directly off the live strategy via result["_strategy"].trades instead of
-    running a second finalize_trades=True backtest just to diff row counts.
-    Validated to produce identical EntryTime/EntryPrice/closed-trade sets as
-    the old two-run approach -- halves this function's cost (backtesting.py's
-    event-driven Backtest.run() dominates webapp/app.py's _compute_one, and
-    this was the only place it ran twice per ticker).
+    """Native-loop port of backtesting.py's Backtest.run() (see
+    webapp/vexh_engine.py for the exact fill-semantics mapping) -- avoids
+    the library's general-purpose order/broker machinery, which dominated
+    this function's cost. Validated byte-identical against the old
+    Backtest.run()-based version across the full cached universe.
     Returns (open_trade, avg_trade_days, last_5_closed_trades, trade_stats)."""
-    bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-                  trade_on_close=True, finalize_trades=False)
-    result = bt.run()
-    closed = result["_trades"]
+    closed_trades, open_pos = vexh_engine.run(df)
 
-    avg_trade_days = (round(float(closed.Duration.dt.days.mean()), 1)
-                       if len(closed) else None)
-    last5 = closed.tail(5)
+    avg_trade_days = (round(sum(t["duration_days"] for t in closed_trades) / len(closed_trades), 1)
+                       if closed_trades else None)
     last5_trades = [
-        {"tp_pct": round(100 * row.ReturnPct, 2), "days": int(row.Duration.days)}
-        for row in last5.itertuples()
+        {"tp_pct": round(100 * t["return_pct"], 2), "days": t["duration_days"]}
+        for t in closed_trades[-5:]
     ]
-    trade_stats = _summarize_trades(closed)
+    trade_stats = _summarize_trades_native(closed_trades)
 
     open_trade = None
-    live_trades = result["_strategy"].trades  # unclosed positions, live off the strategy
-    if live_trades:
-        tr = live_trades[0]
+    if open_pos is not None:
+        entry_time = df.index[open_pos["entry_bar"]]
+        entry_price = open_pos["entry_price"]
         basis = df.Close.rolling(E.bb_len).mean()
-        target = float(basis.loc[tr.entry_time])
+        target = float(basis.loc[entry_time])
         last_close = float(df.Close.iloc[-1])
-        bars_held = int(df.index.get_loc(df.index[-1]) - df.index.get_loc(tr.entry_time))
+        bars_held = int(df.index.get_loc(df.index[-1]) - open_pos["entry_bar"])
 
         macro_ma = df.Close.rolling(E.sma_slow_len).mean()
         atr = ATR(df.High, df.Low, df.Close, 14)
-        entry_atr = float(atr.loc[tr.entry_time])
-        entry_dist_atr = ((float(tr.entry_price) - float(macro_ma.loc[tr.entry_time])) / entry_atr
+        entry_atr = float(atr.loc[entry_time])
+        entry_dist_atr = ((entry_price - float(macro_ma.loc[entry_time])) / entry_atr
                            if entry_atr > 0 else 0.0)
         entry_tier = _dist_confidence_tier(entry_dist_atr)
         earnings_soon = bool(df["EarningsImminent"].iloc[-1])
 
         advice, advice_reason = _trade_advice(target, last_close, bars_held, entry_tier, earnings_soon)
         open_trade = {
-            "entry_date": str(tr.entry_time.date()),
-            "entry_price": round(float(tr.entry_price), 4),
+            "entry_date": str(entry_time.date()),
+            "entry_price": round(entry_price, 4),
             "target": round(target, 4),
             "bars_held": bars_held,
-            "unrealized_pct": round(100 * (last_close / float(tr.entry_price) - 1), 2),
+            "unrealized_pct": round(100 * (last_close / entry_price - 1), 2),
             "entry_confidence": entry_tier,
             "advice": advice,
             "advice_reason": advice_reason,
         }
     return open_trade, avg_trade_days, last5_trades, trade_stats
+
+
+def _summarize_trades_native(closed_trades: list[dict]) -> dict:
+    if not closed_trades:
+        return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0}
+    returns_pct = [t["return_pct"] * 100 for t in closed_trades]
+    wins = [r for r in returns_pct if r > 0]
+    losses = [r for r in returns_pct if r <= 0]
+    gross_win = sum(wins)
+    gross_loss = -sum(losses)
+    pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
+    wr = len(wins) / len(returns_pct) * 100
+    return {"n_trades": len(returns_pct), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
 
 
 def _trade_advice(target: float, last_close: float, bars_held: int, entry_tier: str,
