@@ -219,9 +219,24 @@ def compute_all() -> None:
             # reused entries are already correct in the DB from a prior pass,
             # so this is a targeted per-ticker upsert, not a whole-table
             # rewrite (the whole point of moving off a whole-blob pickle).
+            # One bad ticker's DB write must not abort the whole pass -- that
+            # used to leave EVERY ticker's result unpersisted (nothing after
+            # the failing upsert in this loop ran, and _computed/
+            # _computed_source_fetch above were already assigned in-memory
+            # but never saved), so the next pass had nothing to reuse from
+            # and silently recomputed everything again, forever.
             for tk, payload, err in results:
                 if payload is not None or err is not None:
-                    db.upsert_computed(tk, payload, new_source_fetch[tk], computed_at, err)
+                    source_bar_date = new_source_fetch.get(tk)
+                    if source_bar_date is None:
+                        print(f"app: skipping DB persist for {tk} -- no last_bar_date "
+                              f"available (bars missing or not yet recorded); will retry next pass.")
+                        continue
+                    try:
+                        db.upsert_computed(tk, payload, source_bar_date, computed_at, err)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"app: db.upsert_computed failed for {tk} ({e}); "
+                              f"continuing with the rest of this pass.")
     finally:
         with _compute_lock:
             _compute_progress = None

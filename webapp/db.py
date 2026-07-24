@@ -168,12 +168,38 @@ def upsert_bars(ticker: str, df: pd.DataFrame, fetched_at: float) -> None:
     cases correct without the caller needing to know which happened."""
     if df.empty:
         # Nothing new -- still bump last_fetched_at so the TTL check knows
-        # this ticker was actually re-checked just now, not skipped.
+        # this ticker was actually re-checked just now, not skipped. Must be
+        # an upsert, not a bare UPDATE: a bare UPDATE silently affects 0 rows
+        # if this ticker somehow has no fetch_meta row yet (e.g. bars were
+        # written some other way, or a prior write was interrupted), leaving
+        # last_bar_date permanently NULL/missing even though real bars exist
+        # -- which crashes compute_all() with a NOT NULL constraint failure
+        # the next time this ticker is (re)computed. Derive last_bar_date
+        # from the bars table itself if there's no existing fetch_meta row
+        # to preserve it from.
         with _lock, _conn:
-            _conn.execute("""
-                UPDATE fetch_meta SET last_fetched_at = ?, last_error = NULL
-                WHERE ticker = ?
-            """, (fetched_at, ticker))
+            existing = _conn.execute(
+                "SELECT last_bar_date FROM fetch_meta WHERE ticker = ?", (ticker,)
+            ).fetchone()
+            if existing:
+                _conn.execute("""
+                    UPDATE fetch_meta SET last_fetched_at = ?, last_error = NULL
+                    WHERE ticker = ?
+                """, (fetched_at, ticker))
+            else:
+                row = _conn.execute(
+                    "SELECT MAX(date) FROM bars WHERE ticker = ?", (ticker,)
+                ).fetchone()
+                last_bar_date = row[0] if row and row[0] else None
+                if last_bar_date is not None:
+                    _conn.execute("""
+                        INSERT INTO fetch_meta (ticker, last_fetched_at, last_bar_date, last_error)
+                        VALUES (?, ?, ?, NULL)
+                        ON CONFLICT(ticker) DO UPDATE SET
+                            last_fetched_at=excluded.last_fetched_at, last_error=NULL
+                    """, (ticker, fetched_at, last_bar_date))
+                # else: no bars and no fetch_meta row and an empty fetch --
+                # genuinely nothing to record yet, leave it as a true miss.
         return
 
     rows = [
