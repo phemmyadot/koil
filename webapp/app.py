@@ -314,13 +314,27 @@ def _on_startup():
     # path -- GET /api/tickers etc.) never fetches or computes anything, only
     # reads whatever's already in memory/DB. This background thread is what
     # actually keeps that data fresh, on its own schedule, decoupled from any
-    # request. The first pass runs immediately (not after waiting a full
-    # CHECK_INTERVAL) so a cold DB doesn't sit empty for 2 hours after a
-    # fresh deploy -- the frontend's loading state covers that first wait.
-    # Every pass after that fires on a fixed CHECK_INTERVAL cadence, not
-    # gated by any staleness check -- see data.warm_cache's docstring for why
-    # gap-fetching an already-current ticker is cheap enough not to skip.
+    # request.
+    #
+    # The first pass only runs immediately if prices are ACTUALLY stale (DB
+    # empty/never fetched, or the last fetch across the whole universe is
+    # older than CHECK_INTERVAL) -- a cold DB shouldn't sit empty for 2 hours
+    # after a fresh deploy, but a process restart shortly after the previous
+    # process's last fetch shouldn't re-hit Yahoo for every ticker just
+    # because it restarted. Without this check, every restart unconditionally
+    # forced an immediate full gap-fetch regardless of how fresh the data
+    # already was, which defeated the entire point of CHECK_INTERVAL -- that
+    # rule only ever governed spacing between wakes WITHIN one process's
+    # lifetime, doing nothing to protect against restarts.
     def loop():
+        max_fetched_at = db.get_max_fetched_at()
+        if max_fetched_at is not None:
+            remaining = data.CHECK_INTERVAL - (time.time() - max_fetched_at)
+            if remaining > 0:
+                print(f"app: prices already fetched {round(time.time() - max_fetched_at)}s ago "
+                      f"(within CHECK_INTERVAL) -- skipping the immediate startup fetch, "
+                      f"waiting {round(remaining)}s before the first pass.")
+                time.sleep(remaining)
         while True:
             try:
                 _universe_refresh_if_needed()

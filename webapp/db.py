@@ -151,6 +151,16 @@ def get_fetched_at(ticker: str) -> float | None:
     return row[0] if row else None
 
 
+def get_max_fetched_at() -> float | None:
+    """Most recent last_fetched_at across all tickers -- lets app.py check
+    whether prices are already fresh before deciding to fetch immediately on
+    startup, so a process restart shortly after the previous process's last
+    fetch doesn't re-hit Yahoo for every ticker just because it restarted."""
+    with _lock:
+        row = _conn.execute("SELECT MAX(last_fetched_at) FROM fetch_meta").fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
 def get_error(ticker: str) -> str | None:
     with _lock:
         row = _conn.execute(
