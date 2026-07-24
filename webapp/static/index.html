@@ -1499,7 +1499,14 @@ function render(data) {
     html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   updateSelectionCount();
-  const open = allRows.filter(r => r.open_trade).length;
+  // A ticker counts as "open" if EITHER VEXH's own open_trade is set OR it
+  // has an active (in-position) BASE candidate on VCP/VCPO -- counting only
+  // r.open_trade (VEXH) undercounted real open positions on VCP/VCPO
+  // entirely, same class of gap maxDaysInTrade() below already accounts for.
+  const open = allRows.filter(r => !!r.open_trade
+    || (r.strategy_vcp && r.strategy_vcp.baseline && r.strategy_vcp.baseline.in_position)
+    || (r.strategy_vcpo && r.strategy_vcpo.baseline && r.strategy_vcpo.baseline.in_position)
+  ).length;
   const advActive = adv.wrMin > WR_STEPS[0] || adv.pfMin > PF_STEPS[0];
   const prebreakActive = prebreak.phaseMin !== PHASE_STEPS[PHASE_DEFAULT_INDEX][1]
     || prebreak.coilMin > COIL_STEPS[0] || Object.values(prebreak.switches).some(Boolean);
@@ -1614,7 +1621,13 @@ function startRealProgressPolling() {
     } catch (e) { /* keep showing the last known state */ }
   };
   poll();
-  realProgressTimer = setInterval(poll, 2000);
+  // 500ms, not 2000ms -- with up to 30 tickers fetching concurrently, a 2s
+  // gap between polls could let 50+ tickers finish between updates, making
+  // the counter look like it's lagging well behind the backend's real
+  // progress. This is a cheap re-hit of the same /api/meta endpoint (no new
+  // backend work), just sampled more often during the (typically brief)
+  // window this progress bar is actually visible.
+  realProgressTimer = setInterval(poll, 500);
 }
 function stopRealProgressPolling() {
   if (realProgressTimer) { clearInterval(realProgressTimer); realProgressTimer = null; }
