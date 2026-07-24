@@ -342,34 +342,48 @@ def _on_startup():
     # path -- GET /api/tickers etc.) never fetches or computes anything, only
     # reads whatever's already in memory/DB.
     #
-    # Simple, deliberate rule (no staleness/duration math here at all): two
-    # independent existence checks, not one. If bars is completely empty
-    # (true first-ever start), fetch+compute everything. Separately, if
-    # computed_results is empty even though bars has data (e.g. wiped by a
-    # schema migration, or a prior process crashed before ever completing a
-    # compute pass), run compute_all() alone -- no fetch needed, bars are
-    # already there. Without this second check, "bars exist" alone would
-    # make startup do nothing, and asof would stay null (frontend stuck
-    # polling forever) until the next 2h loop wake happened to run compute.
-    if not db.has_any_bars():
-        print("app: DB is empty (no bars at all) -- running an eager fetch+compute "
-              "before starting the background loop.")
-        try:
-            _universe_refresh_if_needed()
-            refresh_and_compute()
-        except Exception as e:  # noqa: BLE001 - the loop below still starts either way
-            print(f"app: eager startup fetch+compute failed ({e}); "
-                  f"the background loop will retry on its normal cadence.")
-    elif not db.has_any_computed():
-        print("app: bars exist but computed_results is empty -- running compute_all() "
-              "immediately (no fetch needed) before starting the background loop.")
-        try:
-            compute_all()
-        except Exception as e:  # noqa: BLE001 - the loop below still starts either way
-            print(f"app: eager startup compute_all() failed ({e}); "
-                  f"the background loop will retry on its normal cadence.")
-
+    # CRITICAL: this function itself must return immediately. Everything it
+    # kicks off -- including the eager cold-start checks below -- runs
+    # inside the background thread, never inline here. _on_startup() runs
+    # synchronously inside _lifespan(), BEFORE the `yield` that lets uvicorn
+    # start accepting connections -- an eager compute_all() call placed here
+    # directly (as an earlier version of this function did) blocks the
+    # ENTIRE ASGI server from accepting ANY connection, including health
+    # checks, until that multi-minute pass finishes. That's what caused 502s
+    # from Cloudflare/whatever's proxying this: the port genuinely wasn't
+    # accepting connections yet, so there was nothing for the frontend's
+    # loading screen to even poll against. The whole point of the earlier
+    # non-blocking-startup work was to let the server come up immediately
+    # and have the loading UI cover the wait -- that only works if nothing
+    # blocking ever runs before the thread starts.
     def loop():
+        # Simple, deliberate rule (no staleness/duration math here at all):
+        # two independent existence checks, not one. If bars is completely
+        # empty (true first-ever start), fetch+compute everything.
+        # Separately, if computed_results is empty even though bars has data
+        # (e.g. wiped by a schema migration, or a prior process crashed
+        # before ever completing a compute pass), run compute_all() alone --
+        # no fetch needed, bars are already there. Without this second
+        # check, "bars exist" alone would make startup do nothing, and asof
+        # would stay null (frontend stuck polling) until the next 2h loop
+        # wake happened to run compute.
+        if not db.has_any_bars():
+            print("app: DB is empty (no bars at all) -- running an eager fetch+compute.")
+            try:
+                _universe_refresh_if_needed()
+                refresh_and_compute()
+            except Exception as e:  # noqa: BLE001 - the loop below still starts either way
+                print(f"app: eager startup fetch+compute failed ({e}); "
+                      f"will retry on the normal cadence.")
+        elif not db.has_any_computed():
+            print("app: bars exist but computed_results is empty -- running compute_all() "
+                  "immediately (no fetch needed).")
+            try:
+                compute_all()
+            except Exception as e:  # noqa: BLE001 - the loop below still starts either way
+                print(f"app: eager startup compute_all() failed ({e}); "
+                      f"will retry on the normal cadence.")
+
         while True:
             time.sleep(data.CHECK_INTERVAL)
             try:
