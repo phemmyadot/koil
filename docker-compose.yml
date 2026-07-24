@@ -7,8 +7,11 @@ services:
     env_file:
       - .env
     volumes:
-      # tickers.py and the screen cache are gitignored/generated at runtime --
-      # persist them on the host so a rebuild doesn't force a full re-screen
-      # of ~2000 tickers against Yahoo on every deploy.
+      # tickers.py, the price cache, and the daily-screen marker are all
+      # gitignored/generated at runtime -- persist them on the host so a
+      # rebuild doesn't force a full re-screen/re-fetch of ~2000 tickers
+      # against Yahoo on every deploy, and doesn't lose track of whether
+      # today's automatic universe re-screen already ran.
       - ./webapp/tickers.py:/app/webapp/tickers.py
-      - ./webapp/universe_screen_cache.json:/app/webapp/universe_screen_cache.json
+      - ./webapp/price_cache.pkl:/app/webapp/price_cache.pkl
+      - ./webapp/universe_last_screened.txt:/app/webapp/universe_last_screened.txt

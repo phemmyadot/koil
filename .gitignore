@@ -3,4 +3,6 @@ venv/
 __pycache__/
 .env
 webapp/tickers.py
-webapp/universe_screen_cache.json
+webapp/price_cache.pkl
+webapp/price_cache.pkl.tmp
+webapp/universe_last_screened.txt

@@ -11,3 +11,49 @@ jobs:
     steps:
       - name: Deploy
         run: bash ~/pine-trend-strategy/deploy.sh
+
+      - name: Wait for data load
+        # Container restarts and self-triggers a fetch+compute on startup
+        # (see app.py's @app.on_event("startup")) -- poll until it's done
+        # rather than assume it finished by the time docker compose returns.
+        # Fails the pipeline on timeout, a reported universe_error, or every
+        # ticker coming back as an error (the empty-TICKERS bootstrap-fallback
+        # scenario this was written to catch).
+        run: |
+          set -e
+          URL="http://localhost:3006"
+          MAX_WAIT=600   # seconds
+          INTERVAL=15
+          waited=0
+
+          while true; do
+            resp=$(curl -s -m 10 "$URL/api/tickers" || echo "")
+            if [ -z "$resp" ]; then
+              echo "no response from $URL yet ($waited s elapsed)"
+            else
+              total=$(echo "$resp" | jq -r '.tickers | length')
+              universe_error=$(echo "$resp" | jq -r '.universe_error // empty')
+              n_errors=$(echo "$resp" | jq -r '.errors | length')
+
+              if [ -n "$universe_error" ]; then
+                echo "FAIL: universe_error reported: $universe_error"
+                exit 1
+              fi
+              if [ "$total" -gt 0 ]; then
+                echo "OK: $total tickers loaded ($n_errors per-ticker errors)"
+                if [ "$n_errors" -gt 0 ]; then
+                  echo "Per-ticker errors:"
+                  echo "$resp" | jq -r '.errors'
+                fi
+                exit 0
+              fi
+              echo "total_tickers=0 so far ($waited s elapsed)"
+            fi
+
+            if [ "$waited" -ge "$MAX_WAIT" ]; then
+              echo "FAIL: data not loaded after ${MAX_WAIT}s"
+              exit 1
+            fi
+            sleep "$INTERVAL"
+            waited=$((waited + INTERVAL))
+          done

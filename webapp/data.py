@@ -8,6 +8,8 @@ Staleness rule: refetch every 2 hours while the US market is open, and at
 most once after each close (to pick up the final EOD candle) -- otherwise the
 cache is left alone, so a closed market means zero fetch traffic.
 """
+import os
+import pickle
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,8 +23,20 @@ from webapp.tickers import TICKERS
 
 ET = ZoneInfo("America/New_York")
 REFRESH_INTERVAL_OPEN = 2 * 60 * 60  # 2 hours while market open
-CHECK_INTERVAL = 15 * 60             # how often the background loop wakes to check staleness
+# How often the background loop wakes to check staleness. is_stale() only
+# returns True around market open, every REFRESH_INTERVAL_OPEN while open,
+# and once right after close -- 30 min is frequent enough to catch each of
+# those boundaries promptly without polling every few minutes all day for
+# a market that's closed 17+ hours out of 24.
+CHECK_INTERVAL = 30 * 60
 FETCH_WORKERS = 30
+
+# Persists _raw_cache to disk (gitignored, bind-mount this like tickers.py)
+# so a container rebuild doesn't force a full ~2000-ticker re-fetch from
+# Yahoo every deploy -- only tickers missing,
+# corrupted, or past today's TTL get re-fetched on startup. The manual
+# Refresh button (?refresh=1) bypasses this entirely via force=True.
+PRICE_CACHE_PATH = os.path.join(os.path.dirname(__file__), "price_cache.pkl")
 # Matches the start_date/startDate input default (1 Jan 2022) shared by all
 # three pine strategies. Fetches a year earlier than that so ATR (needs
 # ATR_LEN=22 + a 100-bar rolling average -- ~122 bars) and VEXH's SMA150 are
@@ -32,8 +46,56 @@ HISTORY_START = "2021-01-01"
 
 _raw_cache: dict[str, pd.DataFrame] = {}
 _raw_errors: dict[str, str] = {}
+_fetched_at: dict[str, float] = {}  # per-ticker fetch epoch, for the TTL check
 _last_fetch_time: float | None = None
 _lock = threading.Lock()
+
+
+def _load_price_cache() -> None:
+    """Best-effort load on import -- a missing, empty, or corrupted cache
+    file just means every ticker gets treated as needing a fresh fetch,
+    same as a truly cold start. Must never raise and block the app."""
+    global _raw_cache, _fetched_at
+    if not os.path.isfile(PRICE_CACHE_PATH):
+        return
+    try:
+        with open(PRICE_CACHE_PATH, "rb") as f:
+            payload = pickle.load(f)
+        _raw_cache = payload.get("bars", {})
+        _fetched_at = payload.get("fetched_at", {})
+    except Exception as e:  # noqa: BLE001 - corrupted cache file, not a crash
+        print(f"data: price cache load failed ({e}); starting cold.")
+        _raw_cache = {}
+        _fetched_at = {}
+
+
+def _save_price_cache() -> None:
+    tmp_path = PRICE_CACHE_PATH + ".tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            pickle.dump({"bars": _raw_cache, "fetched_at": _fetched_at}, f)
+        os.replace(tmp_path, PRICE_CACHE_PATH)  # atomic -- no half-written cache on crash
+    except Exception as e:  # noqa: BLE001 - failing to persist shouldn't crash a refresh
+        print(f"data: price cache save failed ({e})")
+
+
+_load_price_cache()
+
+
+def _cache_is_fresh(ticker: str, now: float) -> bool:
+    """Same-day (ET) TTL -- a bar fetched anytime today is good enough; a
+    stale/missing one needs a real fetch. Matches is_stale()'s own
+    once-per-close-plus-2h-while-open cadence, just applied per ticker."""
+    fetched_at = _fetched_at.get(ticker)
+    if fetched_at is None or ticker not in _raw_cache:
+        return False
+    fetched_dt = datetime.fromtimestamp(fetched_at, ET)
+    now_dt = datetime.fromtimestamp(now, ET)
+    if fetched_dt.date() != now_dt.date():
+        return False
+    if market_is_open(now_dt) and now - fetched_at > REFRESH_INTERVAL_OPEN:
+        return False
+    return True
 
 
 def market_is_open(now: datetime | None = None) -> bool:
@@ -86,21 +148,37 @@ def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, str | None]:
         return ticker, None, str(e) or type(e).__name__
 
 
-def warm_cache(tickers: list[str] | None = None) -> None:
-    """Bulk-fetch raw OHLCV for every ticker. Blocking; run this off the
-    request path (startup + background refresher only)."""
+def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
+    """Bulk-fetch raw OHLCV. Blocking; run this off the request path (startup
+    + background refresher) except for the manual Refresh button, which
+    passes force=True and accepts the wait.
+
+    force=False (startup/background): only fetches tickers whose cached bars
+    are missing, corrupted (fails to load), or past today's TTL -- everything
+    else is served straight from the on-disk cache, so a container rebuild
+    doesn't force a full re-fetch of ~2000 tickers just because the process
+    restarted. force=True (Refresh button): re-fetches everything regardless
+    of TTL, same as before this cache existed."""
     global _last_fetch_time
     tickers = tickers or TICKERS
-    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-        results = list(pool.map(_fetch_one, tickers))
+    now = time.time()
+    to_fetch = tickers if force else [tk for tk in tickers if not _cache_is_fresh(tk, now)]
+
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+            results = list(pool.map(_fetch_one, to_fetch))
+        with _lock:
+            for tk, df, err in results:
+                if df is not None:
+                    _raw_cache[tk] = df
+                    _fetched_at[tk] = now
+                    _raw_errors.pop(tk, None)
+                else:
+                    _raw_errors[tk] = err
+        _save_price_cache()
+
     with _lock:
-        for tk, df, err in results:
-            if df is not None:
-                _raw_cache[tk] = df
-                _raw_errors.pop(tk, None)
-            else:
-                _raw_errors[tk] = err
-        _last_fetch_time = time.time()
+        _last_fetch_time = now
 
 
 def get_bars(ticker: str) -> pd.DataFrame | None:

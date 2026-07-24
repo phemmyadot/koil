@@ -11,8 +11,11 @@ git pull origin master
 if [ ! -f webapp/tickers.py ]; then
   printf '"""Bootstrap placeholder."""\n\nTICKERS = []\n' > webapp/tickers.py
 fi
-if [ ! -f webapp/universe_screen_cache.json ]; then
-  echo '{}' > webapp/universe_screen_cache.json
+if [ ! -f webapp/price_cache.pkl ]; then
+  touch webapp/price_cache.pkl  # data.py loads a missing/empty/corrupt file as a cold cache
+fi
+if [ ! -f webapp/universe_last_screened.txt ]; then
+  touch webapp/universe_last_screened.txt  # missing/empty means "never screened", forces one
 fi
 
 docker compose up -d --build
