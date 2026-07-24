@@ -921,8 +921,8 @@ const QUALITY_RANK = { bad: 0, fair: 1, good: 2 };
 const ADV_STRATEGIES = [["adx", "ADX"], ["vcpf", "VCPF"], ["vcp", "VCP"], ["vcpo", "VCPO"], ["vexh", "VEXH"]]
   .filter(([key]) => SHOW_ADX_VCPF || (key !== "adx" && key !== "vcpf"));
 const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp", vcpo: "strategy_vcpo" };
-const WR_STEPS = [0, 50, 75];
-const PF_STEPS = [0, 1, 1.5, 2];
+const WR_STEPS = [0, 50, 70, 75];
+const PF_STEPS = [0, 1, 1.5, 2, 2.5, 3.5, 5.0];
 
 function sliderStepsHtml(steps, suffix) {
   return steps.map(v => `<span>${v}${suffix}</span>`).join("");
@@ -1402,7 +1402,7 @@ function render(data) {
   for (const r of rows) {
     // BREAKOUT (score 5) is the new top state -- fire-card highlight fires
     // on that instead of the old 6/6 gate count.
-    const isFire = !!r.prebreak && r.prebreak.score === 5 && !r.earnings_risk;
+    const isFire = !!r.prebreak && r.prebreak.score === 4 && !r.earnings_risk;
     html += `<div class="tickercard ${isFire ? "fire" : ""}">
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
