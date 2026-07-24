@@ -1178,6 +1178,7 @@ function strategyCandidates(s) {
     active: b.in_position, openPosition: b.open_position, config: s.baseline_config,
     firstTradeDate: b.first_trade_date, verdict: b.verdict, verdictReason: b.verdict_reason,
     avgTradeDays: b.avg_trade_days, last5Trades: b.last5_trades,
+    avgMaeWinsPct: b.avg_mae_wins_pct, pctNearZeroMae: b.pct_near_zero_mae,
   }];
   if (optimizedBeatsBaseline(s.optimized, b)) {
     const o = s.optimized;
@@ -1295,6 +1296,22 @@ function singleCandidateModal(name, c) {
     rows.push(modalRow("Target", op.target));
     if (op.unrealized_pct != null) rows.push(modalRow("Unrealized", `${sign}${op.unrealized_pct}%`));
     rows.push(modalRow("Bars held", op.days_held));
+  }
+  if (c.avgMaeWinsPct != null) {
+    // The single number that actually drives a limit-order decision: how
+    // far winning trades typically dip below entry before working out.
+    // With an open position, converts straight to a price and sits right
+    // below Entry (no divider) so the two are visually adjacent; without an
+    // open position there's no entry price to anchor to, so it gets its own
+    // separator instead of dangling off the top Trades/PF/Win rate block.
+    const limitHint = c.openPosition
+      ? ` [&rarr; limit at $${(c.openPosition.entry_price * (1 - c.avgMaeWinsPct / 100)).toFixed(2)}]`
+      : "";
+    if (!c.openPosition) rows.push('<div class="modalsep"></div>');
+    rows.push(modalRow("Avg MAE (wins)", `-${c.avgMaeWinsPct}%${limitHint}`));
+    if (c.pctNearZeroMae != null) {
+      rows.push(modalRow("Wins w/ MAE&lt;1%", c.pctNearZeroMae + "%"));
+    }
   }
   rows.push('<div class="modalsep"></div>');
   rows.push(modalRow("Avg Days", c.avgTradeDays ?? "&mdash;"));

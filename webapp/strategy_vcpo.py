@@ -120,8 +120,15 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             leg_qty = position["qty"] * 0.5 if position["tp_half_hit"] else position["qty"]
             dollar_pnl = leg_qty * (exit_price - entry_price)
             equity += dollar_pnl
+            # MAE over the position's FULL lifetime (entry to this final close),
+            # not just this leg -- attached only here, not on the TP-half leg
+            # record, so _summarize()'s wins-only average counts one MAE value
+            # per logical round-trip rather than double-counting a trade that
+            # got split into two rows.
+            mae_pct = (entry_price - position["low_since"]) / entry_price * 100
             trades.append({"pnl_pct": round(float(final_pnl_pct), 2), "dollar_pnl": float(dollar_pnl),
-                            "entry_i": position["entry_i"], "days": i - position["entry_i"]})
+                            "entry_i": position["entry_i"], "days": i - position["entry_i"],
+                            "mae_pct": round(float(mae_pct), 2)})
             position = None
             pending_exit_at = None
             continue
@@ -136,7 +143,8 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             qty = (equity * pct_equity / 100) / entry_price
             position = {"entry_i": i, "entry_price": entry_price, "qty": qty,
                         "stop": entry_price - entry_atr * atr_mult,
-                        "high_since": h.iloc[i], "be_activated": False, "tp_half_hit": False}
+                        "high_since": h.iloc[i], "low_since": l.iloc[i],
+                        "be_activated": False, "tp_half_hit": False}
             # No `continue` here -- Pine evaluates breakeven/trail/TP/stop on
             # the entry-fill bar itself too (the fill happens at this bar's
             # open, before the rest of the bar's script runs, so
@@ -147,6 +155,7 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             continue
 
         position["high_since"] = max(position["high_since"], h.iloc[i])
+        position["low_since"] = min(position["low_since"], l.iloc[i])
         entry_price = position["entry_price"]
         max_gain_pct = (position["high_since"] - entry_price) / entry_price * 100
         cur_atr = atr.iloc[i]
@@ -211,8 +220,21 @@ def _summarize(trades: list[dict]) -> dict:
     wr = len(wins) / len(trades) * 100 if trades else 0.0
     avg_days = round(sum(t["days"] for t in trades) / len(trades), 1) if trades else None
     last5 = [{"days": t["days"], "tp_pct": t["pnl_pct"]} for t in trades[-5:]]
+
+    # mae_pct only exists on the FINAL-close trade record of each logical
+    # round-trip (see run()), so this is one value per real trade even
+    # though a TP-half split produces two rows -- no double counting.
+    mae_wins = [t["mae_pct"] for t in wins if t.get("mae_pct") is not None]
+    avg_mae_wins_pct = round(sum(mae_wins) / len(mae_wins), 2) if mae_wins else None
+    # Share of winners that barely dipped before working -- a high value
+    # here means waiting for a pullback before entering is often a mistake;
+    # take the signal at market instead of chasing a limit fill.
+    pct_near_zero_mae = (round(sum(1 for m in mae_wins if m < 1.0) / len(mae_wins) * 100, 1)
+                          if mae_wins else None)
+
     return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
-            "avg_trade_days": avg_days, "last5_trades": last5}
+            "avg_trade_days": avg_days, "last5_trades": last5,
+            "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae}
 
 
 def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_per_split: int = 3) -> dict | None:
