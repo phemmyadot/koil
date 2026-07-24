@@ -12,12 +12,13 @@ import os
 import pickle
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 from webapp.tickers import TICKERS
 
@@ -81,11 +82,17 @@ def _load_price_cache() -> None:
 
 
 def _save_price_cache() -> None:
-    tmp_path = PRICE_CACHE_PATH + ".tmp"
+    # Not the usual write-to-.tmp-then-os.replace() atomic swap: PRICE_CACHE_PATH
+    # is a Docker bind mount (docker-compose.yml), so it's a mount point inside
+    # the container, not a plain renameable file -- os.replace() onto it fails
+    # with EBUSY ("Device or resource busy"), which silently discarded every
+    # save under the old atomic-write version. Writing in place loses crash-
+    # atomicity (a mid-write crash could leave a truncated/corrupt pickle),
+    # but _load_price_cache() already treats a corrupt file as a cold start
+    # rather than crashing, so that tradeoff is acceptable here.
     try:
-        with open(tmp_path, "wb") as f:
+        with open(PRICE_CACHE_PATH, "wb") as f:
             pickle.dump({"bars": _raw_cache, "fetched_at": _fetched_at}, f)
-        os.replace(tmp_path, PRICE_CACHE_PATH)  # atomic -- no half-written cache on crash
     except Exception as e:  # noqa: BLE001 - failing to persist shouldn't crash a refresh
         print(f"data: price cache save failed ({e})")
 
@@ -145,6 +152,9 @@ def is_stale() -> bool:
 FETCH_TIMEOUT = 20  # seconds -- one hung ticker must not block the whole bulk fetch
 
 
+_RATE_LIMITED = "__rate_limited__"  # sentinel error string _fetch_one uses to flag YFRateLimitError
+
+
 def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, str | None]:
     try:
         df = yf.download(ticker, start=HISTORY_START, interval="1d", progress=False,
@@ -155,6 +165,14 @@ def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, str | None]:
         if len(df) < 250:
             return ticker, None, "insufficient history"
         return ticker, df, None
+    except YFRateLimitError:
+        # Distinct from an ordinary per-ticker failure -- Yahoo is throttling
+        # the whole run, not rejecting this one symbol. warm_cache() checks
+        # for this sentinel and stops submitting the rest of the batch rather
+        # than burning through it against a wall; the untried tickers just
+        # stay stale and get picked up on the next refresh (background loop
+        # or manual Refresh), same as if this run had never touched them.
+        return ticker, None, _RATE_LIMITED
     except Exception as e:  # noqa: BLE001 - one bad ticker shouldn't kill the bulk fetch
         return ticker, None, str(e) or type(e).__name__
 
@@ -178,12 +196,24 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
     if to_fetch:
         with _lock:
             _fetch_progress = {"done": 0, "total": len(to_fetch)}
+        rate_limited = False
         try:
             with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-                # as_completed (via map's underlying futures) so progress
-                # updates as each ticker lands, not only after the whole
-                # batch finishes -- that's the whole point of exposing this.
-                for tk, df, err in pool.map(_fetch_one, to_fetch):
+                futures = {pool.submit(_fetch_one, tk): tk for tk in to_fetch}
+                # as_completed (real completion order, unlike pool.map()) so
+                # progress updates as each ticker actually lands, and so a
+                # rate-limit hit can stop the run instead of only being
+                # noticed after every ticker in the batch has been tried.
+                for future in as_completed(futures):
+                    tk, df, err = future.result()
+                    if err == _RATE_LIMITED:
+                        rate_limited = True
+                        # Cancel whatever hasn't started yet -- futures already
+                        # in flight still finish (can't interrupt a running
+                        # yf.download call), but nothing new gets kicked off.
+                        for f in futures:
+                            f.cancel()
+                        break
                     with _lock:
                         if df is not None:
                             _raw_cache[tk] = df
@@ -195,6 +225,13 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
         finally:
             with _lock:
                 _fetch_progress = None
+        if rate_limited:
+            # Untried tickers are simply left as-is (still stale, or missing
+            # from the cache) -- they'll be retried on the next refresh
+            # (background loop's next wakeup, or a manual Refresh), same as
+            # if this run had never gotten to them.
+            print("data: warm_cache stopped early -- Yahoo rate-limited this batch; "
+                  "remaining tickers will retry on the next scheduled refresh.")
         _save_price_cache()
 
     with _lock:

@@ -1651,7 +1651,11 @@ async function load(refresh) {
       // fallthrough) so it doesn't hide the overlay it just showed.
       showPageOverlay("Loading first dataset…");
       if (!realProgressTimer) startRealProgressPolling();
-      btn.disabled = false;
+      // Deliberately left disabled (not re-enabled here) -- there's nothing
+      // useful to refresh yet, and clicking it mid-cold-start would just
+      // stack a second full re-fetch on top of the one already running.
+      // Previously toggling this true/false every 3s (each recursive call
+      // re-disabling it) was the visible button flicker during cold start.
       setTimeout(() => load(false), FIRST_LOAD_POLL_MS);
       return;
     }
