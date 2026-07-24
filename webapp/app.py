@@ -251,6 +251,28 @@ def meta():
     }
 
 
+@app.get("/api/debug/memory")
+def debug_memory():
+    """Live process memory breakdown -- queries the actual running server's
+    in-memory state (unlike `docker compose exec ... python -c "..."`, which
+    starts a fresh interpreter and would only show a reloaded-from-disk
+    approximation, not what the live server is really holding). Not secured
+    -- fine for a LAN-only box behind Cloudflare Tunnel with no public route
+    to this path configured, but don't expose this publicly as-is."""
+    import resource
+    with _compute_lock:
+        computed_count = len(_computed)
+    return {
+        "rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
+        "raw_cache_tickers": len(data._raw_cache),
+        "raw_cache_pickled_mb": round(len(__import__("pickle").dumps(data._raw_cache)) / 1024 / 1024, 1),
+        "computed_entries": computed_count,
+        "computed_pickled_mb": round(len(__import__("pickle").dumps(_computed)) / 1024 / 1024, 1),
+        "raw_errors": len(data._raw_errors),
+        "computed_errors": len(_computed_errors),
+    }
+
+
 def _with_fresh_optimized(payload: dict) -> dict:
     """Cheap dict-lookup overlay, done at request time so a ticker's optimized
     config shows up as soon as the optimizer finishes it -- not just after the
