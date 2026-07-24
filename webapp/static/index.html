@@ -1592,12 +1592,14 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
-// Real server-side progress via /api/meta -- two distinct sequential stages
-// (fetch_progress then compute_progress, matching refresh_and_compute()'s
-// data.warm_cache() -> compute_all() order), each with its own label, instead
-// of one loader silently covering both with no indication which is running.
-// Overrides the time-based estimate in startProgress/tick with real "N of M"
-// counts when available.
+// Real server-side progress via /api/meta -- fetch_progress then
+// compute_progress are two sequential backend stages (matching
+// refresh_and_compute()'s data.warm_cache() -> compute_all() order), but
+// shown as ONE continuous bar instead of two independent 0-99% bars that
+// visibly reset when fetch hands off to compute -- fetch fills the first
+// half (0-50%), compute fills the second half (50-100%), so it reads as one
+// loading operation with two phases, not two separate loading bars back to
+// back. The label still names which phase is active.
 let realProgressTimer = null;
 function startRealProgressPolling() {
   const wrap = document.getElementById("progresswrap");
@@ -1610,11 +1612,11 @@ function startRealProgressPolling() {
       const fp = meta.fetch_progress;
       const cp = meta.compute_progress;
       if (cp && cp.total > 0) {
-        const pct = Math.min(99, (cp.done / cp.total) * 100);
+        const pct = 50 + Math.min(49, (cp.done / cp.total) * 50);
         fill.style.width = pct.toFixed(1) + "%";
         label.textContent = `Now computing… ${cp.done} of ${cp.total} tickers`;
       } else if (fp && fp.total > 0) {
-        const pct = Math.min(99, (fp.done / fp.total) * 100);
+        const pct = Math.min(50, (fp.done / fp.total) * 50);
         fill.style.width = pct.toFixed(1) + "%";
         label.textContent = `Now fetching tickers… ${fp.done} of ${fp.total}`;
       }
@@ -1655,7 +1657,13 @@ async function load(refresh) {
       tickerCount = (await metaRes.json()).total_tickers;
     } catch (e) { tickerCount = 474; }
   }
-  if (refresh) { showPageOverlay("Refreshing all tickers…"); startProgress(tickerCount); startRealProgressPolling(); }
+  // Only the real backend-progress poller runs the label/bar now -- it used
+  // to run alongside startProgress()'s time-estimate ticker on its own
+  // separate, faster interval, and the two competed to overwrite the same
+  // progresslabel element, which is why the label looked like it wasn't
+  // adjusting to the actual fetch/compute stage (the estimate ticker kept
+  // stomping it with its own "~Xs remaining" text).
+  if (refresh) { showPageOverlay("Refreshing all tickers…"); startRealProgressPolling(); }
   const t0 = Date.now();
   try {
     const params = refresh ? "?refresh=1" : "";
