@@ -211,7 +211,14 @@ def _on_startup():
 
 @app.get("/api/meta")
 def meta():
-    return {"total_tickers": len(TICKERS), "last_fetch": data.last_fetch_time()}
+    return {
+        "total_tickers": len(TICKERS),
+        "last_fetch": data.last_fetch_time(),
+        # Non-null only while a warm_cache() fetch is actively in flight --
+        # lets the frontend show real "N of M loaded" progress during the
+        # first post-deploy fetch instead of a bare spinner.
+        "fetch_progress": data.fetch_progress(),
+    }
 
 
 def _with_fresh_optimized(payload: dict) -> dict:

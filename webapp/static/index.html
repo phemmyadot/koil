@@ -1585,6 +1585,35 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
+// Real server-side progress (data.fetch_progress via /api/meta) while a
+// fetch is actually in flight -- overrides the time-based estimate in
+// startProgress/tick with real "N of M" counts when available. Falls back
+// to whatever the estimate-based bar was already showing once the fetch
+// phase completes and compute_all() (no per-item counter) takes over.
+let realProgressTimer = null;
+function startRealProgressPolling() {
+  const wrap = document.getElementById("progresswrap");
+  const fill = document.getElementById("progressfill");
+  const label = document.getElementById("progresslabel");
+  wrap.style.display = "flex";
+  const poll = async () => {
+    try {
+      const meta = await (await fetch("/api/meta")).json();
+      const fp = meta.fetch_progress;
+      if (fp && fp.total > 0) {
+        const pct = Math.min(99, (fp.done / fp.total) * 100);
+        fill.style.width = pct.toFixed(1) + "%";
+        label.textContent = `${fp.done} of ${fp.total} tickers fetched`;
+      }
+    } catch (e) { /* keep showing the last known state */ }
+  };
+  poll();
+  realProgressTimer = setInterval(poll, 2000);
+}
+function stopRealProgressPolling() {
+  if (realProgressTimer) { clearInterval(realProgressTimer); realProgressTimer = null; }
+}
+
 // A plain page load usually just reads the server's already-precomputed
 // cache (fast) -- but the server now starts accepting requests immediately
 // on boot rather than blocking startup on the first fetch+compute pass (see
@@ -1607,7 +1636,7 @@ async function load(refresh) {
       tickerCount = (await metaRes.json()).total_tickers;
     } catch (e) { tickerCount = 474; }
   }
-  if (refresh) { showPageOverlay("Refreshing all tickers…"); startProgress(tickerCount); }
+  if (refresh) { showPageOverlay("Refreshing all tickers…"); startProgress(tickerCount); startRealProgressPolling(); }
   const t0 = Date.now();
   try {
     const params = refresh ? "?refresh=1" : "";
@@ -1621,16 +1650,19 @@ async function load(refresh) {
       // Deliberately skips the finally block below (early return, not a
       // fallthrough) so it doesn't hide the overlay it just showed.
       showPageOverlay("Loading first dataset…");
+      if (!realProgressTimer) startRealProgressPolling();
       btn.disabled = false;
       setTimeout(() => load(false), FIRST_LOAD_POLL_MS);
       return;
     }
 
+    stopRealProgressPolling();
     render(data);
     hidePageOverlay();
     btn.disabled = false;
     if (refresh) finishProgress();
   } catch (e) {
+    stopRealProgressPolling();
     document.getElementById("meta").textContent = "failed to load: " + e;
     hidePageOverlay();
     btn.disabled = false;

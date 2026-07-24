@@ -50,6 +50,17 @@ _fetched_at: dict[str, float] = {}  # per-ticker fetch epoch, for the TTL check
 _last_fetch_time: float | None = None
 _lock = threading.Lock()
 
+# Live progress for the current warm_cache() call, if one is in flight --
+# lets the frontend show a real "N of M loaded" bar instead of just a spinner
+# while the first post-deploy fetch (which can take several minutes on a
+# cold cache) is running. None when no fetch is currently in progress.
+_fetch_progress: dict[str, int] | None = None
+
+
+def fetch_progress() -> dict[str, int] | None:
+    with _lock:
+        return dict(_fetch_progress) if _fetch_progress is not None else None
+
 
 def _load_price_cache() -> None:
     """Best-effort load on import -- a missing, empty, or corrupted cache
@@ -159,22 +170,31 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
     doesn't force a full re-fetch of ~2000 tickers just because the process
     restarted. force=True (Refresh button): re-fetches everything regardless
     of TTL, same as before this cache existed."""
-    global _last_fetch_time
+    global _last_fetch_time, _fetch_progress
     tickers = tickers or TICKERS
     now = time.time()
     to_fetch = tickers if force else [tk for tk in tickers if not _cache_is_fresh(tk, now)]
 
     if to_fetch:
-        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-            results = list(pool.map(_fetch_one, to_fetch))
         with _lock:
-            for tk, df, err in results:
-                if df is not None:
-                    _raw_cache[tk] = df
-                    _fetched_at[tk] = now
-                    _raw_errors.pop(tk, None)
-                else:
-                    _raw_errors[tk] = err
+            _fetch_progress = {"done": 0, "total": len(to_fetch)}
+        try:
+            with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+                # as_completed (via map's underlying futures) so progress
+                # updates as each ticker lands, not only after the whole
+                # batch finishes -- that's the whole point of exposing this.
+                for tk, df, err in pool.map(_fetch_one, to_fetch):
+                    with _lock:
+                        if df is not None:
+                            _raw_cache[tk] = df
+                            _fetched_at[tk] = now
+                            _raw_errors.pop(tk, None)
+                        else:
+                            _raw_errors[tk] = err
+                        _fetch_progress["done"] += 1
+        finally:
+            with _lock:
+                _fetch_progress = None
         _save_price_cache()
 
     with _lock:
