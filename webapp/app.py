@@ -205,6 +205,12 @@ def compute_all() -> None:
             _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
             _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _save_computed_cache()
+        # Force a final flush -- scoring.py's earnings-date cache saves are
+        # debounced per-ticker during the batch above (up to ~2100 misses in
+        # one pass), so the last few tickers computed within the debounce
+        # window of an earlier save might not have been persisted yet.
+        import webapp.scoring as scoring
+        scoring._save_earnings_cache(force=True)
     finally:
         with _compute_lock:
             _compute_progress = None

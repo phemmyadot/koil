@@ -6,5 +6,6 @@ webapp/tickers.py
 webapp/price_cache.pkl
 webapp/price_cache.pkl.tmp
 webapp/computed_cache.pkl
+webapp/earnings_cache.pkl
 webapp/universe_last_screened.txt
 webapp/health_check.log

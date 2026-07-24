@@ -4,6 +4,7 @@ Uses the exact production logic from p.py (single source of truth) so the
 score/open-trade status always matches the validated backtest.
 """
 import os
+import pickle
 import sys
 import time
 import warnings
@@ -30,6 +31,59 @@ SHOW_LEGACY_CONDITIONS = os.environ.get("SHOW_LEGACY_CONDITIONS", "true").strip(
 # data -- a much longer TTL than the 15-min price cache is safe here.
 _EARNINGS_CACHE_TTL = 24 * 60 * 60
 _earnings_cache: dict[str, tuple[float, pd.DatetimeIndex]] = {}
+
+# Persists _earnings_cache to disk (gitignored, bind-mount this like
+# price_cache.pkl/computed_cache.pkl) -- without this, every container
+# restart wiped the cache even though its 24h TTL means the data was still
+# fresh, forcing a redundant Yahoo earnings-calendar fetch per ticker on
+# every redeploy regardless of how recently it had already been fetched.
+_EARNINGS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "earnings_cache.pkl")
+
+
+def _load_earnings_cache() -> None:
+    """Best-effort load on import -- same failure posture as data.py's
+    _load_price_cache(): missing/corrupt file just means every ticker's
+    earnings dates get refetched on first use, same as a truly cold start."""
+    global _earnings_cache
+    if not os.path.isfile(_EARNINGS_CACHE_PATH):
+        return
+    try:
+        with open(_EARNINGS_CACHE_PATH, "rb") as f:
+            _earnings_cache = pickle.load(f)
+    except Exception as e:  # noqa: BLE001 - corrupted cache file, not a crash
+        print(f"scoring: earnings cache load failed ({e}); starting cold.")
+        _earnings_cache = {}
+
+
+_EARNINGS_SAVE_DEBOUNCE = 5  # seconds
+_last_earnings_save = 0.0
+
+
+def _save_earnings_cache(force: bool = False) -> None:
+    # Debounced, not saved on every single cache miss -- compute_all() calls
+    # this once per ticker (up to ~2100 times per full pass) via
+    # _earnings_executor's worker threads; without debouncing, a cold cache
+    # would rewrite the whole dict to disk up to ~2100 times in one pass.
+    # Worst case with debouncing is losing a few seconds' worth of newly
+    # fetched entries if the process crashes mid-batch -- they just get
+    # refetched next time, same as a normal cache miss.
+    global _last_earnings_save
+    now = time.time()
+    if not force and now - _last_earnings_save < _EARNINGS_SAVE_DEBOUNCE:
+        return
+    _last_earnings_save = now
+    # Written in place, not via a .tmp-then-os.replace() atomic swap -- same
+    # reason as data.py's _save_price_cache(): this path is a Docker bind
+    # mount, and os.replace() onto a bind-mounted file fails with EBUSY.
+    try:
+        with open(_EARNINGS_CACHE_PATH, "wb") as f:
+            pickle.dump(_earnings_cache, f)
+    except Exception as e:  # noqa: BLE001 - failing to persist shouldn't crash a compute pass
+        print(f"scoring: earnings cache save failed ({e})")
+
+
+_load_earnings_cache()
+
 # yf.Ticker.get_earnings_dates() has no built-in timeout and can hang on a
 # given ticker -- since compute_all() bulk-processes hundreds of tickers via
 # ThreadPoolExecutor.map(), one hung call would block the ENTIRE batch
@@ -50,6 +104,7 @@ def _cached_earnings_dates(ticker: str) -> pd.DatetimeIndex:
     except (FutureTimeoutError, Exception):  # noqa: BLE001 - never let one ticker hang the batch
         dates = pd.DatetimeIndex([])
     _earnings_cache[ticker] = (now, dates)
+    _save_earnings_cache()
     return dates
 
 
