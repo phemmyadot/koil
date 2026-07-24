@@ -3,6 +3,18 @@ set -e
 cd ~/pine-trend-strategy
 git pull origin master
 
+# deploy.sh can change in the same pull that just ran (as it just did) --
+# bash reads a running script incrementally, so continuing to execute THIS
+# process after git pull rewrote the file on disk risks a mix of pre-pull
+# and post-pull lines (exactly what caused a stale reference to a since-
+# renamed cache file to run here once). Re-exec a guaranteed-fresh copy of
+# the post-pull script instead of trusting the rest of this file. Guarded by
+# an env var so the re-exec'd process doesn't pull+re-exec forever.
+if [ -z "$DEPLOY_SH_REEXECED" ]; then
+  export DEPLOY_SH_REEXECED=1
+  exec bash "$0" "$@"
+fi
+
 # Bind-mounted as files in docker-compose.yml -- if they don't exist yet on
 # the host, Docker creates them as directories instead of files, which
 # breaks the webapp/__init__.py bootstrap. Ensure both exist as real files
