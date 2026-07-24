@@ -3,3 +3,4 @@ venv/
 __pycache__/
 .env
 webapp/tickers.py
+webapp/universe_screen_cache.json
