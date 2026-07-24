@@ -97,6 +97,12 @@
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; width: 140px; }
   input[type=number] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
            border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; width: 4em; }
+  input[type=date] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+           border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 13px; }
+  input[type=date]::-webkit-calendar-picker-indicator { cursor: pointer; }
+  @media (prefers-color-scheme: dark) {
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1); }
+  }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
            padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; margin-left: auto; }
   button:disabled { opacity: 0.5; cursor: wait; }
@@ -204,6 +210,47 @@
                               letter-spacing: 0.04em; flex: 0 0 auto; }
   .modalrow .modalrowvalue { text-align: right; font-variant-numeric: tabular-nums; }
   .modalsep { border-top: 1px solid var(--line); margin: 2px 0; }
+  .modalbox:has(.plcalc) { width: 480px; }
+  .modalbox:has(.plcalc.optmode) { width: 620px; }
+  .plcalc .modemid { display: flex; gap: 6px; margin-bottom: 4px; }
+  .plcalc .modebtn { flex: 1; padding: 7px 0; border: 1px solid var(--line); background: var(--bg);
+                      color: var(--muted); border-radius: 7px; font-size: 12.5px; font-weight: 600;
+                      cursor: pointer; }
+  .plcalc .modebtn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
+  .plcalc .formrow { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+                      font-size: 12.5px; }
+  .plcalc .formrow label { color: var(--muted); text-transform: uppercase; font-size: 11px;
+                            letter-spacing: 0.04em; flex: 1 1 auto; }
+  .plcalc .formrow input[type=number], .plcalc .formrow input[type=date], .plcalc .formrow select { width: 110px; text-align: right; }
+  .plcalc .formrow input[type=range] { flex: 1 1 auto; }
+  .plcalc .rangeval { width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .plcalc .resultgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-top: 4px; }
+  .plcalc .resultbox { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                        padding: 8px 10px; }
+  .plcalc .resultbox .rlbl { color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+                              letter-spacing: 0.04em; display: block; }
+  .plcalc .resultbox .rval { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .plcalc .rval.pos { color: var(--green); }
+  .plcalc .rval.neg { color: var(--red); }
+  .plcalc .decaychart { width: 100%; height: 130px; margin-top: 6px; }
+  .plcalc .decaychart .axislabel { font-size: 9px; fill: var(--muted); }
+  .plcalc .optgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .plcalc .togglegrp { display: flex; background: var(--bg); border: 1px solid var(--line);
+                        border-radius: 8px; padding: 2px; gap: 2px; }
+  .plcalc .togglegrp button { flex: 1; padding: 6px 0; border: none; border-radius: 6px;
+                               background: transparent; color: var(--muted); font-size: 12px;
+                               font-weight: 600; cursor: pointer; }
+  .plcalc .togglegrp button.active.buy, .plcalc .togglegrp button.active.call { background: var(--green-bg); color: var(--green); }
+  .plcalc .togglegrp button.active.sell, .plcalc .togglegrp button.active.put { background: var(--red-bg); color: var(--red); }
+  .plcalc .optfields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 8px; }
+  .plcalc .optfields .formrow { justify-content: space-between; }
+  .plcalc .optfields .formrow label { flex: 0 0 auto; }
+  .plcalc .optfields .formrow input { width: 90px; }
+  .plcalc .payoffchart { width: 100%; height: 240px; margin: 4px 0; cursor: crosshair; touch-action: none; }
+  .plcalc .payoffchart .axislabel { font-size: 10px; fill: var(--muted); }
+  .plcalc .payoffchart .marklabel { font-size: 10px; fill: var(--muted); }
+  .plcalc .plnote { font-size: 11px; color: var(--muted); margin: 6px 2px 0; line-height: 1.4; }
+  .plcalc .pllegend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin: 4px 2px 0; flex-wrap: wrap; }
   .modalnote { color: var(--muted); font-size: 12px; line-height: 1.5; }
 
   @media (max-width: 1080px) {
@@ -309,10 +356,9 @@
     <p style="color:var(--muted)">Fetching tickers&hellip; first load may take a minute or two for a large universe</p>
   </div>
   <div class="pager" id="pager"></div>
-  <p class="foot">Score = entry gates passing on the latest daily close (6/6 = strategy enters on this close).
-     DIST is graduated, not pass/fail: HIGH tier = 1pt, MEDIUM = 0.5pt, LOW = 0pt, so 6/6 requires HIGH-tier distance.
-     To TP % = distance to the 20-day mid-band, the trade's payoff if entered now.
-     Config: SMA150 &middot; BB 20/1.5&sigma; &middot; RSI&le;40 &middot; dist 0.5&middot;ATR &middot; ATR 4&ndash;12% &middot; time stop 20.</p>
+  <p class="foot">
+     <button id="plCalcBtn" class="clearfilters" type="button">P/L Calculator</button>
+  </p>
 </div>
 <script>
 // Feature flag: ADX (Strategy A) and VCPF (Strategy D) hidden from the card
@@ -447,6 +493,11 @@ function hideModal() {
   document.getElementById("modalBackdrop").style.display = "none";
 }
 document.getElementById("modalBackdrop").addEventListener("click", hideModal);
+// Clicks inside the box shouldn't bubble to the backdrop and close it -- was
+// harmless for the read-only modals (nothing to click except close-triggering
+// buttons), but breaks any interactive form content (typing/dragging a
+// slider would instantly close the modal on the first click).
+document.getElementById("modalBox").addEventListener("click", e => e.stopPropagation());
 
 // Watchlist picker -- a small interactive modal (not one of the read-only
 // info modals above), reusing the same backdrop/box since only one modal is
@@ -464,6 +515,390 @@ function showWatchlistPicker() {
 function pickWatchlist(name) {
   addSelectedToWatchlist(name);
   hideModal();
+}
+
+// ==========================================================================
+// P/L Calculator -- Spot (entry/target/stop -> max gain/loss) and Options
+// (Black-Scholes: strike/DTE/IV -> theoretical price, delta, theta, and a
+// pure time-decay chart holding the underlying price flat at entry). Not
+// tied to any ticker's live data -- fully manual entry, standalone.
+// ==========================================================================
+
+// Standard normal CDF via Abramowitz & Stegun 7.1.26 erf approximation
+// (~1e-7 max error) -- no external math library available client-side.
+function normCdf(x) {
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x) / Math.SQRT2;
+  const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1) * t * Math.exp(-x*x);
+  return 0.5 * (1 + sign * y);
+}
+function normPdf(x) {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+}
+
+const RISK_FREE_RATE = 0.045; // fixed assumption, not user-configurable -- minor P&L impact
+
+// Black-Scholes price/delta/theta. T in years, iv/r as decimals (0.30 = 30%).
+// theta returned as PER-DAY (annual theta / 365), the conventional quoting.
+function blackScholes(type, S, K, T, iv, r) {
+  if (T <= 0) {
+    const intrinsic = type === "call" ? Math.max(S - K, 0) : Math.max(K - S, 0);
+    const delta = type === "call" ? (S > K ? 1 : 0) : (S < K ? -1 : 0);
+    return { price: intrinsic, delta, theta: 0 };
+  }
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + 0.5 * iv * iv) * T) / (iv * sqrtT);
+  const d2 = d1 - iv * sqrtT;
+  const disc = Math.exp(-r * T);
+  let price, delta, theta;
+  if (type === "call") {
+    price = S * normCdf(d1) - K * disc * normCdf(d2);
+    delta = normCdf(d1);
+    theta = (-(S * normPdf(d1) * iv) / (2 * sqrtT) - r * K * disc * normCdf(d2)) / 365;
+  } else {
+    price = K * disc * normCdf(-d2) - S * normCdf(-d1);
+    delta = normCdf(d1) - 1;
+    theta = (-(S * normPdf(d1) * iv) / (2 * sqrtT) + r * K * disc * normCdf(-d2)) / 365;
+  }
+  return { price, delta, theta };
+}
+
+let plMode = "spot";
+function setPlMode(mode) {
+  plMode = mode;
+  renderPlCalcForm();
+}
+
+function fmtMoney(n) { return (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2); }
+function fmtPct(n) { return (n >= 0 ? "+" : "") + n.toFixed(1) + "%"; }
+function plClass(n) { return n > 0 ? "pos" : (n < 0 ? "neg" : ""); }
+
+function spotFormHtml() {
+  return `
+    <div class="formrow"><label>Entry Price</label><input type="number" id="plEntry" step="0.01" value="100" oninput="updatePlCalc()"></div>
+    <div class="formrow"><label>Target Price</label><input type="number" id="plTarget" step="0.01" value="115" oninput="updatePlCalc()"></div>
+    <div class="formrow"><label>Stop Price</label><input type="number" id="plStop" step="0.01" value="93" oninput="updatePlCalc()"></div>
+    <div class="formrow"><label>Position Size ($, optional)</label><input type="number" id="plSize" step="1" placeholder="e.g. 1000" oninput="updatePlCalc()"></div>
+    <div class="resultgrid" id="plResults"></div>`;
+}
+
+// ---- Options mode: P/L-vs-underlying-price payoff diagram, ported from a
+// reference React component into vanilla JS/SVG (no framework in this app).
+// State lives in plain globals (same pattern as plMode) since re-rendering
+// the whole form on every drag/slider tick would lose input focus/cursor
+// position -- only the chart + stat boxes get rebuilt on change, the input
+// elements themselves are built once per mode switch.
+let plOptSide = "buy", plOptType = "call";
+let plEvalPrice = null; // set to spot on first render / whenever spot changes
+let plEvalDays = null; // set to daysElapsed (today's position) on first render / whenever entry date or DTE changes
+let plDragging = false;
+const PL_CHART_W = 560, PL_CHART_H = 240;
+const PL_PAD = { l: 50, r: 14, t: 16, b: 26 };
+
+function toggleGrpHtml(id, options, current, setter) {
+  return `<div class="togglegrp" id="${id}">` + options.map(([val, label]) =>
+    `<button type="button" class="${val}${val === current ? " active" : ""}" onclick="${setter}('${val}')">${label}</button>`
+  ).join("") + `</div>`;
+}
+function setPlSide(v) { plOptSide = v; document.querySelectorAll("#plSideToggle button").forEach(b => b.classList.toggle("active", b.classList.contains(v))); updatePlCalc(); }
+function setPlOptType(v) { plOptType = v; document.querySelectorAll("#plTypeToggle button").forEach(b => b.classList.toggle("active", b.classList.contains(v))); updatePlCalc(); }
+
+function optionsFormHtml() {
+  return `
+    <div class="optgrid2">
+      ${toggleGrpHtml("plSideToggle", [["buy","Buy"],["sell","Sell"]], plOptSide, "setPlSide")}
+      ${toggleGrpHtml("plTypeToggle", [["call","Call"],["put","Put"]], plOptType, "setPlOptType")}
+    </div>
+    <div class="optfields">
+      <div class="formrow"><label>Strike</label><input type="number" id="plStrike" step="1" value="105" oninput="updatePlCalc()"></div>
+      <div class="formrow"><label>Premium ($/sh)</label><input type="number" id="plPremium" step="0.05" value="3.00" oninput="updatePlCalc()"></div>
+      <div class="formrow"><label>Contracts</label><input type="number" id="plContracts" step="1" value="1" oninput="updatePlCalc()"></div>
+      <div class="formrow"><label>Current Price</label><input type="number" id="plSpot" step="0.5" value="100" oninput="onPlSpotInput()"></div>
+      <div class="formrow"><label>Implied Vol (%)</label><input type="number" id="plIv" step="0.5" value="35" oninput="updatePlCalc()"></div>
+      <div class="formrow"><label>Entry Date</label><input type="date" id="plEntryDate" value="${todayIsoDate()}" oninput="onPlEntryFieldsInput()"></div>
+      <div class="formrow"><label>Expiration Date</label><input type="date" id="plExpiryDate" value="${addDaysIso(todayIsoDate(), 30)}" oninput="onPlEntryFieldsInput()"></div>
+    </div>
+    <svg class="payoffchart" id="plPayoffChart" viewBox="0 0 ${PL_CHART_W} ${PL_CHART_H}"></svg>
+    <div class="pllegend">
+      <span>&mdash; At expiration</span>
+      <span style="color:var(--gold)">- - Model (Black-Scholes)</span>
+      <span>Drag chart to scrub price</span>
+    </div>
+    <div class="formrow" style="margin-top:8px">
+      <label id="plTimeFwdLabel">Time forward</label>
+    </div>
+    <input type="range" id="plEvalDaysSlider" min="0" max="30" step="1" value="0" oninput="onPlEvalDaysInput()" style="width:100%">
+    <div class="resultgrid" id="plResults"></div>
+    <div class="resultgrid" id="plSummary" style="margin-top:6px"></div>
+    <p class="plnote">Model curve uses Black-Scholes with constant IV and a 4.5% risk-free rate &mdash; an estimate, not a quote. Educational tool only, not financial advice.</p>`;
+}
+
+function renderPlCalcForm() {
+  const body = document.getElementById("plFormBody");
+  body.innerHTML = plMode === "spot" ? spotFormHtml() : optionsFormHtml();
+  document.getElementById("plModeSpot").className = "modebtn" + (plMode === "spot" ? " active" : "");
+  document.getElementById("plModeOptions").className = "modebtn" + (plMode === "options" ? " active" : "");
+  document.getElementById("plModalBody").classList.toggle("optmode", plMode === "options");
+  if (plMode === "options") {
+    plEvalPrice = null; plEvalDays = null;
+    const svg = document.getElementById("plPayoffChart");
+    svg.addEventListener("mousedown", onPlChartDown);
+    svg.addEventListener("mousemove", onPlChartMove);
+    window.addEventListener("mouseup", onPlChartUp);
+    svg.addEventListener("touchstart", onPlChartDown);
+    svg.addEventListener("touchmove", onPlChartMove);
+    svg.addEventListener("touchend", onPlChartUp);
+  }
+  updatePlCalc();
+}
+
+function resultBox(label, valueHtml) {
+  return `<div class="resultbox"><span class="rlbl">${label}</span><span class="rval">${valueHtml}</span></div>`;
+}
+
+function updateSpotCalc() {
+  const entry = parseFloat(document.getElementById("plEntry").value);
+  const target = parseFloat(document.getElementById("plTarget").value);
+  const stop = parseFloat(document.getElementById("plStop").value);
+  const sizeRaw = document.getElementById("plSize").value;
+  const size = sizeRaw === "" ? null : parseFloat(sizeRaw);
+  const out = document.getElementById("plResults");
+  if ([entry, target, stop].some(v => isNaN(v)) || entry <= 0) { out.innerHTML = ""; return; }
+
+  const gainPct = (target - entry) / entry * 100;
+  const lossPct = (stop - entry) / entry * 100; // negative when stop < entry
+  const rr = lossPct !== 0 ? Math.abs(gainPct / lossPct) : null;
+
+  let html = resultBox("Max Gain", `<span class="${plClass(gainPct)}">${fmtPct(gainPct)}</span>`)
+           + resultBox("Max Loss", `<span class="${plClass(lossPct)}">${fmtPct(lossPct)}</span>`);
+  if (size != null && !isNaN(size) && size > 0) {
+    html += resultBox("Max Gain ($)", `<span class="${plClass(gainPct)}">${fmtMoney(size * gainPct / 100)}</span>`)
+          + resultBox("Max Loss ($)", `<span class="${plClass(lossPct)}">${fmtMoney(size * lossPct / 100)}</span>`);
+  }
+  if (rr != null) html += resultBox("Risk:Reward", `1 : ${rr.toFixed(2)}`);
+  out.innerHTML = html;
+}
+
+// ---- Options: shared field reader + P/L math ----
+// Days measured in whole calendar days from local midnight, matching the
+// <input type=date> value's own day granularity -- avoids off-by-one from
+// comparing raw Date objects with differing time-of-day components.
+function todayIsoDate() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function daysBetween(isoA, isoB) {
+  const a = new Date(isoA + "T00:00:00"), b = new Date(isoB + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
+function addDaysIso(iso, days) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function readOptFields() {
+  const K = parseFloat(document.getElementById("plStrike").value);
+  const premium = parseFloat(document.getElementById("plPremium").value);
+  const contracts = Math.max(1, Math.round(parseFloat(document.getElementById("plContracts").value) || 1));
+  const S = parseFloat(document.getElementById("plSpot").value);
+  const iv = Math.max(parseFloat(document.getElementById("plIv").value) || 0, 0.01) / 100;
+  const entryDate = document.getElementById("plEntryDate").value || todayIsoDate();
+  const expiryDate = document.getElementById("plExpiryDate").value || addDaysIso(entryDate, 30);
+  const dte = Math.max(daysBetween(entryDate, expiryDate), 1);
+  // daysElapsed = how far "today" sits on the entry->expiry timeline; clamped
+  // into [0, dte] so a stale/mistyped entry date can't push it out of range.
+  const daysElapsed = Math.min(Math.max(daysBetween(entryDate, todayIsoDate()), 0), dte);
+  return { side: plOptSide, type: plOptType, K, premium, contracts, S, iv, entryDate, expiryDate, dte, daysElapsed };
+}
+function optFieldsValid(f) {
+  return ![f.K, f.premium, f.contracts, f.S, f.iv, f.dte].some(v => isNaN(v)) && f.K > 0 && f.S > 0 && f.premium >= 0;
+}
+function plMult(f) { return f.contracts * 100; }
+function plSign(f) { return f.side === "buy" ? 1 : -1; }
+function plAtExpiry(f, S) {
+  const intrinsic = f.type === "call" ? Math.max(S - f.K, 0) : Math.max(f.K - S, 0);
+  return plSign(f) * (intrinsic - f.premium) * plMult(f);
+}
+// daysFromEntry: position on the entry->expiry timeline (0 = entry date,
+// f.dte = expiration) -- NOT days from today. The slider's default sits at
+// f.daysElapsed (today's actual position); dragging it explores other points
+// on that same timeline, including past expiration-relative-to-entry dates.
+function plModelAt(f, S, daysFromEntry) {
+  const T = Math.max(f.dte - daysFromEntry, 0) / 365;
+  return plSign(f) * (blackScholes(f.type, S, f.K, T, f.iv, RISK_FREE_RATE).price - f.premium) * plMult(f);
+}
+function plPriceRange(f) {
+  const center = (f.K + f.S) / 2;
+  const span = Math.max(f.K * 0.22, Math.abs(f.S - f.K) * 2.2, f.premium * 4, 1);
+  return [Math.max(0.01, center - span), center + span];
+}
+
+function onPlSpotInput() {
+  plEvalPrice = parseFloat(document.getElementById("plSpot").value) || plEvalPrice;
+  updatePlCalc();
+}
+function onPlEntryFieldsInput() {
+  // Entry date / DTE define the position itself -- changing either resets
+  // the slider back to "today" on the new timeline, same as how changing
+  // spot resets the price scrub.
+  plEvalDays = null;
+  updatePlCalc();
+}
+function onPlEvalDaysInput() {
+  plEvalDays = parseInt(document.getElementById("plEvalDaysSlider").value, 10) || 0;
+  updatePlCalc();
+}
+
+function plPriceFromEvent(e, f) {
+  const svg = document.getElementById("plPayoffChart");
+  const rect = svg.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const px = ((clientX - rect.left) / rect.width) * PL_CHART_W;
+  const [loS, hiS] = plPriceRange(f);
+  const iw = PL_CHART_W - PL_PAD.l - PL_PAD.r;
+  const S = loS + ((px - PL_PAD.l) / iw) * (hiS - loS);
+  return Math.min(hiS, Math.max(loS, S));
+}
+function onPlChartDown(e) {
+  e.preventDefault();
+  plDragging = true;
+  const f = readOptFields();
+  if (optFieldsValid(f)) { plEvalPrice = plPriceFromEvent(e, f); updatePlCalc(); }
+}
+function onPlChartMove(e) {
+  if (!plDragging) return;
+  const f = readOptFields();
+  if (optFieldsValid(f)) { plEvalPrice = plPriceFromEvent(e, f); updatePlCalc(); }
+}
+function onPlChartUp() { plDragging = false; }
+
+function buildPayoffChart(f) {
+  const svg = document.getElementById("plPayoffChart");
+  const [loS, hiS] = plPriceRange(f);
+  const iw = PL_CHART_W - PL_PAD.l - PL_PAD.r, ih = PL_CHART_H - PL_PAD.t - PL_PAD.b;
+  const N = 100;
+  const expPts = [], modelPts = [];
+  let yMin = Infinity, yMax = -Infinity;
+  for (let i = 0; i <= N; i++) {
+    const S = loS + ((hiS - loS) * i) / N;
+    const a = plAtExpiry(f, S), b = plModelAt(f, S, plEvalDays);
+    expPts.push([S, a]); modelPts.push([S, b]);
+    yMin = Math.min(yMin, a, b); yMax = Math.max(yMax, a, b);
+  }
+  const pad = Math.max((yMax - yMin) * 0.12, 20);
+  yMin -= pad; yMax += pad;
+  const xOf = S => PL_PAD.l + ((S - loS) / (hiS - loS)) * iw;
+  const yOf = v => PL_PAD.t + (1 - (v - yMin) / (yMax - yMin || 1)) * ih;
+  const pathOf = pts => pts.map(([S, v], i) => `${i ? "L" : "M"}${xOf(S).toFixed(1)},${yOf(v).toFixed(1)}`).join(" ");
+  const zeroY = Math.min(Math.max(yOf(0), PL_PAD.t), PL_PAD.t + ih);
+
+  const breakeven = f.type === "call" ? f.K + f.premium : f.K - f.premium;
+  const evalPrice = plEvalPrice == null ? f.S : plEvalPrice;
+  const evalX = xOf(Math.min(hiS, Math.max(loS, evalPrice)));
+  const evalPL = plModelAt(f, evalPrice, plEvalDays);
+  const evalY = Math.min(Math.max(yOf(evalPL), PL_PAD.t), PL_PAD.t + ih);
+  const profit = evalPL >= 0;
+
+  const yTicks = [];
+  { const range = yMax - yMin, raw = range / 5 || 1;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => range / s <= 6) || raw;
+    for (let v = Math.ceil(yMin / step) * step; v <= yMax; v += step) yTicks.push(v); }
+  const xTicks = [];
+  for (let i = 1; i < 6; i++) xTicks.push(loS + (hiS - loS) * i / 6);
+
+  const gridHtml = yTicks.map(v => `
+    <line x1="${PL_PAD.l}" x2="${PL_PAD.l + iw}" y1="${yOf(v).toFixed(1)}" y2="${yOf(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+    <text class="axislabel" x="${PL_PAD.l - 6}" y="${(yOf(v) + 3).toFixed(1)}" text-anchor="end">${v < 0 ? "-" : ""}$${Math.round(Math.abs(v))}</text>`
+  ).join("") + xTicks.map(S => `
+    <text class="axislabel" x="${xOf(S).toFixed(1)}" y="${PL_CHART_H - 8}" text-anchor="middle">$${S.toFixed(0)}</text>`
+  ).join("");
+
+  const breakevenHtml = (breakeven > loS && breakeven < hiS) ? `
+    <circle cx="${xOf(breakeven).toFixed(1)}" cy="${zeroY.toFixed(1)}" r="3.5" fill="var(--panel)" stroke="var(--gold)" stroke-width="2"/>
+    <text class="marklabel" x="${xOf(breakeven).toFixed(1)}" y="${(zeroY - 8).toFixed(1)}" text-anchor="middle" fill="var(--gold)">BE $${breakeven.toFixed(2)}</text>` : "";
+
+  svg.innerHTML = `
+    ${gridHtml}
+    <line x1="${PL_PAD.l}" x2="${PL_PAD.l + iw}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="var(--muted)" stroke-width="1.2" opacity="0.7"/>
+    <path d="${pathOf(expPts)}" fill="none" stroke="var(--text)" stroke-width="2" opacity="0.9"/>
+    <path d="${pathOf(modelPts)}" fill="none" stroke="var(--gold)" stroke-width="1.6" stroke-dasharray="5,4" opacity="0.95"/>
+    <line x1="${xOf(f.K).toFixed(1)}" x2="${xOf(f.K).toFixed(1)}" y1="${PL_PAD.t}" y2="${PL_PAD.t + ih}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2,4"/>
+    <text class="marklabel" x="${(xOf(f.K) + 4).toFixed(1)}" y="${PL_PAD.t + 11}">K $${f.K}</text>
+    ${breakevenHtml}
+    <line x1="${evalX.toFixed(1)}" x2="${evalX.toFixed(1)}" y1="${PL_PAD.t}" y2="${PL_PAD.t + ih}" stroke="${profit ? "var(--green)" : "var(--red)"}" stroke-width="1" opacity="0.5"/>
+    <circle cx="${evalX.toFixed(1)}" cy="${evalY.toFixed(1)}" r="5" fill="${profit ? "var(--green)" : "var(--red)"}" stroke="var(--panel)" stroke-width="2"/>`;
+}
+
+function updateOptionsCalc() {
+  const f = readOptFields();
+  const out = document.getElementById("plResults");
+  const summary = document.getElementById("plSummary");
+  if (!optFieldsValid(f)) {
+    out.innerHTML = ""; summary.innerHTML = ""; document.getElementById("plPayoffChart").innerHTML = "";
+    return;
+  }
+  if (plEvalPrice == null) plEvalPrice = f.S;
+  // Default (and reset-on-entry-field-change target): "today" on the
+  // entry->expiry timeline, not day 0 -- the slider represents days since
+  // entry, so today is wherever daysElapsed actually lands.
+  if (plEvalDays == null) plEvalDays = f.daysElapsed;
+
+  const slider = document.getElementById("plEvalDaysSlider");
+  slider.max = f.dte;
+  plEvalDays = Math.min(Math.max(plEvalDays, 0), f.dte);
+  slider.value = plEvalDays;
+  document.getElementById("plTimeFwdLabel").textContent =
+    `Time forward: Day ${plEvalDays} of ${f.dte} (today = Day ${f.daysElapsed}, expires ${f.expiryDate})`;
+
+  const evalPL = plModelAt(f, plEvalPrice, plEvalDays);
+  const evalPLExp = plAtExpiry(f, plEvalPrice);
+  const cost = f.premium * plMult(f);
+  const evalRet = cost > 0 ? (evalPL / cost) * 100 : 0;
+
+  out.innerHTML = resultBox(`Stock at ${plEvalDays === 0 ? "today" : "+" + plEvalDays + "d"}`, fmtMoney(plEvalPrice))
+                 + resultBox("P/L (model)", `<span class="${plClass(evalPL)}">${fmtMoney(evalPL)}</span>`)
+                 + resultBox("P/L at expiry", `<span class="${plClass(evalPLExp)}">${fmtMoney(evalPLExp)}</span>`)
+                 + resultBox("Return", `<span class="${plClass(evalRet)}">${fmtPct(evalRet)}</span>`);
+
+  const maxLossLong = cost;
+  const maxProfitPut = (f.K - f.premium) * plMult(f);
+  const maxProfit = f.side === "buy"
+    ? (f.type === "call" ? "Unlimited" : fmtMoney(maxProfitPut))
+    : fmtMoney(maxLossLong);
+  const maxLoss = f.side === "buy"
+    ? fmtMoney(-maxLossLong)
+    : (f.type === "call" ? "Unlimited" : fmtMoney(-maxProfitPut));
+  const breakeven = f.type === "call" ? f.K + f.premium : f.K - f.premium;
+  summary.innerHTML = resultBox(f.side === "buy" ? "Cost (max risk)" : "Credit received", fmtMoney(cost))
+                     + resultBox("Breakeven", fmtMoney(breakeven))
+                     + resultBox("Max Profit", `<span class="pos">${maxProfit}</span>`)
+                     + resultBox("Max Loss", `<span class="neg">${maxLoss}</span>`);
+
+  buildPayoffChart(f);
+}
+
+function updatePlCalc() {
+  if (plMode === "spot") updateSpotCalc(); else updateOptionsCalc();
+}
+
+function showPlCalculator() {
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modaltitle">P/L Calculator</div>
+    <div class="modalbody plcalc" id="plModalBody">
+      <div class="modemid">
+        <button type="button" class="modebtn" id="plModeSpot" onclick="setPlMode('spot')">Spot</button>
+        <button type="button" class="modebtn" id="plModeOptions" onclick="setPlMode('options')">Options</button>
+      </div>
+      <div id="plFormBody"></div>
+    </div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+  plMode = "spot";
+  plOptSide = "buy"; plOptType = "call"; plEvalPrice = null; plEvalDays = null;
+  renderPlCalcForm();
 }
 
 // Color coding: blue = an active/open trade right now, otherwise green/yellow/red
@@ -1275,6 +1710,7 @@ document.getElementById("clearSelectionBtn").addEventListener("click", () => {
   if (lastData) render(lastData);
 });
 document.getElementById("addToWatchlistBtn").addEventListener("click", showWatchlistPicker);
+document.getElementById("plCalcBtn").addEventListener("click", showPlCalculator);
 
 load(false);
 </script>
