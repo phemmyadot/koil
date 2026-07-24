@@ -1,5 +1,7 @@
 # Price Data Storage: Incremental Fetch + Real DB
 
+**Scope note:** this doc originally covered price bars only. Since it was written, two more pieces of state went from "doesn't exist" to "real, shipped, in-memory-only code" that has the exact same problem price bars had: `webapp/app.py`'s `_computed`/`_computed_source_fetch` (per-ticker strategy results, now persisted to `computed_cache.pkl`, same bind-mounted-pickle pattern as price bars) and `webapp/scoring.py`'s `_earnings_cache` (per-ticker earnings dates, 24h TTL, but **not** persisted at all yet -- still purely in-memory, reset to empty on every restart). All three are covered below as one schema, since a real DB migration should do them together rather than three separate piecemeal changes.
+
 ## Problem, precisely
 
 `webapp/data.py`'s `_fetch_one()` always does:
@@ -26,9 +28,12 @@ This works. It is not broken. The two real weaknesses are: (1) full-history refe
 
 ## Proposed architecture
 
-### Storage: SQLite, one row per (ticker, date)
+### Storage: SQLite, one DB file, five tables
+
+SQLite, not Postgres/MySQL: this is a single-process app on one box, no concurrent writers from multiple hosts, no need for a network round-trip to the DB. SQLite is a file (`webapp/app_data.db`) — same bind-mount deployment story as `tickers.py`/`price_cache.pkl` today, zero new infrastructure (no separate DB container, no connection string, no new failure mode of "DB is down"). Python's `sqlite3` is stdlib — no new dependency. One file, one connection, covers price bars + computed results + earnings dates — no reason to split these across separate DB files when they're all small, all owned by this one process, and some queries (e.g. "is this ticker's computed result still valid") need to reason about both `bars`/`fetch_meta` and `computed_results` together.
 
 ```sql
+-- ── Price bars (webapp/data.py's _raw_cache) ──────────────────────────────
 CREATE TABLE bars (
     ticker TEXT NOT NULL,
     date   TEXT NOT NULL,   -- ISO date, e.g. '2026-07-24'
@@ -40,11 +45,65 @@ CREATE INDEX idx_bars_ticker ON bars(ticker);
 CREATE TABLE fetch_meta (
     ticker TEXT PRIMARY KEY,
     last_fetched_at REAL NOT NULL,   -- epoch, mirrors today's _fetched_at
-    last_bar_date TEXT NOT NULL      -- most recent date actually stored -- the incremental-fetch anchor
+    last_bar_date TEXT NOT NULL,     -- most recent date actually stored -- the incremental-fetch anchor
+    last_error TEXT                  -- mirrors today's _raw_errors; NULL if last fetch succeeded
+);
+
+-- ── Computed strategy results (webapp/app.py's _computed) ─────────────────
+-- One row per ticker -- the full per-ticker payload (VEXH/VCP/VCPO/prebreak/
+-- setup_score) stored as JSON, not normalized into columns. This blob is
+-- deeply nested, per-strategy-shaped, and evolves often (new strategies,
+-- new scoring dimensions) -- normalizing it into relational columns would
+-- mean a schema migration every time webapp/scoring.py or webapp/score.py
+-- gains a new field. SQLite's JSON1 extension (compiled in by default since
+-- 3.38, bundled with Python's sqlite3 on any remotely current Python) lets
+-- SQL still query into it (json_extract(payload, '$.score')) if ever needed
+-- without committing to a rigid column-per-field schema now.
+CREATE TABLE computed_results (
+    ticker TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,           -- JSON-serialized full payload dict
+    source_fetched_at REAL NOT NULL, -- the fetch_meta.last_fetched_at this was computed FROM --
+                                      -- the staleness key: recompute only if this no longer
+                                      -- matches fetch_meta.last_fetched_at for the same ticker
+    computed_at REAL NOT NULL,       -- epoch this row was last written
+    error TEXT                       -- mirrors today's _computed_errors; NULL if compute succeeded
+);
+
+-- ── Earnings dates (webapp/scoring.py's _earnings_cache) ───────────────────
+-- Currently NOT persisted at all -- every restart re-fetches every ticker's
+-- earnings calendar from Yahoo before its 24h in-memory TTL would have
+-- required it, purely because the process restarted. Same class of bug
+-- fixed for price bars, not yet fixed here.
+CREATE TABLE earnings_dates (
+    ticker TEXT NOT NULL,
+    earnings_date TEXT NOT NULL,     -- ISO date of one reported/expected earnings date
+    fetched_at REAL NOT NULL,        -- when this ticker's earnings calendar was last fetched --
+                                      -- the 24h TTL check today's _EARNINGS_CACHE_TTL applies to
+    PRIMARY KEY (ticker, earnings_date)
+);
+CREATE INDEX idx_earnings_ticker ON earnings_dates(ticker);
+
+-- ── Universe screening marker (webapp/app.py's universe_last_screened.txt) ─
+-- Folded in for completeness -- currently a one-line text file, not a real
+-- table's worth of data, but no reason to keep a 6th small file around once
+-- the other three caches move into one DB. Single row, ticker/id irrelevant.
+CREATE TABLE universe_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- enforces exactly one row
+    last_screened_date TEXT NOT NULL         -- ISO date, mirrors today's file content
 );
 ```
 
-SQLite, not Postgres/MySQL: this is a single-process app on one box, no concurrent writers from multiple hosts, no need for a network round-trip to the DB. SQLite is a file (`webapp/price_data.db`) — same bind-mount deployment story as `tickers.py`/`price_cache.pkl` today, zero new infrastructure (no separate DB container, no connection string, no new failure mode of "DB is down"). Python's `sqlite3` is stdlib — no new dependency.
+Table-by-table mapping from today's in-memory/on-disk state:
+
+| Table | Replaces | Currently persisted? |
+|---|---|---|
+| `bars` | `data.py`'s `_raw_cache` | Yes -- `price_cache.pkl` (whole-blob pickle) |
+| `fetch_meta` | `data.py`'s `_fetched_at` / `_raw_errors` | Yes -- inside `price_cache.pkl` |
+| `computed_results` | `app.py`'s `_computed` / `_computed_source_fetch` / `_computed_errors` | Yes -- `computed_cache.pkl` (whole-blob pickle, added since this doc's first draft) |
+| `earnings_dates` | `scoring.py`'s `_earnings_cache` | **No** -- pure in-memory, lost on every restart |
+| `universe_meta` | `app.py`'s `universe_last_screened.txt` | Yes -- plain text file |
+
+The `earnings_dates` gap is worth calling out on its own: it's the one piece of state in this whole app that currently has zero persistence at all. It doesn't cause wrong behavior (worst case is one redundant Yahoo earnings-calendar fetch per ticker per restart, degrading to "no earnings data" on failure per `_cached_earnings_dates`'s existing timeout handling), but it's the same class of unnecessary-Yahoo-traffic-on-every-redeploy problem the price-bar and computed-results caches were both built to fix, just not yet extended to earnings dates.
 
 ### Incremental fetch logic
 
@@ -102,12 +161,21 @@ Worth being explicit, since it's tempting to read "move to a DB" as a bigger win
 
 ## Migration path
 
-1. Add `webapp/db.py`: schema creation (idempotent `CREATE TABLE IF NOT EXISTS`), `get_last_bar_date(ticker)`, `upsert_bars(ticker, df)`, `load_all_bars() -> dict[str, DataFrame]` (startup bulk-load into RAM, replaces `_load_price_cache()`).
-2. Update `_fetch_one()` for incremental `start=` date, per above.
-3. Update `_save_price_cache()`'s equivalent to upsert only the tickers that were actually fetched this batch, not rewrite everything — this is where the DB's row-level granularity actually pays off versus today's whole-dict pickle rewrite.
-4. One-time migration: on first startup after this change, if `price_cache.pkl` exists and `price_data.db` doesn't, read the pickle and bulk-insert into SQLite, then the pickle can be deleted (or left as a dead file, gitignored either way).
-5. Update `docker-compose.yml`/`deploy.sh`/`.gitignore` — same bind-mount pattern, swap `price_cache.pkl` for `price_data.db` (and drop the `.tmp` rename entry, since SQLite doesn't need the atomic-swap-onto-a-bind-mount workaround pickle needed — SQLite's own journal/WAL mode handles crash safety internally without touching the mounted file's inode).
+1. Add `webapp/db.py`: schema creation (idempotent `CREATE TABLE IF NOT EXISTS` for all five tables), plus the access functions each cache needs:
+   - Price bars: `get_last_bar_date(ticker)`, `upsert_bars(ticker, df)`, `load_all_bars() -> dict[str, DataFrame]` (startup bulk-load into RAM, replaces `data.py`'s `_load_price_cache()`).
+   - Computed results: `get_computed(ticker) -> dict | None`, `upsert_computed(ticker, payload, source_fetched_at, error)`, `load_all_computed() -> dict[str, dict]` (replaces `app.py`'s `_load_computed_cache()`).
+   - Earnings dates: `get_earnings_dates(ticker) -> DatetimeIndex | None` (checks `fetched_at` against the TTL itself, returns `None` on miss/stale), `upsert_earnings_dates(ticker, dates)` (replaces `scoring.py`'s in-memory-only `_earnings_cache`).
+   - Universe marker: `get_last_screened_date()`, `set_last_screened_date(date)` (replaces `app.py`'s `universe_last_screened.txt` read/write).
+2. Update `data.py`'s `_fetch_one()` for incremental `start=` date, per above.
+3. Update `data.py`'s `_save_price_cache()` equivalent to upsert only the tickers actually fetched this batch, not rewrite everything -- same for `app.py`'s `_save_computed_cache()` equivalent (upsert only tickers that were actually recomputed this pass, which per the reuse logic already shipped is usually a small subset of the full universe) -- this is where the DB's row-level granularity actually pays off versus today's whole-dict pickle rewrites.
+4. Update `scoring.py`'s `_cached_earnings_dates()` to check the DB (via `get_earnings_dates`) before falling back to a live Yahoo fetch, and to write through `upsert_earnings_dates` on a successful fetch -- this is a net-new persistence layer, not a migration of existing on-disk data, since `_earnings_cache` was never saved anywhere.
+5. One-time migration: on first startup after this change, for each of `price_cache.pkl` and `computed_cache.pkl` that exists while `app_data.db` doesn't yet, read the pickle and bulk-insert into the corresponding table, then the pickle can be deleted (or left as a dead file, gitignored either way). `universe_last_screened.txt` similarly seeds `universe_meta` once, then can be deleted. No migration needed for earnings dates -- there's nothing on disk to migrate from.
+6. Update `docker-compose.yml`/`deploy.sh`/`.gitignore` — replace the `price_cache.pkl`/`computed_cache.pkl`/`universe_last_screened.txt` bind mounts with a single `app_data.db` mount (and drop the pickle files' `.tmp`-rename workaround entirely -- SQLite's own journal/WAL mode handles crash safety internally without touching the mounted file's inode, so none of the `os.replace()`-onto-a-bind-mount `EBUSY` issues that pickle hit apply here).
 
 ## Effort vs. payoff
 
-Real, worthwhile change — but it's a fetch-layer change, not a compute-layer one, and the biggest lever (avoiding full-history redownload) doesn't strictly require SQLite to implement; it could be done by changing `_fetch_one()`'s `start=` logic while keeping the pickle format, storing `last_bar_date` in the existing `_fetched_at`-style dict and appending new rows to each ticker's DataFrame in place. The DB adds real value on top of that (per-ticker durability, no whole-blob corruption risk, natural "keep forever" semantics, avoids the O(all tickers) rewrite cost on every save) but is the more expensive path of the two viable options.
+Real, worthwhile change — but it's a fetch/persistence-layer change, not a compute-layer one (see the separate VEXH duplicate-backtest-run fix already implemented for the compute side), and the biggest single lever (avoiding full-history redownload) doesn't strictly require SQLite to implement; it could be done by changing `_fetch_one()`'s `start=` logic while keeping the pickle format, storing `last_bar_date` in the existing `_fetched_at`-style dict and appending new rows to each ticker's DataFrame in place. Same is true of `computed_results` and `earnings_dates` -- both could stay pickle-based (the former already does; the latter could gain a pickle cache with far less effort than a full DB migration).
+
+The DB's actual differentiated value, beyond what incremental-pickle-everywhere would already get you: per-ticker durability (one corrupt row doesn't lose 2000 tickers' worth of data the way a corrupt pickle blob does today), avoids the O(all tickers) rewrite cost on every save (three separate whole-blob pickle writes today -- `price_cache.pkl`, `computed_cache.pkl`, and a hypothetical earnings pickle -- collapse into targeted row upserts), natural "keep forever" semantics for delisted/dropped tickers, and **one file instead of four** (`price_cache.pkl` + `computed_cache.pkl` + `universe_last_screened.txt` + a hypothetical earnings pickle → one `app_data.db`), which also simplifies `docker-compose.yml`/`deploy.sh` down to a single bind mount and a single missing-file guard instead of the current four.
+
+Whether that's worth the migration effort right now depends on how much the "one corrupt pickle loses everything" risk and the "several small files to keep bind-mounted in sync" operational overhead actually bite in practice — neither has caused a real incident yet, per this session's work, but the pattern (bind-mount gotchas, `EBUSY` on atomic writes, remembering to add each new cache file to `.gitignore`/`docker-compose.yml`/`deploy.sh` in three places) has already repeated three times for three separate caches.
