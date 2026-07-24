@@ -99,10 +99,24 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
     never-before-seen ticker gets the full-history cold fetch. This is the
     actual point of the DB migration -- a normal refresh asks Yahoo for ~1
     new row per ticker, not ~4.5 years of already-unchanged history."""
+    # get_last_bar_date can return '' (not None) for a ticker whose very
+    # first fetch attempt failed -- mark_fetch_error stores an empty-string
+    # placeholder there, not a real date, since there's no bar to record
+    # yet. pd.Timestamp('') -> NaT, and NaT.strftime() raises uncaught,
+    # which previously killed the entire background loop thread on the
+    # first ticker that ever hit this path. Treat anything that isn't a
+    # real parseable date the same as "never fetched" -- fall back to a
+    # full cold fetch rather than crash.
     last_bar_date = None if force else db.get_last_bar_date(ticker)
-    start = HISTORY_START if last_bar_date is None else (
-        (pd.Timestamp(last_bar_date) + timedelta(days=1)).strftime("%Y-%m-%d")
-    )
+    if last_bar_date:
+        try:
+            start = (pd.Timestamp(last_bar_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            last_bar_date = None
+            start = HISTORY_START
+    else:
+        last_bar_date = None
+        start = HISTORY_START
     try:
         df = yf.download(ticker, start=start, interval="1d", progress=False,
                           auto_adjust=False, timeout=FETCH_TIMEOUT)

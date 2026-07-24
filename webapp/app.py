@@ -291,8 +291,20 @@ def _on_startup():
     # gap-fetching an already-current ticker is cheap enough not to skip.
     def loop():
         while True:
-            _universe_refresh_if_needed()
-            refresh_and_compute()
+            try:
+                _universe_refresh_if_needed()
+                refresh_and_compute()
+            except Exception as e:  # noqa: BLE001 - a bug in one pass must not
+                # permanently kill the only thread that ever refreshes data.
+                # Without this, an uncaught exception anywhere in a single
+                # pass (e.g. a bad DB value crashing one ticker's fetch)
+                # silently ends the loop forever -- the server keeps serving
+                # requests, but /api/meta's last_fetch/fetch_progress/
+                # compute_progress freeze at their last values with no
+                # further sign anything is wrong until someone notices data
+                # has gone stale and checks the container logs.
+                print(f"app: background refresh loop pass failed ({e}); "
+                      f"will retry next cycle instead of stopping.")
             time.sleep(data.CHECK_INTERVAL)
     threading.Thread(target=loop, daemon=True).start()
 
