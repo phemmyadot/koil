@@ -323,7 +323,7 @@
     <input type="text" id="tickerSearch" placeholder="Search ticker&hellip;" autocomplete="off">
     <span class="sep"></span>
     <label for="minTradesFilter">Min trades</label>
-    <input type="number" id="minTradesFilter" min="0" step="1" value="0">
+    <input type="number" id="minTradesFilter" min="0" step="1" value="15">
     <span class="sep"></span>
     <div class="advfilter" id="advFilter">
       <button id="advFilterToggle" class="advfilterbtn" type="button" aria-expanded="false">
@@ -928,21 +928,29 @@ function sliderStepsHtml(steps, suffix) {
   return steps.map(v => `<span>${v}${suffix}</span>`).join("");
 }
 function buildAdvFilterPanel() {
-  const stratRadios = ADV_STRATEGIES.map(([key, label], i) =>
-    `<label class="advcheck"><input type="radio" name="advStrategy" data-strat="${key}" ${i === 0 ? "checked" : ""}> ${label}</label>`
+  // Initial page-load selection only (VCPO/WR>=70/PF>=2.5 -- fires more
+  // often than VEXH and had the strongest results in practice); "Clear
+  // filters" still resets to the true no-op (first strategy in the list,
+  // both sliders at index 0), unlike Phase below which has an established
+  // non-zero floor -- see ADV_STRATEGY_INITIAL/resetToDefault.
+  const ADV_STRATEGY_INITIAL = "vcpo";
+  const ADV_WR_INITIAL_INDEX = WR_STEPS.indexOf(70);
+  const ADV_PF_INITIAL_INDEX = PF_STEPS.indexOf(2.5);
+  const stratRadios = ADV_STRATEGIES.map(([key, label]) =>
+    `<label class="advcheck"><input type="radio" name="advStrategy" data-strat="${key}" ${key === ADV_STRATEGY_INITIAL ? "checked" : ""}> ${label}</label>`
   ).join("");
   return `<div class="advsectionlabel">Strategy</div>
     <div class="advradiorow">${stratRadios}</div>
     <div class="advsliderrow">
       <div class="advslider">
         <div class="advsectionlabel">Win Rate</div>
-        <input type="range" id="advWrSlider" min="0" max="${WR_STEPS.length - 1}" step="1" value="0">
+        <input type="range" id="advWrSlider" min="0" max="${WR_STEPS.length - 1}" step="1" value="${ADV_WR_INITIAL_INDEX}">
         <div class="advslidersteps">${sliderStepsHtml(WR_STEPS, "%")}</div>
       </div>
       <span class="advand">AND</span>
       <div class="advslider">
         <div class="advsectionlabel">Profit</div>
-        <input type="range" id="advPfSlider" min="0" max="${PF_STEPS.length - 1}" step="1" value="0">
+        <input type="range" id="advPfSlider" min="0" max="${PF_STEPS.length - 1}" step="1" value="${ADV_PF_INITIAL_INDEX}">
         <div class="advslidersteps">${sliderStepsHtml(PF_STEPS, "")}</div>
       </div>
     </div>
@@ -1008,13 +1016,17 @@ function matchesTradeOnFilter(r, strats) {
 // Separate from Advance Filter and Trade On, ANDed against both. Phase and
 // Coil Energy are minimum-threshold sliders; the 4 boolean metrics are
 // switches (off = no filter, on = require true). All 6 AND together. See
-// FILTER_ARCHITECTURE.md -- Phase's default (NEUTRAL) is a real floor, not
-// a true no-op: BEARISH tickers are hidden even with nothing else touched.
+// FILTER_ARCHITECTURE.md -- Phase's default is a real floor, not a true
+// no-op: BULLISH/NEUTRAL/BEARISH tickers are hidden even with nothing else
+// touched. Raised from NEUTRAL to COILING (BULL): PRE-BREAKOUT alone was
+// too restrictive and hid COILING setups, one of the best watchlist
+// additions in practice; COILING (BULL) keeps those while still cutting
+// the BULLISH/NEUTRAL noise below it.
 const PHASE_STEPS = [
   ["BEARISH", -2], ["NEUTRAL", 0], ["BULLISH", 1],
   ["COILING (BULL)", 2], ["PRE-BREAKOUT", 4], ["BREAKOUT", 5],
 ];
-const PHASE_DEFAULT_INDEX = 1; // NEUTRAL
+const PHASE_DEFAULT_INDEX = 3; // COILING (BULL)
 const COIL_STEPS = [0, 5, 8, 12, 15];
 const PREBREAK_SWITCHES = [
   ["squeeze", "Volatility Squeeze", "bb_squeeze"],
@@ -1024,6 +1036,11 @@ const PREBREAK_SWITCHES = [
 ];
 
 function buildPrebreakPanel() {
+  // Coil Energy's initial page-load value (5+ bars, cuts the 0-bar EXPANDED
+  // setups while keeping anything with meaningful compression building);
+  // unlike Phase, this has no established non-zero floor -- "Clear filters"
+  // still resets it to true off (index 0), see resetToDefault below.
+  const COIL_INITIAL_INDEX = COIL_STEPS.indexOf(5);
   const phaseLabels = sliderStepsHtml(PHASE_STEPS.map(([name]) => name), "");
   const coilLabels = COIL_STEPS.map((v, i) => `<span>${i === 0 ? "0(off)" : v + "+"}</span>`).join("");
   const switches = PREBREAK_SWITCHES.map(([key, label]) =>
@@ -1034,7 +1051,7 @@ function buildPrebreakPanel() {
     <div class="advslidersteps">${phaseLabels}</div>
     <div class="switchgrid">${switches}</div>
     <div class="advsectionlabel">Coil Energy Build-up</div>
-    <input type="range" id="prebreakCoilSlider" min="0" max="${COIL_STEPS.length - 1}" step="1" value="0">
+    <input type="range" id="prebreakCoilSlider" min="0" max="${COIL_STEPS.length - 1}" step="1" value="${COIL_INITIAL_INDEX}">
     <div class="advslidersteps">${coilLabels}</div>
     <div class="advfilterfoot"><button id="prebreakClearBtn" class="clearfilters" type="button">Clear</button></div>`;
 }
