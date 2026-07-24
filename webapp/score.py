@@ -45,15 +45,19 @@ def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:
     compression_pts = 1 if (prebreak.get("bb_squeeze", False)
                              and prebreak.get("vol_dry_up", False)) else 0
 
-    # 5. Signal Timing / MAE (0-1)
+    # 5. Signal Timing / MAE (0-1). VEXH has neither open_position (it's
+    # open_trade there, different shape) nor signal_today -- both .get()
+    # calls fall through to their defaults, so this dimension scores 0 for
+    # every VEXH ticker until VEXH gets equivalent fields. Fails closed
+    # rather than silently favourable, but is a known gap, not full parity.
     open_pos = s.get("open_position")
     avg_mae = s.get("avg_mae_wins_pct")
     if open_pos and avg_mae is not None:
         timing_pts = 1 if open_pos.get("mae_pct", 0) < avg_mae else 0
-    elif open_pos is None and s.get("n_trades", 0) > 0:
-        timing_pts = 1  # fresh signal available, no open position to be behind on
+    elif open_pos is None and s.get("signal_today", False):
+        timing_pts = 1  # fresh signal today, not yet in a position
     else:
-        timing_pts = 0
+        timing_pts = 0  # no signal at all -- stale history isn't a favourable timing signal
 
     # 6. Outlier PnL Concentration (0-1)
     outlier_pts = 1 if s.get("max_trade_pnl_fraction", 1.0) <= 0.35 else 0

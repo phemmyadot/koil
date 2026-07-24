@@ -220,6 +220,9 @@ def _summarize(trades: list[dict]) -> dict:
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins) / len(trades) * 100 if trades else 0.0
     avg_days = round(sum(t["days"] for t in trades) / len(trades), 1) if trades else None
+    # "tp_pct" is a legacy name -- it's the trade's full signed pnl_pct
+    # (losses included, not just TP exits). Kept as-is since frontend/backend
+    # already agree on it and it's read in several places (last5(), scoring).
     last5 = [{"days": t["days"], "tp_pct": t["pnl_pct"]} for t in trades[-5:]]
 
     # mae_pct only exists on the FINAL-close trade record of each logical

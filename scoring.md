@@ -211,10 +211,13 @@ def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:
     open_pos = s.get("open_position")
     avg_mae = s.get("avg_mae_wins_pct", None)
     if open_pos and avg_mae is not None:
-        open_mae = open_pos.get("mae_pct", 0)  # requires the new field below
+        open_mae = open_pos.get("mae_pct", 0)
         timing_pts = 1 if open_mae < avg_mae else 0
-    elif open_pos is None and s.get("n_trades", 0) > 0:
-        # Fresh signal available (no open position but signal exists)
+    elif open_pos is None and s.get("signal_today", False):
+        # Fresh signal today, not yet in a position -- NOT "has any trade
+        # history," which would score 1 even for a ticker with zero current
+        # setup (that was the original bug: n_trades > 0 fires on every
+        # stale ticker with a track record, not just live signals).
         timing_pts = 1
     else:
         timing_pts = 0
