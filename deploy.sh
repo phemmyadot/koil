@@ -11,17 +11,14 @@ git pull origin master
 if [ ! -f webapp/tickers.py ]; then
   printf '"""Bootstrap placeholder."""\n\nTICKERS = []\n' > webapp/tickers.py
 fi
-if [ ! -f webapp/price_cache.pkl ]; then
-  touch webapp/price_cache.pkl  # data.py loads a missing/empty/corrupt file as a cold cache
+if [ ! -f webapp/app_data.db ]; then
+  touch webapp/app_data.db  # db.py creates the schema fresh in an empty file
 fi
-if [ ! -f webapp/computed_cache.pkl ]; then
-  touch webapp/computed_cache.pkl  # app.py loads a missing/empty/corrupt file as a cold cache
+if [ ! -f webapp/app_data.db-wal ]; then
+  touch webapp/app_data.db-wal  # SQLite WAL sidecar -- must exist as a file, not get
 fi
-if [ ! -f webapp/earnings_cache.pkl ]; then
-  touch webapp/earnings_cache.pkl  # scoring.py loads a missing/empty/corrupt file as a cold cache
-fi
-if [ ! -f webapp/universe_last_screened.txt ]; then
-  touch webapp/universe_last_screened.txt  # missing/empty means "never screened", forces one
+if [ ! -f webapp/app_data.db-shm ]; then
+  touch webapp/app_data.db-shm  # auto-vivified as a directory by the bind mount
 fi
 
 docker compose up -d --build

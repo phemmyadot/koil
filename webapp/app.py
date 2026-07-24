@@ -13,7 +13,6 @@ just a fast in-memory read -- no network call, no per-request backtest run.
 """
 import importlib
 import os
-import pickle
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 import webapp.build_universe as build_universe
 import webapp.data as data
+import webapp.db as db
 import webapp.optimizer as optimizer
 import webapp.prebreak as prebreak
 import webapp.score as score
@@ -40,52 +40,35 @@ _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
 # The data.py _fetched_at epoch each ticker's _computed entry was computed
 # against -- lets a fresh process tell "this cached result still matches the
-# current price data" (data.py's own price_cache.pkl hasn't refetched this
-# ticker since) apart from "this cached result is for stale/old price data
-# and must be recomputed," without needing to actually recompute to find out.
+# current price data" (data.py's bars haven't been refetched for this ticker
+# since) apart from "this cached result is for stale/old price data and must
+# be recomputed," without needing to actually recompute to find out.
 _computed_source_fetch: dict[str, float] = {}
 _compute_lock = threading.Lock()
 
-# Persists _computed the same way data.py persists _raw_cache -- a container
-# restart used to always force a full ~2100-ticker recompute (several
-# minutes) even when the price cache itself was fully warm, because
-# _computed is pure in-memory state with nothing backing it on disk. Bind-
-# mounted like price_cache.pkl/tickers.py; see docker-compose.yml/deploy.sh.
-_COMPUTED_CACHE_PATH = os.path.join(os.path.dirname(__file__), "computed_cache.pkl")
 
-
-def _load_computed_cache() -> None:
+def _load_computed_from_db() -> None:
     """Best-effort load on import -- same failure posture as data.py's
-    _load_price_cache(): missing/corrupt file just means everything gets
-    recomputed, same as a truly cold start. Must never raise."""
-    global _computed, _computed_errors, _computed_asof, _computed_source_fetch
-    if not os.path.isfile(_COMPUTED_CACHE_PATH):
-        return
+    _load_from_db(): an empty/corrupt DB just means everything gets
+    recomputed, same as a truly cold start. Must never raise.
+
+    Restores _computed_asof from the DB's own MAX(computed_at) too --
+    without this, a restart with a fully warm DB still read back asof=None,
+    which the frontend treats as "nothing computed yet" and shows the
+    cold-start loader for, even though every ticker's result was already
+    there and correct."""
+    global _computed, _computed_errors, _computed_source_fetch, _computed_asof
     try:
-        with open(_COMPUTED_CACHE_PATH, "rb") as f:
-            payload = pickle.load(f)
-        _computed = payload.get("computed", [])
-        _computed_errors = payload.get("errors", {})
-        _computed_asof = payload.get("asof")
-        _computed_source_fetch = payload.get("source_fetch", {})
-    except Exception as e:  # noqa: BLE001 - corrupted cache file, not a crash
-        print(f"app: computed cache load failed ({e}); starting cold.")
-        _computed, _computed_errors, _computed_asof, _computed_source_fetch = [], {}, None, {}
+        _computed, _computed_errors, _computed_source_fetch = db.load_all_computed()
+        max_computed_at = db.get_max_computed_at()
+        if max_computed_at is not None:
+            _computed_asof = datetime.fromtimestamp(max_computed_at, timezone.utc).isoformat(timespec="seconds")
+    except Exception as e:  # noqa: BLE001 - corrupted DB, not a crash
+        print(f"app: loading computed results from db failed ({e}); starting cold.")
+        _computed, _computed_errors, _computed_source_fetch = [], {}, {}
 
 
-def _save_computed_cache() -> None:
-    # Written in place, not via a .tmp-then-os.replace() atomic swap -- same
-    # reason as data.py's _save_price_cache(): this path is a Docker bind
-    # mount, and os.replace() onto a bind-mounted file fails with EBUSY.
-    try:
-        with open(_COMPUTED_CACHE_PATH, "wb") as f:
-            pickle.dump({"computed": _computed, "errors": _computed_errors,
-                         "asof": _computed_asof, "source_fetch": _computed_source_fetch}, f)
-    except Exception as e:  # noqa: BLE001 - failing to persist shouldn't crash a refresh
-        print(f"app: computed cache save failed ({e})")
-
-
-_load_computed_cache()
+_load_computed_from_db()
 
 # Live progress for the current compute_all() call, if one is in flight --
 # mirrors data.py's fetch_progress so the frontend can show a separate
@@ -204,32 +187,17 @@ def compute_all() -> None:
             _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}
             _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
             _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        _save_computed_cache()
-        # Force a final flush -- scoring.py's earnings-date cache saves are
-        # debounced per-ticker during the batch above (up to ~2100 misses in
-        # one pass), so the last few tickers computed within the debounce
-        # window of an earlier save might not have been persisted yet.
-        import webapp.scoring as scoring
-        scoring._save_earnings_cache(force=True)
+            computed_at = time.time()
+            # Only the tickers actually (re)computed this pass get written --
+            # reused entries are already correct in the DB from a prior pass,
+            # so this is a targeted per-ticker upsert, not a whole-table
+            # rewrite (the whole point of moving off a whole-blob pickle).
+            for tk, payload, err in results:
+                if payload is not None or err is not None:
+                    db.upsert_computed(tk, payload, new_source_fetch[tk], computed_at, err)
     finally:
         with _compute_lock:
             _compute_progress = None
-
-
-_UNIVERSE_DATE_PATH = os.path.join(os.path.dirname(__file__), "universe_last_screened.txt")
-
-
-def _universe_last_screened_date() -> str | None:
-    try:
-        with open(_UNIVERSE_DATE_PATH) as f:
-            return f.read().strip() or None
-    except FileNotFoundError:
-        return None
-
-
-def _mark_universe_screened_today() -> None:
-    with open(_UNIVERSE_DATE_PATH, "w") as f:
-        f.write(datetime.now(timezone.utc).date().isoformat())
 
 
 def rebuild_universe() -> str | None:
@@ -254,7 +222,7 @@ def rebuild_universe() -> str | None:
         return str(e) or type(e).__name__
     importlib.reload(tickers_module)
     TICKERS = tickers_module.TICKERS
-    _mark_universe_screened_today()
+    db.set_last_screened_date(datetime.now(timezone.utc).date().isoformat())
     return None
 
 
@@ -266,7 +234,7 @@ def _daily_universe_refresh_if_needed() -> None:
     background-loop wakeup. Errors are logged, not raised -- a failed
     automatic re-screen should never take down the price-refresh loop."""
     today = datetime.now(timezone.utc).date().isoformat()
-    if _universe_last_screened_date() == today:
+    if db.get_last_screened_date() == today:
         return
     err = rebuild_universe()
     if err:
@@ -354,8 +322,6 @@ def debug_memory():
     to this path configured, but don't expose this publicly as-is."""
     import gc
     import resource
-    import sys
-    import webapp.scoring as scoring
 
     with _compute_lock:
         computed_count = len(_computed)
@@ -363,6 +329,10 @@ def debug_memory():
     before_gc = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     collected = gc.collect()
     after_gc = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+    with db._lock:
+        earnings_ticker_count = db._conn.execute(
+            "SELECT COUNT(DISTINCT ticker) FROM earnings_dates").fetchone()[0]
 
     return {
         "rss_mb": round(after_gc, 1),
@@ -374,9 +344,8 @@ def debug_memory():
         "computed_pickled_mb": round(len(__import__("pickle").dumps(_computed)) / 1024 / 1024, 1),
         "raw_errors": len(data._raw_errors),
         "computed_errors": len(_computed_errors),
-        "earnings_cache_tickers": len(scoring._earnings_cache),
-        "earnings_cache_pickled_mb": round(
-            len(__import__("pickle").dumps(scoring._earnings_cache)) / 1024 / 1024, 1),
+        "earnings_cache_tickers": earnings_ticker_count,
+        "db_file_mb": round(os.path.getsize(db.DB_PATH) / 1024 / 1024, 1) if os.path.isfile(db.DB_PATH) else 0,
         "total_gc_tracked_objects": len(gc.get_objects()),
     }
 

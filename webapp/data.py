@@ -7,9 +7,15 @@ network call.
 Staleness rule: refetch every 2 hours while the US market is open, and at
 most once after each close (to pick up the final EOD candle) -- otherwise the
 cache is left alone, so a closed market means zero fetch traffic.
+
+Persistence: webapp/db.py (SQLite) is the durable backing store. _raw_cache
+stays the hot-path in-memory dict a page request actually reads from (no
+per-request DB query) -- loaded from the DB once on import, kept in sync on
+every fetch. Fetches are incremental: each ticker only requests bars newer
+than its last stored date (db.get_last_bar_date), not the full history every
+time, so a normal day's refresh asks Yahoo for ~1 new row per ticker instead
+of ~4.5 years of unchanged history. See webapp/db_implementation.md.
 """
-import os
-import pickle
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +26,7 @@ import pandas as pd
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 
+import webapp.db as db
 from webapp.tickers import TICKERS
 
 ET = ZoneInfo("America/New_York")
@@ -32,17 +39,14 @@ REFRESH_INTERVAL_OPEN = 2 * 60 * 60  # 2 hours while market open
 CHECK_INTERVAL = 30 * 60
 FETCH_WORKERS = 30
 
-# Persists _raw_cache to disk (gitignored, bind-mount this like tickers.py)
-# so a container rebuild doesn't force a full ~2000-ticker re-fetch from
-# Yahoo every deploy -- only tickers missing,
-# corrupted, or past today's TTL get re-fetched on startup. The manual
-# Refresh button (?refresh=1) bypasses this entirely via force=True.
-PRICE_CACHE_PATH = os.path.join(os.path.dirname(__file__), "price_cache.pkl")
-# Matches the start_date/startDate input default (1 Jan 2022) shared by all
-# three pine strategies. Fetches a year earlier than that so ATR (needs
-# ATR_LEN=22 + a 100-bar rolling average -- ~122 bars) and VEXH's SMA150 are
-# already warmed up by 2022-01-01, instead of computing on cold/incomplete
-# indicators for the first several months of the window.
+# Cold-fetch (ticker never seen before) starting point. Matches the
+# start_date/startDate input default (1 Jan 2022) shared by all three pine
+# strategies. Fetches a year earlier than that so ATR (needs ATR_LEN=22 + a
+# 100-bar rolling average -- ~122 bars) and VEXH's SMA150 are already warmed
+# up by 2022-01-01, instead of computing on cold/incomplete indicators for
+# the first several months of the window. Warm fetches (ticker already has
+# stored bars) ignore this entirely and request only the gap since
+# db.get_last_bar_date -- see _fetch_one.
 HISTORY_START = "2021-01-01"
 
 _raw_cache: dict[str, pd.DataFrame] = {}
@@ -63,41 +67,20 @@ def fetch_progress() -> dict[str, int] | None:
         return dict(_fetch_progress) if _fetch_progress is not None else None
 
 
-def _load_price_cache() -> None:
-    """Best-effort load on import -- a missing, empty, or corrupted cache
-    file just means every ticker gets treated as needing a fresh fetch,
-    same as a truly cold start. Must never raise and block the app."""
-    global _raw_cache, _fetched_at
-    if not os.path.isfile(PRICE_CACHE_PATH):
-        return
+def _load_from_db() -> None:
+    """Startup bulk-load into RAM from the DB -- must never raise and block
+    the app; an empty/fresh DB just means every ticker gets treated as
+    needing a cold fetch, same as a truly cold start."""
+    global _raw_cache, _fetched_at, _raw_errors
     try:
-        with open(PRICE_CACHE_PATH, "rb") as f:
-            payload = pickle.load(f)
-        _raw_cache = payload.get("bars", {})
-        _fetched_at = payload.get("fetched_at", {})
-    except Exception as e:  # noqa: BLE001 - corrupted cache file, not a crash
-        print(f"data: price cache load failed ({e}); starting cold.")
-        _raw_cache = {}
-        _fetched_at = {}
+        _raw_cache = db.load_all_bars()
+        _fetched_at, _raw_errors = db.load_all_fetch_meta()
+    except Exception as e:  # noqa: BLE001 - corrupted DB, not a crash
+        print(f"data: loading price data from db failed ({e}); starting cold.")
+        _raw_cache, _fetched_at, _raw_errors = {}, {}, {}
 
 
-def _save_price_cache() -> None:
-    # Not the usual write-to-.tmp-then-os.replace() atomic swap: PRICE_CACHE_PATH
-    # is a Docker bind mount (docker-compose.yml), so it's a mount point inside
-    # the container, not a plain renameable file -- os.replace() onto it fails
-    # with EBUSY ("Device or resource busy"), which silently discarded every
-    # save under the old atomic-write version. Writing in place loses crash-
-    # atomicity (a mid-write crash could leave a truncated/corrupt pickle),
-    # but _load_price_cache() already treats a corrupt file as a cold start
-    # rather than crashing, so that tradeoff is acceptable here.
-    try:
-        with open(PRICE_CACHE_PATH, "wb") as f:
-            pickle.dump({"bars": _raw_cache, "fetched_at": _fetched_at}, f)
-    except Exception as e:  # noqa: BLE001 - failing to persist shouldn't crash a refresh
-        print(f"data: price cache save failed ({e})")
-
-
-_load_price_cache()
+_load_from_db()
 
 
 def _cache_is_fresh(ticker: str, now: float) -> bool:
@@ -155,14 +138,27 @@ FETCH_TIMEOUT = 20  # seconds -- one hung ticker must not block the whole bulk f
 _RATE_LIMITED = "__rate_limited__"  # sentinel error string _fetch_one uses to flag YFRateLimitError
 
 
-def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, str | None]:
+def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str | None]:
+    """force=True (manual Refresh): always re-fetches the full HISTORY_START
+    window, same as "get everything as of right now" the button has always
+    meant. force=False: incremental -- if this ticker already has bars
+    stored, only requests the gap since its last stored date; only a
+    never-before-seen ticker gets the full-history cold fetch. This is the
+    actual point of the DB migration -- a normal refresh asks Yahoo for ~1
+    new row per ticker, not ~4.5 years of already-unchanged history."""
+    last_bar_date = None if force else db.get_last_bar_date(ticker)
+    start = HISTORY_START if last_bar_date is None else (
+        (pd.Timestamp(last_bar_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+    )
     try:
-        df = yf.download(ticker, start=HISTORY_START, interval="1d", progress=False,
+        df = yf.download(ticker, start=start, interval="1d", progress=False,
                           auto_adjust=False, timeout=FETCH_TIMEOUT)
         if hasattr(df.columns, "get_level_values"):
             df.columns = df.columns.get_level_values(0)
         df = df.drop(columns=["Adj Close"], errors="ignore").dropna()
-        if len(df) < 250:
+        if last_bar_date is None and len(df) < 250:
+            # Cold fetch only -- an incremental fetch of 1-2 new rows is
+            # correct and expected, not "insufficient history."
             return ticker, None, "insufficient history"
         return ticker, df, None
     except YFRateLimitError:
@@ -184,10 +180,10 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
 
     force=False (startup/background): only fetches tickers whose cached bars
     are missing, corrupted (fails to load), or past today's TTL -- everything
-    else is served straight from the on-disk cache, so a container rebuild
-    doesn't force a full re-fetch of ~2000 tickers just because the process
-    restarted. force=True (Refresh button): re-fetches everything regardless
-    of TTL, same as before this cache existed."""
+    else is served straight from RAM (backed by the DB). Of those that DO get
+    fetched, each requests only the gap since its last stored bar (see
+    _fetch_one), not the full history. force=True (Refresh button):
+    re-fetches everything, full history, regardless of TTL."""
     global _last_fetch_time, _fetch_progress
     tickers = tickers or TICKERS
     now = time.time()
@@ -199,7 +195,7 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
         rate_limited = False
         try:
             with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-                futures = {pool.submit(_fetch_one, tk): tk for tk in to_fetch}
+                futures = {pool.submit(_fetch_one, tk, force): tk for tk in to_fetch}
                 # as_completed (real completion order, unlike pool.map()) so
                 # progress updates as each ticker actually lands, and so a
                 # rate-limit hit can stop the run instead of only being
@@ -216,10 +212,25 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
                         break
                     with _lock:
                         if df is not None:
-                            _raw_cache[tk] = df
+                            db.upsert_bars(tk, df, now)
+                            if force or tk not in _raw_cache or df.empty:
+                                # force: df IS the full history, replace outright.
+                                # empty (incremental re-check, nothing new): keep
+                                # existing in-memory frame as-is, just refresh the
+                                # timestamp below.
+                                if not df.empty:
+                                    _raw_cache[tk] = df
+                            else:
+                                # Incremental: append the new tail to the
+                                # in-memory frame rather than reloading from
+                                # the DB (cheap, avoids a full reconstruction
+                                # per ticker per batch).
+                                _raw_cache[tk] = pd.concat([_raw_cache[tk], df])
+                                _raw_cache[tk] = _raw_cache[tk][~_raw_cache[tk].index.duplicated(keep="last")]
                             _fetched_at[tk] = now
                             _raw_errors.pop(tk, None)
                         else:
+                            db.mark_fetch_error(tk, now, err)
                             _raw_errors[tk] = err
                         _fetch_progress["done"] += 1
         finally:
@@ -232,7 +243,6 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
             # if this run had never gotten to them.
             print("data: warm_cache stopped early -- Yahoo rate-limited this batch; "
                   "remaining tickers will retry on the next scheduled refresh.")
-        _save_price_cache()
 
     with _lock:
         _last_fetch_time = now

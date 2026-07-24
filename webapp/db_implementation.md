@@ -1,6 +1,8 @@
 # Price Data Storage: Incremental Fetch + Real DB
 
-**Scope note:** this doc originally covered price bars only. Since it was written, two more pieces of state went from "doesn't exist" to "real, shipped, in-memory-only code" that has the exact same problem price bars had: `webapp/app.py`'s `_computed`/`_computed_source_fetch` (per-ticker strategy results, now persisted to `computed_cache.pkl`, same bind-mounted-pickle pattern as price bars) and `webapp/scoring.py`'s `_earnings_cache` (per-ticker earnings dates, 24h TTL, but **not** persisted at all yet -- still purely in-memory, reset to empty on every restart). All three are covered below as one schema, since a real DB migration should do them together rather than three separate piecemeal changes.
+**STATUS: IMPLEMENTED.** This doc was the design proposal; the migration described below has been carried out. `webapp/db.py` exists with all five tables, `webapp/data.py`/`webapp/app.py`/`webapp/scoring.py` all read/write through it, and `webapp/migrate_pickle_to_db.py` handles the one-time pickle→DB migration for any server that already had data in the old `price_cache.pkl`/`computed_cache.pkl`/`earnings_cache.pkl`/`universe_last_screened.txt` files. See `webapp/caching_and_data_retrieval.md` for the current, as-built description -- the rest of this document is kept as the original design rationale for why each decision was made.
+
+**Scope note:** this doc originally covered price bars only. Since it was written, two more pieces of state went from "doesn't exist" to "real, shipped, in-memory-only code" that has the exact same problem price bars had: `webapp/app.py`'s `_computed`/`_computed_source_fetch` (per-ticker strategy results, briefly persisted to `computed_cache.pkl` before this migration) and `webapp/scoring.py`'s `_earnings_cache` (per-ticker earnings dates, 24h TTL, briefly unpersisted before this migration). All three are covered below as one schema, since a real DB migration was done for them together rather than as three separate piecemeal changes.
 
 ## Problem, precisely
 
@@ -61,7 +63,9 @@ CREATE TABLE fetch_meta (
 -- without committing to a rigid column-per-field schema now.
 CREATE TABLE computed_results (
     ticker TEXT PRIMARY KEY,
-    payload TEXT NOT NULL,           -- JSON-serialized full payload dict
+    payload TEXT,                     -- JSON-serialized full payload dict; NULL if the compute
+                                      -- attempt errored (see `error` below) -- nullable, not
+                                      -- NOT NULL, since a ticker can have an error with no payload
     source_fetched_at REAL NOT NULL, -- the fetch_meta.last_fetched_at this was computed FROM --
                                       -- the staleness key: recompute only if this no longer
                                       -- matches fetch_meta.last_fetched_at for the same ticker
