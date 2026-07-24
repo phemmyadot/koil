@@ -80,14 +80,19 @@ def _summarize_trades(closed) -> dict:
 
 
 def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict], dict]:
-    """Run the engine with and without finalize_trades; the extra row (if any) is the
-    open position. Returns (open_trade, avg_trade_days, last_5_closed_trades, trade_stats)."""
-    runs = {}
-    for fin in (False, True):
-        bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
-                      trade_on_close=True, finalize_trades=fin)
-        runs[fin] = bt.run()["_trades"]
-    closed, forced = runs[False], runs[True]
+    """Single backtest run (finalize_trades=False): closed trades come from
+    result["_trades"] as before; a still-open position (if any) is read
+    directly off the live strategy via result["_strategy"].trades instead of
+    running a second finalize_trades=True backtest just to diff row counts.
+    Validated to produce identical EntryTime/EntryPrice/closed-trade sets as
+    the old two-run approach -- halves this function's cost (backtesting.py's
+    event-driven Backtest.run() dominates webapp/app.py's _compute_one, and
+    this was the only place it ran twice per ticker).
+    Returns (open_trade, avg_trade_days, last_5_closed_trades, trade_stats)."""
+    bt = Backtest(df, PortfolioSizedEngine, cash=10_000, commission=0.001,
+                  trade_on_close=True, finalize_trades=False)
+    result = bt.run()
+    closed = result["_trades"]
 
     avg_trade_days = (round(float(closed.Duration.dt.days.mean()), 1)
                        if len(closed) else None)
@@ -99,28 +104,29 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
     trade_stats = _summarize_trades(closed)
 
     open_trade = None
-    if len(forced) > len(closed):
-        tr = forced.iloc[-1]
+    live_trades = result["_strategy"].trades  # unclosed positions, live off the strategy
+    if live_trades:
+        tr = live_trades[0]
         basis = df.Close.rolling(E.bb_len).mean()
-        target = float(basis.loc[tr.EntryTime])
+        target = float(basis.loc[tr.entry_time])
         last_close = float(df.Close.iloc[-1])
-        bars_held = int(df.index.get_loc(df.index[-1]) - df.index.get_loc(tr.EntryTime))
+        bars_held = int(df.index.get_loc(df.index[-1]) - df.index.get_loc(tr.entry_time))
 
         macro_ma = df.Close.rolling(E.sma_slow_len).mean()
         atr = ATR(df.High, df.Low, df.Close, 14)
-        entry_atr = float(atr.loc[tr.EntryTime])
-        entry_dist_atr = ((float(tr.EntryPrice) - float(macro_ma.loc[tr.EntryTime])) / entry_atr
+        entry_atr = float(atr.loc[tr.entry_time])
+        entry_dist_atr = ((float(tr.entry_price) - float(macro_ma.loc[tr.entry_time])) / entry_atr
                            if entry_atr > 0 else 0.0)
         entry_tier = _dist_confidence_tier(entry_dist_atr)
         earnings_soon = bool(df["EarningsImminent"].iloc[-1])
 
         advice, advice_reason = _trade_advice(target, last_close, bars_held, entry_tier, earnings_soon)
         open_trade = {
-            "entry_date": str(tr.EntryTime.date()),
-            "entry_price": round(float(tr.EntryPrice), 4),
+            "entry_date": str(tr.entry_time.date()),
+            "entry_price": round(float(tr.entry_price), 4),
             "target": round(target, 4),
             "bars_held": bars_held,
-            "unrealized_pct": round(100 * (last_close / float(tr.EntryPrice) - 1), 2),
+            "unrealized_pct": round(100 * (last_close / float(tr.entry_price) - 1), 2),
             "entry_confidence": entry_tier,
             "advice": advice,
             "advice_reason": advice_reason,
