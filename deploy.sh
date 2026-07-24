@@ -14,6 +14,9 @@ fi
 if [ ! -f webapp/price_cache.pkl ]; then
   touch webapp/price_cache.pkl  # data.py loads a missing/empty/corrupt file as a cold cache
 fi
+if [ ! -f webapp/computed_cache.pkl ]; then
+  touch webapp/computed_cache.pkl  # app.py loads a missing/empty/corrupt file as a cold cache
+fi
 if [ ! -f webapp/universe_last_screened.txt ]; then
   touch webapp/universe_last_screened.txt  # missing/empty means "never screened", forces one
 fi

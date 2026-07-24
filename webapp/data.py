@@ -246,6 +246,15 @@ def get_error(ticker: str) -> str | None:
     return _raw_errors.get(ticker)
 
 
+def get_fetched_at(ticker: str) -> float | None:
+    """When this ticker's currently-cached bars were actually fetched --
+    lets a caller (app.py's computed-results cache) tell whether a stored
+    computed result is still valid (bars unchanged since it was computed)
+    or needs recomputing (bars refetched since), without needing to
+    recompute just to find out."""
+    return _fetched_at.get(ticker)
+
+
 def last_fetch_time() -> float | None:
     return _last_fetch_time
 

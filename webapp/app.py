@@ -13,6 +13,7 @@ just a fast in-memory read -- no network call, no per-request backtest run.
 """
 import importlib
 import os
+import pickle
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,7 +38,54 @@ TICKERS = tickers_module.TICKERS
 _computed: list[dict] = []
 _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
+# The data.py _fetched_at epoch each ticker's _computed entry was computed
+# against -- lets a fresh process tell "this cached result still matches the
+# current price data" (data.py's own price_cache.pkl hasn't refetched this
+# ticker since) apart from "this cached result is for stale/old price data
+# and must be recomputed," without needing to actually recompute to find out.
+_computed_source_fetch: dict[str, float] = {}
 _compute_lock = threading.Lock()
+
+# Persists _computed the same way data.py persists _raw_cache -- a container
+# restart used to always force a full ~2100-ticker recompute (several
+# minutes) even when the price cache itself was fully warm, because
+# _computed is pure in-memory state with nothing backing it on disk. Bind-
+# mounted like price_cache.pkl/tickers.py; see docker-compose.yml/deploy.sh.
+_COMPUTED_CACHE_PATH = os.path.join(os.path.dirname(__file__), "computed_cache.pkl")
+
+
+def _load_computed_cache() -> None:
+    """Best-effort load on import -- same failure posture as data.py's
+    _load_price_cache(): missing/corrupt file just means everything gets
+    recomputed, same as a truly cold start. Must never raise."""
+    global _computed, _computed_errors, _computed_asof, _computed_source_fetch
+    if not os.path.isfile(_COMPUTED_CACHE_PATH):
+        return
+    try:
+        with open(_COMPUTED_CACHE_PATH, "rb") as f:
+            payload = pickle.load(f)
+        _computed = payload.get("computed", [])
+        _computed_errors = payload.get("errors", {})
+        _computed_asof = payload.get("asof")
+        _computed_source_fetch = payload.get("source_fetch", {})
+    except Exception as e:  # noqa: BLE001 - corrupted cache file, not a crash
+        print(f"app: computed cache load failed ({e}); starting cold.")
+        _computed, _computed_errors, _computed_asof, _computed_source_fetch = [], {}, None, {}
+
+
+def _save_computed_cache() -> None:
+    # Written in place, not via a .tmp-then-os.replace() atomic swap -- same
+    # reason as data.py's _save_price_cache(): this path is a Docker bind
+    # mount, and os.replace() onto a bind-mounted file fails with EBUSY.
+    try:
+        with open(_COMPUTED_CACHE_PATH, "wb") as f:
+            pickle.dump({"computed": _computed, "errors": _computed_errors,
+                         "asof": _computed_asof, "source_fetch": _computed_source_fetch}, f)
+    except Exception as e:  # noqa: BLE001 - failing to persist shouldn't crash a refresh
+        print(f"app: computed cache save failed ({e})")
+
+
+_load_computed_cache()
 
 # Live progress for the current compute_all() call, if one is in flight --
 # mirrors data.py's fetch_progress so the frontend can show a separate
@@ -100,24 +148,63 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
 
 
 def compute_all() -> None:
-    """Recompute every ticker's full payload from whatever's currently in the
-    raw cache. Pure CPU work, no network -- safe to call from a background
-    thread without blocking request handling."""
-    global _computed, _computed_errors, _computed_asof, _compute_progress
+    """Recompute each ticker's full payload, but only for tickers whose
+    underlying price bars actually changed since the last compute pass --
+    everything else is reused from _computed as-is. Without this, a
+    container restart always forced a full ~2100-ticker recompute (several
+    minutes of pure CPU work) even when data.py's price cache was fully
+    warm and nothing had actually changed, since _computed itself used to
+    be pure in-memory state with nothing backing it on disk.
+
+    Staleness is keyed off data.get_fetched_at(ticker) -- data.py's own
+    per-ticker fetch timestamp -- not a separate TTL, so this can never
+    disagree with what data.py considers "this ticker's bars are current.\""""
+    global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
+
     with _compute_lock:
-        _compute_progress = {"done": 0, "total": len(TICKERS)}
+        prior_by_ticker = {p["ticker"]: p for p in _computed}
+        prior_source_fetch = dict(_computed_source_fetch)
+        prior_errors = dict(_computed_errors)
+
+    to_compute = []
+    reused_payloads: dict[str, dict] = {}
+    reused_source_fetch: dict[str, float] = {}
+    reused_errors: dict[str, str] = {}
+    for tk in TICKERS:
+        fetched_at = data.get_fetched_at(tk)
+        if fetched_at is not None and prior_source_fetch.get(tk) == fetched_at:
+            # Bars unchanged since this ticker was last computed -- reuse
+            # whichever prior outcome it had (a payload, or a compute error).
+            if tk in prior_by_ticker:
+                reused_payloads[tk] = prior_by_ticker[tk]
+                reused_source_fetch[tk] = fetched_at
+            elif tk in prior_errors:
+                reused_errors[tk] = prior_errors[tk]
+                reused_source_fetch[tk] = fetched_at
+            else:
+                to_compute.append(tk)  # stale bookkeeping, e.g. after a cache format change
+        else:
+            to_compute.append(tk)
+
+    with _compute_lock:
+        _compute_progress = {"done": 0, "total": len(to_compute)}
     try:
         results = []
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            futures = [pool.submit(_compute_one, tk) for tk in TICKERS]
-            for future in as_completed(futures):
-                results.append(future.result())
-                with _compute_lock:
-                    _compute_progress["done"] += 1
+        if to_compute:
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                futures = [pool.submit(_compute_one, tk) for tk in to_compute]
+                for future in as_completed(futures):
+                    results.append(future.result())
+                    with _compute_lock:
+                        _compute_progress["done"] += 1
         with _compute_lock:
-            _computed = [p for _, p, _ in results if p is not None]
-            _computed_errors = {t: e for t, _, e in results if e is not None}
+            new_source_fetch = {tk: data.get_fetched_at(tk) for tk, payload, err in results
+                                 if payload is not None or err is not None}
+            _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
+            _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}
+            _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
             _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _save_computed_cache()
     finally:
         with _compute_lock:
             _compute_progress = None
