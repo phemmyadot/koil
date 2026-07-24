@@ -40,14 +40,6 @@ _computed_asof: str | None = None
 _compute_lock = threading.Lock()
 
 _STRATEGY_MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
-if optimizer.SHOW_ADX_VCPF:
-    # Mirrors the frontend's SHOW_ADX_VCPF flag -- when it's off there, these
-    # never get displayed, so skip computing them at all rather than paying
-    # for a backtest per ticker per refresh cycle for a hidden feature.
-    import webapp.strategy_a as strategy_a
-    import webapp.strategy_d as strategy_d
-    _STRATEGY_MODULES["strategy_a"] = strategy_a
-    _STRATEGY_MODULES["strategy_d"] = strategy_d
 
 
 def _eval_other_strategy(key: str, module, ticker: str, bars) -> dict | None:
@@ -81,10 +73,16 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
             payload["prebreak"] = prebreak.evaluate(ticker, bars)
         except Exception:  # noqa: BLE001
             payload["prebreak"] = None
-        try:
-            payload["score"] = score.compute_score(payload)
-        except Exception:  # noqa: BLE001
-            payload["score"] = None
+        # "score" is already taken -- scoring.evaluate() uses it for VEXH's
+        # legacy 6-gate condition count. setup_score is the new 0-10 composite
+        # and is keyed per strategy since VCP/VCPO/VEXH each have their own
+        # stats to score against.
+        payload["setup_score"] = {}
+        for strat_key in ("vexh", *_STRATEGY_MODULES.keys()):
+            try:
+                payload["setup_score"][strat_key] = score.compute_score(payload, strat_key)
+            except Exception:  # noqa: BLE001
+                payload["setup_score"][strat_key] = None
         return ticker, payload, None
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
         return ticker, None, str(e) or type(e).__name__

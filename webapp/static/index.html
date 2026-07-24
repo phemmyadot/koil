@@ -129,10 +129,7 @@
   /* All 4 strategies (Exhaustion/A/D/VCP Master) in a 2x2 grid -- label on
      top, colored status chip(s) below, everything else lives in the detail
      modal (click a chip). */
-  .strategygrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
-  /* ADX/VCPF hidden behind SHOW_ADX_VCPF -- VEXH and VCP each get the full
-     row width instead of being squeezed into half of a 2-column grid. */
-  .strategygrid2.solo { grid-template-columns: 1fr; }
+  .strategygrid2 { display: grid; grid-template-columns: 1fr; gap: 10px 14px; }
   .strategycell { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; }
   .strategyname { flex: 0 0 32px; font-size: 10px; font-weight: 700; color: var(--text); }
   .strategybody { flex: 1; min-width: 0; }
@@ -362,14 +359,6 @@
   </p>
 </div>
 <script>
-// Feature flag: ADX (Strategy A) and VCPF (Strategy D) hidden from the card
-// grid and the Trade On filter. Mirrors SHOW_ADX_VCPF in webapp/optimizer.py
-// -- keep both in sync by hand (this one can't read the backend's env var).
-// With the backend flag off, strategy_a/strategy_d aren't imported or
-// computed at all anymore, not just hidden here -- flipping this back to
-// true also requires flipping the backend env var to actually get data.
-const SHOW_ADX_VCPF = false;
-
 // Feature flag: Training/Holdout sub-filters hidden from the Advanced Filter
 // panel. Mirrors SHOW_TRAINING_HOLDOUT in webapp/optimizer.py -- keep both in
 // sync by hand (this one can't read the backend's env var); with the backend
@@ -468,9 +457,14 @@ function scoreColor(score) {
   if (score >= 3) return "#ff8c00";  // borderline
   return "#ff0000";                  // pass
 }
-function scoreBadge(score) {
+// setup_score is keyed per strategy on the payload (vexh/strategy_vcp/
+// strategy_vcpo) -- read whichever one matches the Advance Filter's
+// currently selected strategy.
+function scoreBadge(r, advStrategyKey) {
+  if (!r.setup_score) return "";
+  const score = r.setup_score[ADV_STRAT_KEY[advStrategyKey]];
   if (score === null || score === undefined) return "";
-  return `<span class="qscore" style="color:${scoreColor(score)}" title="Setup quality score (0-10)">${score}/10</span>`;
+  return `<span class="qscore" style="color:${scoreColor(score)}" title="Setup quality score (0-10), ${advStrategyKey.toUpperCase()}">${score}/10</span>`;
 }
 function last5(trades) {
   if (!trades || !trades.length) return '<span style="color:var(--muted)">—</span>';
@@ -932,9 +926,8 @@ const QUALITY_RANK = { bad: 0, fair: 1, good: 2 };
 // Flat: one Strategy radio (which strategy's stats to read) + Win Rate AND
 // Profit minimum-threshold sliders. Base/Training/Holdout sub-views are
 // gone -- always reads baseline stats. See FILTER_ARCHITECTURE.md.
-const ADV_STRATEGIES = [["adx", "ADX"], ["vcpf", "VCPF"], ["vcp", "VCP"], ["vcpo", "VCPO"], ["vexh", "VEXH"]]
-  .filter(([key]) => SHOW_ADX_VCPF || (key !== "adx" && key !== "vcpf"));
-const ADV_STRAT_KEY = { adx: "strategy_a", vcpf: "strategy_d", vcp: "strategy_vcp", vcpo: "strategy_vcpo" };
+const ADV_STRATEGIES = [["vcp", "VCP"], ["vcpo", "VCPO"], ["vexh", "VEXH"]];
+const ADV_STRAT_KEY = { vcp: "strategy_vcp", vcpo: "strategy_vcpo", vexh: "vexh" };
 const WR_STEPS = [0, 50, 70, 75];
 const PF_STEPS = [0, 1, 1.5, 2, 2.5, 3.5, 5.0];
 // Default floor (VCPO/WR>=70/PF>=2.5 -- fires more often than VEXH and had
@@ -1002,8 +995,7 @@ function matchesAdvFilter(r, adv) {
 // Separate from Advance Filter, ANDed against it (just another .filter() in
 // the same chain) -- "is this ticker currently in an open trade on ANY of
 // the checked strategies" (OR among the checked strategies themselves).
-const TRADE_ON_STRATS = [["adx", "ADX"], ["vcp", "VCP"], ["vcpo", "VCPO"], ["vcpf", "VCPF"], ["vexh", "VEXH"]]
-  .filter(([key]) => SHOW_ADX_VCPF || (key !== "adx" && key !== "vcpf"));
+const TRADE_ON_STRATS = [["vcp", "VCP"], ["vcpo", "VCPO"], ["vexh", "VEXH"]];
 
 function buildTradeOnPanel() {
   const boxes = TRADE_ON_STRATS.map(([key, label]) =>
@@ -1237,12 +1229,12 @@ function pickBestCandidate(candidates) {
 }
 
 // Longest days-held across ALL open positions on this ticker -- Exhaustion's
-// own open_trade plus any active BASE/TRAIN/HOLD candidate on strategy A/D/VCP/VCPO
+// own open_trade plus any active BASE/TRAIN/HOLD candidate on strategy VCP/VCPO
 // (a ticker can be "in trade" on more than one strategy at once). null if
 // nothing is open anywhere, so it can sort after tickers that do have one.
 function maxDaysInTrade(r) {
   let max = r.open_trade ? r.open_trade.bars_held : null;
-  for (const s of [r.strategy_a, r.strategy_d, r.strategy_vcp, r.strategy_vcpo]) {
+  for (const s of [r.strategy_vcp, r.strategy_vcpo]) {
     if (!s || !s.baseline) continue;
     for (const c of strategyCandidates(s)) {
       if (c.active && c.openPosition && c.openPosition.days_held != null) {
@@ -1444,6 +1436,7 @@ function render(data) {
   currentPage = Math.min(Math.max(1, currentPage), pageCount);
   const rows = allRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
+  const scoreStrategy = readAdvFilter().strategy;
   let html = "";
   for (const r of rows) {
     // BREAKOUT (score 5) is the new top state -- fire-card highlight fires
@@ -1453,7 +1446,7 @@ function render(data) {
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
-        ${scoreBadge(r.score)}
+        ${scoreBadge(r, scoreStrategy)}
         ${scorebar(r.prebreak, r.earnings_risk)}
         <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>
@@ -1467,13 +1460,9 @@ function render(data) {
       </div>` : ""}
       <hr class="divider">
       <div class="scoresections">
-        <div class="scorebox"><div class="strategygrid2 ${SHOW_ADX_VCPF ? "" : "solo"}">
+        <div class="scorebox"><div class="strategygrid2">
           <div class="strategycell"><span class="strategyname">VEXH</span>
             <div class="strategybody">${exhaustionChip(r)}</div></div>
-          ${SHOW_ADX_VCPF ? `<div class="strategycell"><span class="strategyname">ADX</span>
-            <div class="strategybody">${strategyChips(r.strategy_a, "Strategy A")}</div></div>` : ""}
-          ${SHOW_ADX_VCPF ? `<div class="strategycell"><span class="strategyname">VCPF</span>
-            <div class="strategybody">${strategyChips(r.strategy_d, "Strategy D")}</div></div>` : ""}
           <div class="strategycell"><span class="strategyname">VCP</span>
             <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
           <div class="strategycell"><span class="strategyname">VCPO</span>

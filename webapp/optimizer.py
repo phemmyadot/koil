@@ -1,5 +1,5 @@
 """
-Per-ticker parameter optimization for strategies A/D/VCP -- runs on its own,
+Per-ticker parameter optimization for VCP/VCPO -- runs on its own,
 much slower cadence than signal computation (daily, not every 2h), since the
 "best config" for a ticker's 10-year history doesn't meaningfully change
 hour to hour. Results persist to disk so a server restart doesn't force
@@ -29,23 +29,11 @@ PERSIST_PATH = os.path.join(os.path.dirname(__file__), "optimized_cache.json")
 # fresh deploy isn't stuck computing it before it can serve baseline signals.
 SHOW_TRAINING_HOLDOUT = os.environ.get("SHOW_TRAINING_HOLDOUT", "").strip().lower() in ("1", "true", "yes", "on")
 
-# Mirrors the frontend's SHOW_ADX_VCPF flag (webapp/static/index.html) -- ADX
-# (Strategy A) and VCPF (Strategy D) are hidden from the UI by default, so
-# skip computing/sweeping them here too rather than paying for hidden work.
-# Off by default; set true to re-enable both the backend compute and the
-# frontend display together.
-SHOW_ADX_VCPF = os.environ.get("SHOW_ADX_VCPF", "").strip().lower() in ("1", "true", "yes", "on")
-
 _optimized: dict[str, dict] = {}
 _last_optimized_time: float | None = None
 _lock = threading.Lock()
 
 _MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
-if SHOW_ADX_VCPF:
-    import webapp.strategy_a as strategy_a
-    import webapp.strategy_d as strategy_d
-    _MODULES["strategy_a"] = strategy_a
-    _MODULES["strategy_d"] = strategy_d
 
 
 def get_optimized(ticker: str, strategy_key: str) -> dict | None:

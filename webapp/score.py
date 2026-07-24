@@ -6,8 +6,21 @@ required before entry -- this module only computes the former.
 """
 
 
+def _strategy_stats(r: dict, strategy: str) -> dict:
+    """Every strategy's stats (n_trades, win_rate, profit_factor,
+    open_position, ...) as one flat dict, regardless of where they actually
+    live on the payload. VEXH's evaluate() builds the payload itself, so its
+    stats already sit at the top level; VCP/VCPO are bolted on afterwards as
+    payload[strategy] = {"baseline": {...}, "baseline_config": {...}}, one
+    level deeper. This is the only place that asymmetry is dealt with --
+    everything downstream just reads from the flat dict this returns."""
+    if strategy == "vexh":
+        return r
+    return r.get(strategy, {}).get("baseline") or {}
+
+
 def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:
-    s = r.get(strategy, {}).get("baseline") or {}
+    s = _strategy_stats(r, strategy)
     prebreak = r.get("prebreak") or {}
 
     # 1. Strategy Quality (0-3)
