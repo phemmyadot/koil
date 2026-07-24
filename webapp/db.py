@@ -118,13 +118,25 @@ def _migrate_computed_results_fetch_epoch_to_bar_date() -> None:
     so rather than fabricate a mapping, this just clears the stale rows --
     every ticker recomputes once on the next compute_all() pass (same cost
     as any other cold-start recompute) and re-populates correctly keyed
-    going forward."""
+    going forward.
+
+    BUG FIXED HERE: this used to drop source_fetched_at without ever adding
+    source_bar_date back -- CREATE TABLE IF NOT EXISTS is a no-op against a
+    table that already exists, so a DB that had already run this migration's
+    DROP COLUMN step permanently ended up with NEITHER column. Every restart
+    after that hit "no such column: source_bar_date" loading computed_results,
+    silently starting _computed cold every single time -- which combined with
+    the (correct) restart-staleness fetch-skip meant a server could sit with
+    zero computed results for a full CHECK_INTERVAL before self-healing,
+    showing "Loading first dataset..." with no progress the whole time."""
     with _lock, _conn:
         cols = [row[1] for row in _conn.execute("PRAGMA table_info(computed_results)").fetchall()]
-        if "source_fetched_at" not in cols:
-            return
-        _conn.execute("DELETE FROM computed_results")
-        _conn.execute("ALTER TABLE computed_results DROP COLUMN source_fetched_at")
+        if "source_fetched_at" in cols:
+            _conn.execute("DELETE FROM computed_results")
+            _conn.execute("ALTER TABLE computed_results DROP COLUMN source_fetched_at")
+            cols.remove("source_fetched_at")
+        if "source_bar_date" not in cols:
+            _conn.execute("ALTER TABLE computed_results ADD COLUMN source_bar_date TEXT")
 
 
 _init_schema()
