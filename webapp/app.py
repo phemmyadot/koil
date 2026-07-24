@@ -346,17 +346,32 @@ def debug_memory():
     approximation, not what the live server is really holding). Not secured
     -- fine for a LAN-only box behind Cloudflare Tunnel with no public route
     to this path configured, but don't expose this publicly as-is."""
+    import gc
     import resource
+    import sys
+    import webapp.scoring as scoring
+
     with _compute_lock:
         computed_count = len(_computed)
+
+    before_gc = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    collected = gc.collect()
+    after_gc = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
     return {
-        "rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
+        "rss_mb": round(after_gc, 1),
+        "rss_mb_before_gc": round(before_gc, 1),
+        "gc_collected_objects": collected,
         "raw_cache_tickers": len(data._raw_cache),
         "raw_cache_pickled_mb": round(len(__import__("pickle").dumps(data._raw_cache)) / 1024 / 1024, 1),
         "computed_entries": computed_count,
         "computed_pickled_mb": round(len(__import__("pickle").dumps(_computed)) / 1024 / 1024, 1),
         "raw_errors": len(data._raw_errors),
         "computed_errors": len(_computed_errors),
+        "earnings_cache_tickers": len(scoring._earnings_cache),
+        "earnings_cache_pickled_mb": round(
+            len(__import__("pickle").dumps(scoring._earnings_cache)) / 1024 / 1024, 1),
+        "total_gc_tracked_objects": len(gc.get_objects()),
     }
 
 
