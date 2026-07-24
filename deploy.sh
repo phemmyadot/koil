@@ -16,3 +16,7 @@ if [ ! -f webapp/universe_screen_cache.json ]; then
 fi
 
 docker compose up -d --build
+
+# Cloudflare Tunnel can hold a stale connection to the old container after a
+# rebuild -- restart it so it re-establishes against the fresh one.
+sudo systemctl restart cloudflared
