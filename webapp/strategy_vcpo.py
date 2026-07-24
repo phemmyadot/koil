@@ -192,6 +192,7 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             "target": round(float(entry_price) * (1 + tp_target_pct / 100), 4),
             "days_held": (len(df) - 1) - position["entry_i"],
             "unrealized_pct": round((last_close / entry_price - 1) * 100, 2),
+            "mae_pct": round((entry_price - position["low_since"]) / entry_price * 100, 2),
         }
     return trades, signal_today, in_position, tp_hit, open_position
 
@@ -232,9 +233,19 @@ def _summarize(trades: list[dict]) -> dict:
     pct_near_zero_mae = (round(sum(1 for m in mae_wins if m < 1.0) / len(mae_wins) * 100, 1)
                           if mae_wins else None)
 
+    # Share of total $ PnL contributed by the single best trade -- 1.0 (worst
+    # case, fails the >35% concentration check) when there's no closed trade
+    # or total PnL is non-positive, since "no track record of distributed
+    # wins" should score the same as "one outlier carried everything."
+    closed_pnls = [t["dollar_pnl"] for t in trades]
+    total_pnl = sum(closed_pnls)
+    max_trade_pnl_fraction = (max(closed_pnls) / total_pnl
+                               if total_pnl > 0 and closed_pnls else 1.0)
+
     return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
             "avg_trade_days": avg_days, "last5_trades": last5,
-            "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae}
+            "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae,
+            "max_trade_pnl_fraction": round(float(max_trade_pnl_fraction), 4)}
 
 
 def optimize(ticker: str, df: pd.DataFrame, train_frac: float = 0.7, min_trades_per_split: int = 3) -> dict | None:

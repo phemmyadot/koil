@@ -142,6 +142,7 @@
   .tk { font-weight: 700; font-size: 15px; }
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
   .tklink:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .qscore { display: inline-block; font-size: 12px; font-weight: 700; vertical-align: middle; margin-right: 8px; }
   .scorebar { display: inline-flex; gap: 3px; vertical-align: middle; margin-right: 8px; }
   .scorebar i { width: 9px; height: 16px; border-radius: 2.5px; background: var(--line); }
   .scorebar i.on { background: var(--green); }
@@ -457,6 +458,19 @@ function scorebar(pb, earningsRisk) {
       : '<span class="firetag">ENTRY</span>';
   }
   return s;
+}
+// Setup-quality score (0-10, scoring.md) -- distinct from scorebar() above,
+// which is pre-breakout phase only. This is the 8-dimension composite.
+function scoreColor(score) {
+  if (score >= 9) return "#00b050";  // exceptional
+  if (score >= 7) return "#92d050";  // strong
+  if (score >= 5) return "#ffbf00";  // acceptable
+  if (score >= 3) return "#ff8c00";  // borderline
+  return "#ff0000";                  // pass
+}
+function scoreBadge(score) {
+  if (score === null || score === undefined) return "";
+  return `<span class="qscore" style="color:${scoreColor(score)}" title="Setup quality score (0-10)">${score}/10</span>`;
 }
 function last5(trades) {
   if (!trades || !trades.length) return '<span style="color:var(--muted)">—</span>';
@@ -1439,6 +1453,7 @@ function render(data) {
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
+        ${scoreBadge(r.score)}
         ${scorebar(r.prebreak, r.earnings_risk)}
         <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>

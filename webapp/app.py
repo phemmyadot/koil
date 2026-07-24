@@ -25,6 +25,7 @@ import webapp.build_universe as build_universe
 import webapp.data as data
 import webapp.optimizer as optimizer
 import webapp.prebreak as prebreak
+import webapp.score as score
 from webapp.scoring import evaluate
 import webapp.tickers as tickers_module
 import webapp.strategy_vcp as strategy_vcp
@@ -80,6 +81,10 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
             payload["prebreak"] = prebreak.evaluate(ticker, bars)
         except Exception:  # noqa: BLE001
             payload["prebreak"] = None
+        try:
+            payload["score"] = score.compute_score(payload)
+        except Exception:  # noqa: BLE001
+            payload["score"] = None
         return ticker, payload, None
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
         return ticker, None, str(e) or type(e).__name__
