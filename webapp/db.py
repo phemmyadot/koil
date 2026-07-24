@@ -144,6 +144,17 @@ _init_schema()
 
 # ─────────────────────────── price bars ───────────────────────────
 
+def has_any_bars() -> bool:
+    """True if the DB has ANY stored price bar for ANY ticker -- a pure
+    existence check (SELECT ... LIMIT 1), not a staleness/duration
+    calculation. Used to decide "is this genuinely a cold/empty DB" as a
+    simple yes/no, separate from CHECK_INTERVAL-based freshness checks
+    elsewhere (data.warm_cache, app._universe_refresh_if_needed)."""
+    with _lock:
+        row = _conn.execute("SELECT 1 FROM bars LIMIT 1").fetchone()
+    return row is not None
+
+
 def get_last_bar_date(ticker: str) -> str | None:
     """Most recent date actually stored for this ticker -- the anchor for
     incremental fetch (fetch only start=last_bar_date+1 onward). None if

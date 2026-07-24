@@ -145,16 +145,39 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
     + background refresher) except for the manual Refresh button, which
     passes force=True and accepts the wait.
 
-    Every ticker is gap-fetched on every call, no per-ticker staleness check
-    -- an already-current ticker's gap-fetch just returns an empty response
-    from Yahoo (see _fetch_one) and costs one cheap request, so there's
-    nothing meaningful to save by skipping it. force=False (background loop):
-    each ticker requests only the gap since its last stored bar. force=True
-    (manual Refresh button): every ticker gets the full HISTORY_START window
-    re-fetched, regardless of what's already stored."""
+    Whole-batch early exit (force=False only): if the entire universe was
+    already fetched within CHECK_INTERVAL, skip every single per-ticker
+    fetch attempt entirely -- no network calls at all, not even the "cheap"
+    gap-fetch round-trip. A gap-fetch on an unchanged ticker isn't free, it's
+    just cheap; doing it for ~1450 tickers every time this is called (every
+    2h background wake, PLUS once more on every process restart) adds up to
+    real, avoidable Yahoo traffic when nothing could possibly have changed
+    since the last check. This is a single O(1) DB aggregate check
+    (db.get_max_fetched_at), not a per-ticker loop -- distinct from the old
+    per-ticker _cache_is_fresh() staleness check this replaced, which was
+    removed because gap-fetching individual stale tickers is still correct;
+    only fetching an ALREADY-FRESH WHOLE BATCH is the redundant case this
+    guards against.
+
+    force=False (background loop): each ticker requests only the gap since
+    its last stored bar. force=True (manual Refresh button): every ticker
+    gets the full HISTORY_START window re-fetched, regardless of what's
+    already stored or how recently it was fetched -- bypasses this early
+    exit entirely, since "get everything as of right now" is the whole point
+    of a manual refresh."""
     global _last_fetch_time, _fetch_progress
     to_fetch = tickers or TICKERS
     now = time.time()
+
+    if not force:
+        max_fetched_at = db.get_max_fetched_at()
+        if max_fetched_at is not None and now - max_fetched_at < CHECK_INTERVAL:
+            print(f"data: whole universe already fetched {round(now - max_fetched_at)}s ago "
+                  f"(within CHECK_INTERVAL) -- skipping this warm_cache() call entirely, "
+                  f"no per-ticker fetch attempts made.")
+            with _lock:
+                _last_fetch_time = now
+            return
 
     if to_fetch:
         with _lock:

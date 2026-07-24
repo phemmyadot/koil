@@ -17,6 +17,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 # _compute_one() is CPU-bound (backtesting.py's Backtest.run() dominates),
@@ -42,7 +43,17 @@ import webapp.tickers as tickers_module
 import webapp.strategy_vcp as strategy_vcp
 import webapp.strategy_vcpo as strategy_vcpo
 
-app = FastAPI(title="Exhaustion Dashboard")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _on_startup()  # defined further down, alongside the functions it calls -- see there for the actual startup rule
+    yield
+    # No shutdown-side cleanup needed: the background thread is a daemon
+    # (dies with the process), and webapp.db's sqlite3 connection doesn't
+    # need an explicit close on exit.
+
+
+app = FastAPI(title="Exhaustion Dashboard", lifespan=_lifespan)
 
 TICKERS = tickers_module.TICKERS
 _computed: list[dict] = []
@@ -292,11 +303,16 @@ def refresh_and_compute(force: bool = False) -> None:
     background loop on every wake, and by the manual Refresh button
     (force=True, via ?refresh=1).
 
-    force=False (background loop): data.warm_cache() gap-fetches every
-    ticker unconditionally (see data.py) -- cheap even for already-current
-    tickers, so no separate staleness check gates this call itself.
+    force=False (background loop): data.warm_cache() now early-exits
+    entirely (no per-ticker fetch attempts at all) if the whole universe was
+    already fetched within CHECK_INTERVAL -- see data.py. When that happens,
+    _last_fetch_time doesn't advance, which is the signal used here to also
+    skip compute_all()'s per-ticker reuse-check loop: if nothing was fetched
+    AND compute is already caught up from a prior pass, there is nothing new
+    for that loop to find, so don't run it just to confirm that.
     force=True (manual Refresh): every ticker's FULL history is re-fetched
-    regardless of what's already stored.
+    regardless of what's already stored, which always advances
+    _last_fetch_time, so this skip never applies to a manual refresh.
 
     Explicitly passes this module's live TICKERS -- data.py's own TICKERS
     is bound once at import time (`from webapp.tickers import TICKERS`), so
@@ -304,38 +320,52 @@ def refresh_and_compute(force: bool = False) -> None:
     Relying on data.warm_cache()'s no-arg fallback to its own TICKERS would
     fetch bars for the OLD universe, leaving every ticker in the NEW one
     with no cache entry -- every _compute_one() call then fails "no data"."""
+    fetch_time_before = data.last_fetch_time()
     data.warm_cache(TICKERS, force=force)
+    fetch_time_after = data.last_fetch_time()
+
+    with _compute_lock:
+        computed_count = len(_computed)
+    compute_caught_up = computed_count >= len(TICKERS) * 0.9  # allow for a few per-ticker errors
+
+    if not force and fetch_time_before == fetch_time_after and compute_caught_up:
+        print(f"app: nothing fetched this pass and compute is already caught up "
+              f"({computed_count}/{len(TICKERS)}) -- skipping compute_all()'s per-ticker check entirely.")
+        return
     compute_all()
 
 
-@app.on_event("startup")
 def _on_startup():
+    # Called once from _lifespan (see above) via FastAPI's modern lifespan
+    # context-manager pattern, not the deprecated @app.on_event("startup").
     # See webapp/refresh_architecture.md. App load itself (the HTTP request
     # path -- GET /api/tickers etc.) never fetches or computes anything, only
-    # reads whatever's already in memory/DB. This background thread is what
-    # actually keeps that data fresh, on its own schedule, decoupled from any
-    # request.
+    # reads whatever's already in memory/DB.
     #
-    # The first pass only runs immediately if prices are ACTUALLY stale (DB
-    # empty/never fetched, or the last fetch across the whole universe is
-    # older than CHECK_INTERVAL) -- a cold DB shouldn't sit empty for 2 hours
-    # after a fresh deploy, but a process restart shortly after the previous
-    # process's last fetch shouldn't re-hit Yahoo for every ticker just
-    # because it restarted. Without this check, every restart unconditionally
-    # forced an immediate full gap-fetch regardless of how fresh the data
-    # already was, which defeated the entire point of CHECK_INTERVAL -- that
-    # rule only ever governed spacing between wakes WITHIN one process's
-    # lifetime, doing nothing to protect against restarts.
+    # Simple, deliberate rule (no staleness/duration math here at all): if
+    # ANY data already exists in the DB, do nothing on startup -- just return
+    # and let the 2h background loop handle freshness in its own time,
+    # whenever it naturally gets to it. Only a genuinely EMPTY DB (nothing in
+    # `bars` at all -- true first-ever start) triggers an eager fetch+compute
+    # before the loop begins, so a fresh deploy doesn't sit with a totally
+    # blank page for up to 2 hours. This intentionally does NOT special-case
+    # "bars exist but computed_results doesn't" -- that's left for the loop's
+    # normal cadence to catch up, on purpose, to keep this check a single
+    # existence test rather than reasoning about which of several tables
+    # might be behind.
+    if not db.has_any_bars():
+        print("app: DB is empty (no bars at all) -- running an eager fetch+compute "
+              "before starting the background loop.")
+        try:
+            _universe_refresh_if_needed()
+            refresh_and_compute()
+        except Exception as e:  # noqa: BLE001 - the loop below still starts either way
+            print(f"app: eager startup fetch+compute failed ({e}); "
+                  f"the background loop will retry on its normal cadence.")
+
     def loop():
-        max_fetched_at = db.get_max_fetched_at()
-        if max_fetched_at is not None:
-            remaining = data.CHECK_INTERVAL - (time.time() - max_fetched_at)
-            if remaining > 0:
-                print(f"app: prices already fetched {round(time.time() - max_fetched_at)}s ago "
-                      f"(within CHECK_INTERVAL) -- skipping the immediate startup fetch, "
-                      f"waiting {round(remaining)}s before the first pass.")
-                time.sleep(remaining)
         while True:
+            time.sleep(data.CHECK_INTERVAL)
             try:
                 _universe_refresh_if_needed()
                 refresh_and_compute()
@@ -350,7 +380,6 @@ def _on_startup():
                 # has gone stale and checks the container logs.
                 print(f"app: background refresh loop pass failed ({e}); "
                       f"will retry next cycle instead of stopping.")
-            time.sleep(data.CHECK_INTERVAL)
     threading.Thread(target=loop, daemon=True).start()
 
     # Per-ticker parameter optimization runs on its own slow (daily) cadence,
