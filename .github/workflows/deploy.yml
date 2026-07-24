@@ -4,12 +4,10 @@ on:
     branches: [master]
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Runs on rog-server itself (self-hosted runner) -- it connects outbound
+    # to GitHub, so no inbound port-forwarding/VPN is needed to reach a
+    # LAN-only box. No DEPLOY_HOST/USER/SSH_KEY secrets required.
+    runs-on: self-hosted
     steps:
-      - name: SSH and deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: bash ~/pine-trend-strategy/deploy.sh
+      - name: Deploy
+        run: bash ~/pine-trend-strategy/deploy.sh
