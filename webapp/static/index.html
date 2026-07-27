@@ -140,11 +140,6 @@
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
   .tklink:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .qscore { display: inline-block; font-size: 12px; font-weight: 700; vertical-align: middle; margin-right: 8px; }
-  .scorebar { display: inline-flex; gap: 3px; vertical-align: middle; margin-right: 8px; }
-  .scorebar i { width: 9px; height: 16px; border-radius: 2.5px; background: var(--line); }
-  .scorebar i.on { background: var(--green); }
-  .scorebar i.half { background: linear-gradient(to right, var(--green) 50%, var(--line) 50%); }
-  .tickercard.fire .scorebar i.on { background: var(--gold); }
   .chip { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px;
           padding: 2px 6px; cursor: default; text-align: center; white-space: nowrap; }
   .chip.ok { background: var(--green-bg); color: var(--green); }
@@ -418,38 +413,10 @@ function chip(key, c) {
   }
   return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
 }
-function scorebar(pb, earningsRisk) {
-  // Score is now pre-breakout's (BEARISH -2 / NEUTRAL 0 / BULLISH 1 /
-  // COILING 2 / PRE-BREAKOUT 4 / BREAKOUT 5), not the old 6-gate count.
-  if (!pb) return `<span class="scorebar"></span>&mdash;/5`;
-  const n = pb.score;
-  const tooltip = [
-    `State: ${pb.state}`,
-    `Squeeze: ${pb.bb_squeeze ? "COMPRESSED" : "EXPANDED"}`,
-    `Volume: ${pb.vol_dry_up ? "DRY" : "NORMAL/HIGH"}`,
-    `Near resistance: ${pb.near_resistance ? "YES" : "NO"}`,
-    `Trend: ${pb.is_bullish_trend ? "BULLISH" : "BEARISH"}`,
-    `Coil energy: ${pb.squeeze_counter} bars`,
-  ].join(" | ");
-  let s = `<span class="scorebar" title="${String(tooltip).replace(/"/g, "&quot;")}">`;
-  // Score can go negative (BEARISH = -2) -- clamp dots at 0 lit but still
-  // show the real signed number in the text label below.
-  const fullDots = Math.max(0, Math.floor(n));
-  for (let i = 0; i < 5; i++) {
-    s += `<i class="${i < fullDots ? "on" : ""}"></i>`;
-  }
-  s += `</span>${n}/5`;
-  if (n === 5) {
-    // BREAKOUT is the new top state -- same "ENTRY" firetag role the old
-    // 6/6 gate had, still gated on the separate earnings-risk flag.
-    s += earningsRisk
-      ? '<span class="firetag weak" title="earnings report within the entry-avoid window -- engine will not take this entry (validated: holding through earnings drops win rate 62%->51%)">ENTRY (earnings risk)</span>'
-      : '<span class="firetag">ENTRY</span>';
-  }
-  return s;
-}
-// Setup-quality score (0-10, scoring.md) -- distinct from scorebar() above,
-// which is pre-breakout phase only. This is the 8-dimension composite.
+// Setup-quality score (0-10, scoring.md) -- the sole score display now
+// (the old x/5 pre-breakout-phase scorebar was removed; pre-breakout state
+// still feeds this score as two of its eight dimensions -- see score.py --
+// and its own filter panel/chips remain, just not as a standalone score bar).
 function scoreColor(score) {
   if (score >= 9) return "#00b050";  // exceptional
   if (score >= 7) return "#92d050";  // strong
@@ -1457,15 +1424,19 @@ function render(data) {
   const scoreStrategy = readAdvFilter().strategy;
   let html = "";
   for (const r of rows) {
-    // BREAKOUT (score 5) is the new top state -- fire-card highlight fires
-    // on that instead of the old 6/6 gate count.
-    const isFire = !!r.prebreak && r.prebreak.score === 4 && !r.earnings_risk;
+    // Fire-card highlight/ENTRY tag now keys off the 0-10 setup_score
+    // (scoring.md's "Exceptional" band, 9-10) instead of the removed x/5
+    // pre-breakout scorebar's BREAKOUT state.
+    const cardScore = r.setup_score ? r.setup_score[ADV_STRAT_KEY[scoreStrategy]] : null;
+    const isFire = cardScore != null && cardScore >= 9 && !r.earnings_risk;
     html += `<div class="tickercard ${isFire ? "fire" : ""}">
       <div class="cardhead">
         <a class="tklink tk" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(r.ticker)}" target="_blank" rel="noopener noreferrer">${r.ticker}</a>
         <span class="price num">$${r.price.toFixed(2)}</span>
         ${scoreBadge(r, scoreStrategy)}
-        ${scorebar(r.prebreak, r.earnings_risk)}
+        ${cardScore != null && cardScore >= 9 ? (r.earnings_risk
+          ? '<span class="firetag weak" title="earnings report within the entry-avoid window -- engine will not take this entry (validated: holding through earnings drops win rate 62%->51%)">ENTRY (earnings risk)</span>'
+          : '<span class="firetag">ENTRY</span>') : ""}
         <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>
       ${SHOW_LEGACY_CONDITIONS && r.conditions ? `<div class="cardsection">
