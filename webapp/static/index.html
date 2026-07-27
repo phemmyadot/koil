@@ -292,6 +292,7 @@
       <span class="meta" id="selectionCount"></span>
       <button id="clearSelectionBtn" type="button" style="display:none">Clear</button>
       <button id="addToWatchlistBtn" type="button" style="display:none">Add</button>
+      <button id="exportPdfBtn" type="button" style="display:none">Export</button>
       <button id="refresh">Refresh</button>
     </div>
   </header>
@@ -1377,7 +1378,40 @@ function updateSelectionCount() {
   document.getElementById("selectionCount").textContent = has ? `${selectedTickers.size} selected` : "";
   document.getElementById("clearSelectionBtn").style.display = has ? "" : "none";
   document.getElementById("addToWatchlistBtn").style.display = has ? "" : "none";
+  document.getElementById("exportPdfBtn").style.display = has ? "" : "none";
   document.getElementById("refresh").style.display = has ? "none" : "";
+}
+
+// Downloads a PDF covering exactly the selected tickers (cherry-picked or
+// via "Select all"), built server-side from the already-computed payloads
+// -- no client-side PDF library, no recompute.
+async function exportSelectedPdf() {
+  const btn = document.getElementById("exportPdfBtn");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Exporting…";
+  try {
+    const resp = await fetch("/api/export/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Array.from(selectedTickers)),
+    });
+    if (!resp.ok) throw new Error(`export failed (${resp.status})`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "export.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert(`Export failed: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 // The server now precomputes every ticker in the background (see
@@ -1852,6 +1886,7 @@ document.getElementById("clearSelectionBtn").addEventListener("click", () => {
   if (lastData) render(lastData);
 });
 document.getElementById("addToWatchlistBtn").addEventListener("click", showWatchlistPicker);
+document.getElementById("exportPdfBtn").addEventListener("click", exportSelectedPdf);
 document.getElementById("plCalcBtn").addEventListener("click", showPlCalculator);
 
 load(false);

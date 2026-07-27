@@ -29,13 +29,14 @@ from datetime import datetime, timezone
 # environments; fall back to a reasonable default rather than crash.
 COMPUTE_WORKERS = os.cpu_count() or 4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 
 import webapp.build_universe as build_universe
 import webapp.data as data
 import webapp.db as db
 import webapp.optimizer as optimizer
+import webapp.pdf_export as pdf_export
 import webapp.prebreak as prebreak
 import webapp.score as score
 from webapp.scoring import evaluate
@@ -498,6 +499,20 @@ def tickers(refresh: int = 0):
         "errors": errors,
         "universe_error": universe_error,
     }
+
+
+@app.post("/api/export/pdf")
+def export_pdf(tickers: list[str]):
+    """PDF export for a user-selected subset of tickers (cherry-picked or
+    "select all"), built entirely from the already-computed _computed
+    payloads -- no recompute, matching exactly what /api/tickers already
+    sent the frontend for these tickers."""
+    with _compute_lock:
+        by_ticker = {p["ticker"]: p for p in _computed}
+    payloads = [_with_fresh_optimized(by_ticker[tk]) for tk in tickers if tk in by_ticker]
+    pdf_bytes = pdf_export.build_pdf(payloads)
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                     headers={"Content-Disposition": "attachment; filename=export.pdf"})
 
 
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"),
