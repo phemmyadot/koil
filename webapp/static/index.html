@@ -1156,6 +1156,18 @@ function loadWatchlists() {
 }
 function saveWatchlists(lists) {
   localStorage.setItem("watchlists", JSON.stringify(lists));
+  syncWatchlistTickers(lists);
+}
+// Tells the server which tickers are watchlisted, so the background fetch/compute loop keeps
+// them alive even if one later fails universe re-screening -- fire-and-forget, a failed sync
+// just means the next save (or page load) retries; watchlists themselves stay in localStorage.
+function syncWatchlistTickers(lists) {
+  const tickers = [...new Set(Object.values(lists).flat())];
+  fetch("/api/watchlist-tickers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(tickers),
+  }).catch(() => {});
 }
 function addSelectedToWatchlist(name) {
   const lists = loadWatchlists();

@@ -75,6 +75,11 @@ def _init_schema() -> None:
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_screened_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS watchlist_tickers (
+                ticker TEXT PRIMARY KEY,
+                added_at REAL NOT NULL
+            );
         """)
     _migrate_universe_meta_date_to_epoch()
     _migrate_computed_results_fetch_epoch_to_bar_date()
@@ -153,6 +158,23 @@ def has_any_bars() -> bool:
     with _lock:
         row = _conn.execute("SELECT 1 FROM bars LIMIT 1").fetchone()
     return row is not None
+
+
+def set_watchlist_tickers(tickers: list[str], added_at: float) -> None:
+    """Replaces the full server-known watchlist ticker set with `tickers` -- the client is the
+    source of truth (watchlists themselves live in the browser's localStorage), this table just
+    lets the background fetch/compute loop know which extra tickers to keep alive so a ticker
+    that later fails universe re-screening doesn't silently go stale on a saved watchlist."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM watchlist_tickers")
+        _conn.executemany("INSERT INTO watchlist_tickers (ticker, added_at) VALUES (?, ?)",
+                           [(tk, added_at) for tk in tickers])
+
+
+def get_watchlist_tickers() -> list[str]:
+    with _lock:
+        rows = _conn.execute("SELECT ticker FROM watchlist_tickers").fetchall()
+    return [r[0] for r in rows]
 
 
 def has_any_computed() -> bool:

@@ -155,6 +155,15 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
         return ticker, None, str(e) or type(e).__name__
 
 
+def _active_tickers() -> list[str]:
+    """TICKERS (the screened universe) plus any ticker a client has ever reported as
+    watchlisted -- a watchlisted ticker that later fails re-screening must keep being
+    fetched/computed, or its saved watchlist row silently goes stale forever."""
+    watchlisted = db.get_watchlist_tickers()
+    seen = set(TICKERS)
+    return TICKERS + [tk for tk in watchlisted if tk not in seen]
+
+
 def compute_all() -> None:
     """Recompute only tickers whose bars changed since the last pass; staleness keyed off last_bar_date, not fetch time."""
     global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
@@ -168,7 +177,7 @@ def compute_all() -> None:
     reused_payloads: dict[str, dict] = {}
     reused_source_fetch: dict[str, str] = {}
     reused_errors: dict[str, str] = {}
-    for tk in TICKERS:
+    for tk in _active_tickers():
         last_bar_date = db.get_last_bar_date(tk)
         prior_payload = prior_by_ticker.get(tk)
         # Bars unchanged AND the cached payload's shape is current -- otherwise force a recompute even
@@ -267,13 +276,14 @@ def _universe_refresh_if_needed() -> None:
 
 def refresh_and_compute(force: bool = False) -> None:
     """Gap-fetch prices then recompute whatever changed; force=True re-fetches everything (manual Refresh)."""
+    active = _active_tickers()
     fetch_time_before = data.last_fetch_time()
-    data.warm_cache(TICKERS, force=force)
+    data.warm_cache(active, force=force)
     fetch_time_after = data.last_fetch_time()
 
     with _compute_lock:
         computed_count = len(_computed)
-    compute_caught_up = computed_count >= len(TICKERS) * 0.9  # allow for a few per-ticker errors
+    compute_caught_up = computed_count >= len(active) * 0.9  # allow for a few per-ticker errors
 
     if not force and fetch_time_before == fetch_time_after and compute_caught_up:
         print(f"app: nothing fetched this pass and compute is already caught up "
@@ -374,6 +384,16 @@ def tickers(refresh: int = 0):
         "errors": errors,
         "universe_error": universe_error,
     }
+
+
+@app.post("/api/watchlist-tickers")
+def sync_watchlist_tickers(tickers: list[str]):
+    """Client reports the full set of tickers currently on any saved watchlist (watchlists
+    themselves stay in the browser's localStorage -- this just tells the background fetch/
+    compute loop which extra tickers to keep alive so one that later fails universe
+    re-screening doesn't silently go stale). Called by watchlist.html on load/save."""
+    db.set_watchlist_tickers(sorted(set(tickers)), time.time())
+    return {"ok": True}
 
 
 @app.post("/api/export/pdf")
