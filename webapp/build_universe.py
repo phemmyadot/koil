@@ -183,9 +183,14 @@ def passes_technical_filters(df: pd.DataFrame) -> bool:
     return (matches_vexh_setup(df) or matches_vcp_setup(df) or matches_vcpo_setup(df))
 
 
-def screen_technicals(symbols: list[str]) -> list[str]:
+def screen_technicals(symbols: list[str], on_progress=None) -> list[str]:
+    """on_progress(done, total), if given, is called after each chunk --
+    lets callers (app.py) surface live progress the same way data.py's
+    warm_cache()/app.py's compute_all() already do, without this module
+    needing to know anything about app.py's global progress state."""
     passed = []
-    for i in range(0, len(symbols), CHUNK):
+    total = len(symbols)
+    for i in range(0, total, CHUNK):
         chunk = symbols[i:i + CHUNK]
         t0 = time.time()
         try:
@@ -193,6 +198,8 @@ def screen_technicals(symbols: list[str]) -> list[str]:
                               progress=False, auto_adjust=False, threads=True)
         except Exception as e:  # noqa: BLE001 - one bad chunk shouldn't kill the run
             print(f"  chunk {i // CHUNK + 1}: download failed: {e}")
+            if on_progress:
+                on_progress(min(i + CHUNK, total), total)
             continue
         for sym in chunk:
             try:
@@ -201,8 +208,10 @@ def screen_technicals(symbols: list[str]) -> list[str]:
                     passed.append(sym)
             except Exception:  # noqa: BLE001 - per-symbol data issues are expected/skippable
                 continue
-        print(f"  chunk {i // CHUNK + 1}/{(len(symbols) + CHUNK - 1) // CHUNK}: "
+        print(f"  chunk {i // CHUNK + 1}/{(total + CHUNK - 1) // CHUNK}: "
               f"{len(chunk)} tickers in {time.time() - t0:.1f}s, {len(passed)} passing so far")
+        if on_progress:
+            on_progress(min(i + CHUNK, total), total)
     return passed
 
 

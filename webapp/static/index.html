@@ -1623,34 +1623,50 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
-// Real server-side progress via /api/meta -- fetch_progress then
-// compute_progress are two sequential backend stages (matching
-// refresh_and_compute()'s data.warm_cache() -> compute_all() order), but
-// shown as ONE continuous bar instead of two independent 0-99% bars that
-// visibly reset when fetch hands off to compute -- fetch fills the first
-// half (0-50%), compute fills the second half (50-100%), so it reads as one
-// loading operation with two phases, not two separate loading bars back to
-// back. The label still names which phase is active.
+// Real server-side progress via /api/meta -- screen_progress, then
+// fetch_progress, then compute_progress are three sequential backend stages
+// (rebuild_universe()'s screen_technicals() -> refresh_and_compute()'s
+// data.warm_cache() -> compute_all()), shown as ONE continuous bar instead
+// of three independent 0-99% bars that visibly reset at each handoff --
+// screening fills the first third (0-33%), fetching the second (33-66%),
+// computing the last (66-100%). The label still names which phase is active.
 let realProgressTimer = null;
 function startRealProgressPolling() {
   const wrap = document.getElementById("progresswrap");
   const fill = document.getElementById("progressfill");
   const label = document.getElementById("progresslabel");
   wrap.style.display = "flex";
+  // Reset immediately, before the first poll response comes back -- without
+  // this, the bar/label kept whatever finishProgress() last left behind
+  // ("done" text, 100% fill) for the gap between showing the bar and the
+  // first /api/meta response landing, which is exactly the window where all
+  // three progress fields can still be null (backend hasn't flipped into
+  // "in progress" state yet) -- looked like the refresh had already
+  // finished when it had actually just started.
+  fill.style.width = "0%";
+  label.textContent = "Starting…";
   const poll = async () => {
     try {
       const meta = await (await fetch("/api/meta")).json();
+      const sp = meta.screen_progress;
       const fp = meta.fetch_progress;
       const cp = meta.compute_progress;
       if (cp && cp.total > 0) {
-        const pct = 50 + Math.min(49, (cp.done / cp.total) * 50);
+        const pct = 200 / 3 + Math.min(100 / 3 - 0.1, (cp.done / cp.total) * (100 / 3));
         fill.style.width = pct.toFixed(1) + "%";
         label.textContent = `Now computing… ${cp.done} of ${cp.total} tickers`;
       } else if (fp && fp.total > 0) {
-        const pct = Math.min(50, (fp.done / fp.total) * 50);
+        const pct = 100 / 3 + Math.min(100 / 3 - 0.1, (fp.done / fp.total) * (100 / 3));
         fill.style.width = pct.toFixed(1) + "%";
         label.textContent = `Now fetching tickers… ${fp.done} of ${fp.total}`;
+      } else if (sp && sp.total > 0) {
+        const pct = Math.min(100 / 3, (sp.done / sp.total) * (100 / 3));
+        fill.style.width = pct.toFixed(1) + "%";
+        label.textContent = `Now screening tickers… ${sp.done} of ${sp.total}`;
       }
+      // All null: either not started yet (just reset above, so this is a
+      // no-op) or genuinely done and about to be torn down by
+      // stopRealProgressPolling() -- don't overwrite either state here.
     } catch (e) { /* keep showing the last known state */ }
   };
   poll();
@@ -1691,19 +1707,40 @@ async function load(refresh) {
   const btn = document.getElementById("refresh");
   btn.disabled = true;
   let tickerCount = lastData ? lastData.tickers.length : null;
-  if (tickerCount === null) {
+  let meta = null;
+  if (tickerCount === null || !refresh) {
     try {
-      const metaRes = await fetch("/api/meta");
-      tickerCount = (await metaRes.json()).total_tickers;
-    } catch (e) { tickerCount = 474; }
+      meta = await (await fetch("/api/meta")).json();
+      if (tickerCount === null) tickerCount = meta.total_tickers;
+    } catch (e) { tickerCount = tickerCount ?? 474; }
   }
+  // A plain page load (including a browser reload) has no idea whether a
+  // refresh triggered from a DIFFERENT page load/tab is still running on the
+  // server -- screen_progress/fetch_progress/compute_progress are global
+  // backend state (see app.py), not scoped to whichever request started
+  // them, so a refresh survives a browser reload even though the JS state
+  // that was tracking it (realProgressTimer, the disabled button, etc.)
+  // doesn't. Without this check, reloading mid-refresh silently rendered old
+  // cached data with no progress bar, looking like the refresh had vanished.
+  const refreshInFlight = !refresh && meta
+    && (meta.screen_progress || meta.fetch_progress || meta.compute_progress);
   // Only the real backend-progress poller runs the label/bar now -- it used
   // to run alongside startProgress()'s time-estimate ticker on its own
   // separate, faster interval, and the two competed to overwrite the same
   // progresslabel element, which is why the label looked like it wasn't
   // adjusting to the actual fetch/compute stage (the estimate ticker kept
   // stomping it with its own "~Xs remaining" text).
-  if (refresh) { showPageOverlay("Refreshing all tickers…"); startRealProgressPolling(); }
+  if (refresh || refreshInFlight) {
+    showPageOverlay(refreshInFlight ? "Refresh already in progress…" : "Refreshing all tickers…");
+    if (!realProgressTimer) startRealProgressPolling();
+  }
+  if (refreshInFlight) {
+    // Same polling cadence as the cold-start path below -- keep checking
+    // back until the in-flight refresh (started elsewhere) actually
+    // finishes, then fall through to a normal render with fresh data.
+    setTimeout(() => load(false), FIRST_LOAD_POLL_MS);
+    return;
+  }
   const t0 = Date.now();
   try {
     const params = refresh ? "?refresh=1" : "";

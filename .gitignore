@@ -7,4 +7,3 @@ webapp/app_data.db
 webapp/app_data.db-wal
 webapp/app_data.db-shm
 webapp/health_check.log
-__pycache__/p.cpython-314.pyc

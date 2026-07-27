@@ -101,10 +101,25 @@ _load_computed_from_db()
 # one loader that silently covers both phases.
 _compute_progress: dict[str, int] | None = None
 
+# Live progress for rebuild_universe()'s screen_technicals() chunk loop --
+# the earliest phase of a manual Refresh (or the 2h automatic re-screen),
+# which previously reported nothing at all: fetch_candidates() (Yahoo
+# screener query) has no meaningful sub-progress to report (unknown total
+# page count upfront), but screen_technicals() already computes its own
+# done/total per chunk for its print statements, so this just surfaces that
+# same number instead of leaving the frontend's progress bar blank for
+# however long (60-90s+) this phase takes.
+_screen_progress: dict[str, int] | None = None
+
 
 def compute_progress() -> dict[str, int] | None:
     with _compute_lock:
         return dict(_compute_progress) if _compute_progress is not None else None
+
+
+def screen_progress() -> dict[str, int] | None:
+    with _compute_lock:
+        return dict(_screen_progress) if _screen_progress is not None else None
 
 _STRATEGY_MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
 
@@ -272,13 +287,30 @@ def rebuild_universe() -> str | None:
     the background loop (see _universe_refresh_if_needed), not here, so the
     manual Refresh button always forces a real re-screen regardless of when
     the last automatic one ran."""
-    global TICKERS
+    global TICKERS, _screen_progress
+
+    def _on_progress(done: int, total: int) -> None:
+        # `global` in the enclosing rebuild_universe() does NOT extend into
+        # this nested function's own scope -- Python requires a separate
+        # `global` declaration here too, or this assignment silently creates
+        # a new local variable instead of updating the module-level state
+        # /api/meta reads (the bug that shipped first: screen_progress's
+        # `total` showed up but `done` never advanced past 0).
+        global _screen_progress
+        with _compute_lock:
+            _screen_progress = {"done": done, "total": total}
+
     try:
         candidates = build_universe.fetch_candidates()
-        passed = build_universe.screen_technicals(candidates)
+        with _compute_lock:
+            _screen_progress = {"done": 0, "total": len(candidates)}
+        passed = build_universe.screen_technicals(candidates, on_progress=_on_progress)
         build_universe.write_tickers_file(passed)
     except Exception as e:  # noqa: BLE001 - fall back to the existing tickers.py
         return str(e) or type(e).__name__
+    finally:
+        with _compute_lock:
+            _screen_progress = None
     importlib.reload(tickers_module)
     TICKERS = tickers_module.TICKERS
     db.set_last_screened_at(time.time())
@@ -418,6 +450,15 @@ def meta():
     return {
         "total_tickers": len(TICKERS),
         "last_fetch": data.last_fetch_time(),
+        # Non-null only while rebuild_universe()'s screen_technicals() chunk
+        # loop is actively running -- the earliest phase of a manual Refresh
+        # (or the 2h automatic re-screen), which used to report nothing at
+        # all, leaving the frontend's progress bar blank for however long
+        # (60-90s+) this phase took. Sequential with fetch/compute below
+        # (rebuild_universe() always finishes before refresh_and_compute()
+        # starts, see the manual-Refresh /api/tickers?refresh=1 path), so
+        # never non-null at the same time as either of those.
+        "screen_progress": screen_progress(),
         # Non-null only while a warm_cache() fetch is actively in flight --
         # lets the frontend show real "N of M loaded" progress during the
         # first post-deploy fetch instead of a bare spinner.
