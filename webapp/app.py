@@ -23,6 +23,13 @@ from datetime import datetime, timezone
 # _compute_one() is CPU-bound, unlike data.py's network-bound FETCH_WORKERS -- a high worker count isn't free here.
 COMPUTE_WORKERS = os.cpu_count() or 4
 
+# Persistent, process-lifetime pool -- NOT recreated per compute_all() call. Same reasoning as
+# data.py's _fetch_executor: yfinance's cookie-cache DB (peewee, thread-local connections) leaks
+# one open FD per new OS thread that ever touches it, and a fresh ThreadPoolExecutor every call
+# (every CHECK_INTERVAL, forever, via strategy_common's earnings-date lookups on a cache miss)
+# meant a fresh batch of worker threads leaking FDs on every pass -- see webapp/data.py.
+_compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
+
 # Bump whenever _compute_one()'s payload SHAPE changes (new/renamed/moved fields, not just new tickers/data) -- forces
 # compute_all() to recompute every ticker once instead of reusing an old-shaped cached payload forever just because
 # that ticker's bars happened not to change since the shape changed.
@@ -201,12 +208,11 @@ def compute_all() -> None:
     try:
         results = []
         if to_compute:
-            with ThreadPoolExecutor(max_workers=COMPUTE_WORKERS) as pool:
-                futures = [pool.submit(_compute_one, tk) for tk in to_compute]
-                for future in as_completed(futures):
-                    results.append(future.result())
-                    with _compute_lock:
-                        _compute_progress["done"] += 1
+            futures = [_compute_executor.submit(_compute_one, tk) for tk in to_compute]
+            for future in as_completed(futures):
+                results.append(future.result())
+                with _compute_lock:
+                    _compute_progress["done"] += 1
         with _compute_lock:
             # Lock-ordering invariant: _compute_lock is always acquired before db._lock, never the reverse.
             new_source_fetch = {tk: db.get_last_bar_date(tk) for tk, payload, err in results

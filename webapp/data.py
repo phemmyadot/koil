@@ -40,6 +40,14 @@ from webapp.tickers import TICKERS
 CHECK_INTERVAL = 2 * 60 * 60
 FETCH_WORKERS = 30
 
+# Persistent, process-lifetime pool -- NOT recreated per warm_cache() call. yfinance's cookie
+# cache (peewee SqliteDatabase) keeps one real sqlite3 connection per OS thread that ever
+# touches it (peewee's ConnectionState is threading.local-backed) and never closes it until
+# process exit. A fresh ThreadPoolExecutor every call (every CHECK_INTERVAL, forever) meant a
+# fresh batch of worker threads, each leaking one more open FD to cookies.db -- reusing the same
+# worker threads across calls caps that leak at FETCH_WORKERS FDs for the life of the process.
+_fetch_executor = ThreadPoolExecutor(max_workers=FETCH_WORKERS)
+
 # Cold-fetch (ticker never seen before) starting point. Matches the
 # start_date/startDate input default (1 Jan 2022) shared by all three pine
 # strategies. Fetches a year earlier than that so ATR (needs ATR_LEN=22 + a
@@ -184,45 +192,44 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
             _fetch_progress = {"done": 0, "total": len(to_fetch)}
         rate_limited = False
         try:
-            with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-                futures = {pool.submit(_fetch_one, tk, force): tk for tk in to_fetch}
-                # as_completed (real completion order, unlike pool.map()) so
-                # progress updates as each ticker actually lands, and so a
-                # rate-limit hit can stop the run instead of only being
-                # noticed after every ticker in the batch has been tried.
-                for future in as_completed(futures):
-                    tk, df, err = future.result()
-                    if err == _RATE_LIMITED:
-                        rate_limited = True
-                        # Cancel whatever hasn't started yet -- futures already
-                        # in flight still finish (can't interrupt a running
-                        # yf.download call), but nothing new gets kicked off.
-                        for f in futures:
-                            f.cancel()
-                        break
-                    with _lock:
-                        if df is not None:
-                            db.upsert_bars(tk, df, now)
-                            if force or tk not in _raw_cache or df.empty:
-                                # force: df IS the full history, replace outright.
-                                # empty (incremental re-check, nothing new): keep
-                                # existing in-memory frame as-is, just refresh the
-                                # timestamp below.
-                                if not df.empty:
-                                    _raw_cache[tk] = df
-                            else:
-                                # Incremental: append the new tail to the
-                                # in-memory frame rather than reloading from
-                                # the DB (cheap, avoids a full reconstruction
-                                # per ticker per batch).
-                                _raw_cache[tk] = pd.concat([_raw_cache[tk], df])
-                                _raw_cache[tk] = _raw_cache[tk][~_raw_cache[tk].index.duplicated(keep="last")]
-                            _fetched_at[tk] = now
-                            _raw_errors.pop(tk, None)
+            futures = {_fetch_executor.submit(_fetch_one, tk, force): tk for tk in to_fetch}
+            # as_completed (real completion order, unlike pool.map()) so
+            # progress updates as each ticker actually lands, and so a
+            # rate-limit hit can stop the run instead of only being
+            # noticed after every ticker in the batch has been tried.
+            for future in as_completed(futures):
+                tk, df, err = future.result()
+                if err == _RATE_LIMITED:
+                    rate_limited = True
+                    # Cancel whatever hasn't started yet -- futures already
+                    # in flight still finish (can't interrupt a running
+                    # yf.download call), but nothing new gets kicked off.
+                    for f in futures:
+                        f.cancel()
+                    break
+                with _lock:
+                    if df is not None:
+                        db.upsert_bars(tk, df, now)
+                        if force or tk not in _raw_cache or df.empty:
+                            # force: df IS the full history, replace outright.
+                            # empty (incremental re-check, nothing new): keep
+                            # existing in-memory frame as-is, just refresh the
+                            # timestamp below.
+                            if not df.empty:
+                                _raw_cache[tk] = df
                         else:
-                            db.mark_fetch_error(tk, now, err)
-                            _raw_errors[tk] = err
-                        _fetch_progress["done"] += 1
+                            # Incremental: append the new tail to the
+                            # in-memory frame rather than reloading from
+                            # the DB (cheap, avoids a full reconstruction
+                            # per ticker per batch).
+                            _raw_cache[tk] = pd.concat([_raw_cache[tk], df])
+                            _raw_cache[tk] = _raw_cache[tk][~_raw_cache[tk].index.duplicated(keep="last")]
+                        _fetched_at[tk] = now
+                        _raw_errors.pop(tk, None)
+                    else:
+                        db.mark_fetch_error(tk, now, err)
+                        _raw_errors[tk] = err
+                    _fetch_progress["done"] += 1
         finally:
             with _lock:
                 _fetch_progress = None
