@@ -1106,6 +1106,7 @@ function strategyModal(name, s) {
     rows.push(modalRow("Avg MAE (wins)", `-${s.avg_mae_wins_pct}%${limitHint}`));
     if (s.pct_near_zero_mae != null) rows.push(modalRow("Wins w/ MAE&lt;1%", s.pct_near_zero_mae + "%"));
   }
+  if (s.avg_mfe_wins_pct != null) rows.push(modalRow("Avg MFE (wins)", `+${s.avg_mfe_wins_pct}%`));
   rows.push('<div class="modalsep"></div>');
   rows.push(modalRow("Avg Days", s.avg_trade_days ?? "&mdash;"));
   rows.push('<div class="modalsep"></div>');
@@ -1200,11 +1201,14 @@ async function exportSelectedPdf() {
       body: JSON.stringify(Array.from(selectedTickers)),
     });
     if (!resp.ok) throw new Error(`export failed (${resp.status})`);
+    const disposition = resp.headers.get("Content-Disposition") || "";
+    const filenameMatch = disposition.match(/filename=([^;]+)/);
+    const today = new Date().toISOString().slice(0, 10);
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "export.pdf";
+    a.download = filenameMatch ? filenameMatch[1].trim() : `exhaustion-export-${today}.pdf`;
     document.body.appendChild(a);
     a.click();
     a.remove();

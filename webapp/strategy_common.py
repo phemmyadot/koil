@@ -1,6 +1,7 @@
 """Code shared by strategy_vexh.py/strategy_vcp.py/strategy_vcpo.py -- each's evaluate() returns the same shape:
 n_trades, win_rate, profit_factor, avg_trade_days, last5_trades, avg_mae_wins_pct, pct_near_zero_mae,
-max_trade_pnl_fraction, signal_today, open_position, verdict, verdict_reason, first_trade_date. open_position is
+avg_mfe_wins_pct, max_trade_pnl_fraction, signal_today, open_position, verdict, verdict_reason,
+first_trade_date. open_position is
 {entry_date, entry_price, target, to_tp_pct, unrealized_pct, mae_pct, days_held} or None.
 
 Only each strategy's own run() (the actual trading logic: entry gate, stop/trail/TP rules, time
@@ -58,7 +59,7 @@ def wilder_atr(h, l, c, length):
 
 def record_trade(trades: list[dict], df: pd.DataFrame, entry_bar: int, entry_price: float,
                   exit_bar: int, exit_price: float, qty: float, mae_pct: float | None = None,
-                  commission_rate: float = 0.0) -> None:
+                  mfe_pct: float | None = None, commission_rate: float = 0.0) -> None:
     """Appends one closed-trade record. dollar_pnl = qty * (exit_price - entry_price) --
     strategies with real position sizing (VCP/VCPO) pass their actual qty for a real
     dollar_pnl; a strategy with no sizing model (VEXH) passes qty=1/entry_price so
@@ -66,9 +67,10 @@ def record_trade(trades: list[dict], df: pd.DataFrame, entry_bar: int, entry_pri
     gross-win/gross-loss math is dollar_pnl-based and must still match a percent-return-based
     PF for a strategy that has no real dollar sizing to begin with. commission_rate
     (0.0 default) is subtracted from pnl_pct on both entry and exit -- only strategies that
-    model commission (VEXH) pass a nonzero rate. mae_pct is omitted (None) for a partial
-    leg of a round-trip (e.g. VCP/VCPO's TP-half fill) -- only the final-close leg gets it,
-    so summarize() counts one MAE value per real trade, not one per row."""
+    model commission (VEXH) pass a nonzero rate. mae_pct/mfe_pct (max adverse/favorable
+    excursion) are both omitted (None) for a partial leg of a round-trip (e.g. VCP/VCPO's
+    TP-half fill) -- only the final-close leg gets them, so summarize() counts one value per
+    real trade, not one per row."""
     commission_pct = commission_rate * (entry_price + exit_price) / entry_price
     pnl_pct = (exit_price / entry_price - 1) * 100 - commission_pct * 100
     # Derived from pnl_pct (not a separate exit_price - entry_price computation) so commission
@@ -88,6 +90,8 @@ def record_trade(trades: list[dict], df: pd.DataFrame, entry_bar: int, entry_pri
     }
     if mae_pct is not None:
         trade["mae_pct"] = round(float(mae_pct), 2)
+    if mfe_pct is not None:
+        trade["mfe_pct"] = round(float(mfe_pct), 2)
     trades.append(trade)
 
 
@@ -97,7 +101,7 @@ def summarize(trades: list[dict]) -> dict:
     if not trades:
         return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "avg_trade_days": None,
                 "last5_trades": [], "avg_mae_wins_pct": None, "pct_near_zero_mae": None,
-                "max_trade_pnl_fraction": 1.0}
+                "avg_mfe_wins_pct": None, "max_trade_pnl_fraction": 1.0}
 
     wins = [t for t in trades if t["pnl_pct"] > 0]
     losses = [t for t in trades if t["pnl_pct"] <= 0]
@@ -109,12 +113,17 @@ def summarize(trades: list[dict]) -> dict:
     # "tp_pct" is a legacy name -- it's the trade's full signed pnl_pct, not just TP exits.
     last5 = [{"days": t["days"], "tp_pct": t["pnl_pct"]} for t in trades[-5:]]
 
-    # mae_pct is absent on a partial (non-final) leg -- see record_trade()'s docstring.
+    # mae_pct/mfe_pct are absent on a partial (non-final) leg -- see record_trade()'s docstring.
     mae_wins = [t["mae_pct"] for t in wins if t.get("mae_pct") is not None]
     avg_mae_wins_pct = round(sum(mae_wins) / len(mae_wins), 2) if mae_wins else None
     # Share of winners that barely dipped before working (favors entering at market over chasing a limit fill).
     pct_near_zero_mae = (round(sum(1 for m in mae_wins if m < 1.0) / len(mae_wins) * 100, 1)
                           if mae_wins else None)
+    # Average max favorable excursion (best unrealized gain reached before exit) across winning
+    # trades -- how much upside a winner typically gives up by holding to the actual exit rule
+    # rather than the best available price, the mirror image of avg_mae_wins_pct.
+    mfe_wins = [t["mfe_pct"] for t in wins if t.get("mfe_pct") is not None]
+    avg_mfe_wins_pct = round(sum(mfe_wins) / len(mfe_wins), 2) if mfe_wins else None
 
     # Share of total $ PnL from the single best trade (1.0 sentinel if non-positive total).
     dollar_pnls = [t["dollar_pnl"] for t in trades]
@@ -124,6 +133,7 @@ def summarize(trades: list[dict]) -> dict:
     return {"n_trades": len(trades), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
             "avg_trade_days": avg_days, "last5_trades": last5,
             "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae,
+            "avg_mfe_wins_pct": avg_mfe_wins_pct,
             "max_trade_pnl_fraction": round(float(max_trade_pnl_fraction), 4)}
 
 

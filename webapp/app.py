@@ -33,7 +33,7 @@ _compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
 # Bump whenever _compute_one()'s payload SHAPE changes (new/renamed/moved fields, not just new tickers/data) -- forces
 # compute_all() to recompute every ticker once instead of reusing an old-shaped cached payload forever just because
 # that ticker's bars happened not to change since the shape changed.
-PAYLOAD_SCHEMA_VERSION = 4
+PAYLOAD_SCHEMA_VERSION = 5
 
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
@@ -409,8 +409,9 @@ def export_pdf(tickers: list[str]):
         by_ticker = {p["ticker"]: p for p in _computed}
     payloads = [by_ticker[tk] for tk in tickers if tk in by_ticker]
     pdf_bytes = pdf_export.build_pdf(payloads)
+    filename = f"exhaustion-export-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
-                     headers={"Content-Disposition": "attachment; filename=export.pdf"})
+                     headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"),

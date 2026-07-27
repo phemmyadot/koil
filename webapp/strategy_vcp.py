@@ -76,7 +76,9 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             leg_qty = position["qty"] * 0.5 if position["tp_half_hit"] else position["qty"]
             equity += leg_qty * (exit_price - entry_price)
             mae_pct = (entry_price - position["low_since"]) / entry_price * 100
-            common.record_trade(trades, df, position["entry_i"], entry_price, i, exit_price, leg_qty, mae_pct)
+            mfe_pct = (position["high_since"] - entry_price) / entry_price * 100
+            common.record_trade(trades, df, position["entry_i"], entry_price, i, exit_price, leg_qty,
+                                 mae_pct, mfe_pct)
             position = None
             pending_exit_at = None
             continue

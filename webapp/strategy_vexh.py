@@ -72,7 +72,7 @@ def run(df: pd.DataFrame, ind: dict):
 
     n = len(df)
     trades: list[dict] = []
-    position = None  # {"entry_bar", "entry_price", "visible_from", "low_since"}
+    position = None  # {"entry_bar", "entry_price", "visible_from", "low_since", "high_since"}
     pending_tp = None  # tp price, live once position opened; checked every bar from entry_bar+1 on
 
     sma_slow_len = E.sma_slow_len
@@ -80,10 +80,11 @@ def run(df: pd.DataFrame, ind: dict):
     time_stop_bars = E.time_stop_bars
 
     for i in range(1, n):
-        # Running low-water-mark for MAE, updated for every bar the position is open --
+        # Running low/high-water-mark for MAE/MFE, updated for every bar the position is open --
         # including the bar it may close on below -- BEFORE any exit check.
         if position is not None:
             position["low_since"] = min(position["low_since"], l_arr[i])
+            position["high_since"] = max(position["high_since"], h_arr[i])
 
         # TP fill check, processed first each bar (mirrors _process_orders running at the
         # START of next(), before this bar's own exit/entry logic).
@@ -91,11 +92,12 @@ def run(df: pd.DataFrame, ind: dict):
                 and h_arr[i] >= pending_tp):
             exit_price = max(o_arr[i], pending_tp)
             mae_pct = (position["entry_price"] - position["low_since"]) / position["entry_price"] * 100
+            mfe_pct = (position["high_since"] - position["entry_price"]) / position["entry_price"] * 100
             # qty=1/entry_price makes dollar_pnl equal the trade's percent return (no dollar
             # sizing model here) -- summarize()'s PF/gross-win/gross-loss math is dollar_pnl-based,
             # and matches p.py's PortfolioSizedEngine (backtesting.py sums ReturnPct, not $ price delta).
             common.record_trade(trades, df, position["entry_bar"], position["entry_price"], i, exit_price,
-                                 qty=1 / position["entry_price"], mae_pct=mae_pct,
+                                 qty=1 / position["entry_price"], mae_pct=mae_pct, mfe_pct=mfe_pct,
                                  commission_rate=E_COMMISSION_RATE)
             position = None
             pending_tp = None
@@ -118,9 +120,10 @@ def run(df: pd.DataFrame, ind: dict):
                            or (time_stop_bars > 0 and (bar_index - position["entry_bar"]) >= time_stop_bars))
                 if closing:
                     mae_pct = (position["entry_price"] - position["low_since"]) / position["entry_price"] * 100
+                    mfe_pct = (position["high_since"] - position["entry_price"]) / position["entry_price"] * 100
                     common.record_trade(trades, df, position["entry_bar"], position["entry_price"], i,
                                          current_price, qty=1 / position["entry_price"], mae_pct=mae_pct,
-                                         commission_rate=E_COMMISSION_RATE)
+                                         mfe_pct=mfe_pct, commission_rate=E_COMMISSION_RATE)
                     position = None
                     pending_tp = None
                     continue
@@ -134,7 +137,7 @@ def run(df: pd.DataFrame, ind: dict):
             # the signal bar itself (i), even though the fill is only processed (and becomes
             # visible to exit checks) starting the broker's next() call at bar i+1.
             position = {"entry_bar": i, "entry_price": current_price, "visible_from": i + 1,
-                        "low_since": l_arr[i]}
+                        "low_since": l_arr[i], "high_since": h_arr[i]}
             pending_tp = bb_basis_arr[i]
 
     signal_today = bool(entry_signal_arr[-1]) and position is None
