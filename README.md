@@ -7,30 +7,27 @@ live scoring dashboard).
 ## Layout
 
 ### Pine Script strategies (TradingView)
-`pines/` holds the 4 canonical Pine ports of the dashboard's 4 strategies (Exhaustion, VCP
-Master, Strategy A, Strategy D) — each is a trade-for-trade mirror of its `webapp/` Python
-module:
+`pines/` holds the canonical Pine ports of the dashboard's 3 live strategies (VEXH, VCP,
+VCPO) — each is a trade-for-trade mirror of its `webapp/` Python module:
 - `pines/strategy_d_volatility_exhaustion.pine` — the shipped/production strategy: buys
   oversold pullbacks (RSI + lower Bollinger Band) within an established SMA150 uptrend, with
-  a time stop and ATR volatility ceiling/floor. This is what `p.py` and the dashboard's
-  Exhaustion chip mirror. (Filename predates the webapp's A/D/VCP expansion — despite the
-  `_d_`, this is Exhaustion, not Strategy D.)
+  a time stop and ATR volatility ceiling/floor. This is what `p.py` and the dashboard's VEXH
+  strategy mirror. (Filename predates the webapp's later expansion — despite the `_d_`, this
+  is VEXH, not "Strategy D".)
 - `pines/vcp.pine` — "VCP Master", ATR-compression + volume-confirmed breakout with a
   multi-tier stop/breakeven/trail and partial take-profit. Mirrors `webapp/strategy_vcp.py`.
-- `pines/strategy_a_adaptive_pullback.pine` — "Strategy A", adaptive KAMA-based pullback
-  entry with a fixed ATR trail. Mirrors `webapp/strategy_a.py`.
-- `pines/strategy_d_vcp_fixed_bracket.pine` — "Strategy D", ADX regime + Bollinger-Band-Width
-  compression/volume-dry-up setup + volume-confirmed resistance breakout, fixed-bracket ATR
-  stop with pattern-low floor and chandelier trail. Mirrors `webapp/strategy_d.py`.
+- `pines/vcpo.pine` — "VCPO", same ATR-compression breakout as VCP Master but without the
+  volume-confirmation gate. Mirrors `webapp/strategy_vcpo.py`.
 
 Root-level Pine files are earlier exploratory variants, not wired to the dashboard:
 - `strategy.pine` — original v1 pullback-in-trend strategy (EMA20/50/200, RSI, ATR stops).
-- `strategy_b_adx_scaled_trail.pine` — same entry logic as Strategy A, trail multiplier
-  scales with ADX trend strength.
-- `strategy_c_vcp_breakout.pine` — an earlier VCP breakout variant using swing-pivot
-  contraction tracking (different detection logic than `pines/vcp.pine`).
+- `strategy_a_adaptive_pullback.pine` / `strategy_b_adx_scaled_trail.pine` — adaptive
+  KAMA-based pullback variants, deprecated (no `webapp/` module mirrors them anymore).
+- `strategy_c_vcp_breakout.pine` / `strategy_d_vcp_fixed_bracket.pine` — earlier VCP breakout
+  variants, deprecated (no `webapp/` module mirrors them anymore).
 - `breakout_projection.pine` — a separate pre-breakout scoring/target-projection indicator
-  (squeeze + volume dry-up + resistance clustering), not a strategy.
+  (squeeze + volume dry-up + resistance clustering), not a strategy. Mirrors
+  `webapp/prebreak.py`.
 
 ### Python
 - `p.py` — the production backtest harness (`PortfolioSizedEngine`, using the
@@ -44,7 +41,7 @@ Root-level Pine files are earlier exploratory variants, not wired to the dashboa
   entry conditions actually predict winners (see `trades_features.csv`).
 
 ### Web dashboard (`webapp/`)
-A live scoring dashboard for the production strategy (`strategy_d`/`p.py`), run locally:
+A live scoring dashboard for all 3 strategies (VEXH/VCP/VCPO), run locally:
 
 ```
 .venv/Scripts/python.exe -m uvicorn webapp.app:app --port 8123
@@ -52,11 +49,14 @@ A live scoring dashboard for the production strategy (`strategy_d`/`p.py`), run 
 
 Then open `http://127.0.0.1:8123`.
 
-- `app.py` — FastAPI backend; scores every ticker in `tickers.py` against the strategy's
-  6 entry gates, with a 15-minute in-memory cache.
-- `scoring.py` — per-ticker evaluation logic: entry gate pass/fail, confidence tier
-  (LOW/MEDIUM/HIGH, based on validated distance-from-SMA research), open-trade status with
-  a TAKE/SKIP verdict, average trade duration, and last-5-trades history.
+- `app.py` — FastAPI backend; computes each ticker's per-strategy stats in the background on
+  a fixed cadence (see `webapp/refresh_architecture.md`), never on the request path.
+- `strategy_vexh.py` / `strategy_vcp.py` / `strategy_vcpo.py` — each strategy's `evaluate()`,
+  returning the same shape: trade stats, open-position status, and a TAKE/SKIP/NO SIGNAL/
+  IN TRADE verdict. `strategy_common.py` holds logic shared across all three (verdict
+  classification, Wilder's ATR).
+- `score.py` — the 0-10 setup-quality score (see `webapp/scoring.md`), independent of any
+  single strategy's own PF/WR verdict.
 - `tickers.py` — the screened ticker universe (generated file, see below). Gitignored --
   each environment (dev/prod) keeps its own local copy, so pulling/pushing never conflicts
   over it. **Not present on a fresh clone** -- run `build_universe.py` once before starting

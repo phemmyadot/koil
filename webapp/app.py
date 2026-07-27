@@ -26,7 +26,7 @@ COMPUTE_WORKERS = os.cpu_count() or 4
 # Bump whenever _compute_one()'s payload SHAPE changes (new/renamed/moved fields, not just new tickers/data) -- forces
 # compute_all() to recompute every ticker once instead of reusing an old-shaped cached payload forever just because
 # that ticker's bars happened not to change since the shape changed.
-PAYLOAD_SCHEMA_VERSION = 2
+PAYLOAD_SCHEMA_VERSION = 4
 
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
@@ -37,10 +37,11 @@ import webapp.db as db
 import webapp.pdf_export as pdf_export
 import webapp.prebreak as prebreak
 import webapp.score as score
-from webapp.scoring import evaluate
 import webapp.tickers as tickers_module
+import webapp.strategy_common as strategy_common
 import webapp.strategy_vcp as strategy_vcp
 import webapp.strategy_vcpo as strategy_vcpo
+import webapp.strategy_vexh as strategy_vexh
 
 
 @asynccontextmanager
@@ -92,10 +93,10 @@ def screen_progress() -> dict[str, int] | None:
     with _compute_lock:
         return dict(_screen_progress) if _screen_progress is not None else None
 
-_STRATEGY_MODULES = {"strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
+_STRATEGY_MODULES = {"vexh": strategy_vexh, "strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
 
 
-def _eval_other_strategy(module, ticker: str, bars, ind: dict | None) -> dict | None:
+def _eval_strategy(module, ticker: str, bars, ind: dict | None) -> dict | None:
     """Independently error-isolated -- one strategy failing on a ticker shouldn't drop the others."""
     try:
         return module.evaluate(ticker, bars, ind=ind)
@@ -108,14 +109,34 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
     if bars is None:
         return ticker, None, data.get_error(ticker) or "no data"
     try:
-        payload = evaluate(ticker, bars)
+        if bars.empty:
+            raise ValueError("no data")
         # VCP/VCPO need identical ATR/EMA/resistance -- compute once, share the dict (~17ms/ticker saved).
+        # VEXH computes its own indicators (different set entirely), so it gets ind=None.
         try:
             shared_ind = strategy_vcp.compute_indicators(bars)
         except Exception:  # noqa: BLE001
             shared_ind = None
+
+        payload = {
+            "ticker": ticker,
+            "price": round(float(bars.Close.iloc[-1]), 4),
+            "date": str(bars.index[-1].date()),
+        }
         for key, module in _STRATEGY_MODULES.items():
-            payload[key] = _eval_other_strategy(module, ticker, bars, shared_ind)
+            ind = shared_ind if key != "vexh" else None
+            payload[key] = _eval_strategy(module, ticker, bars, ind)
+        # earnings_risk mirrors any one strategy's own earnings-flagged bars -- flagging is
+        # identical across strategies (strategy_common.with_earnings_flags()), so VEXH's
+        # result (if it succeeded) is as good a source as any other.
+        vexh_result = payload.get("vexh")
+        if vexh_result is not None:
+            df = strategy_common.with_earnings_flags(bars, ticker)
+            payload["earnings_risk"] = bool(df["EarningsWithinAvoidWindow"].iloc[-1])
+        else:
+            payload["earnings_risk"] = None
+        if all(payload[key] is None for key in _STRATEGY_MODULES):
+            raise ValueError("insufficient history")
         # Ticker-level, not strategy-specific -- same as a Pine indicator overlaying any strategy's chart.
         try:
             payload["prebreak"] = prebreak.evaluate(ticker, bars)
@@ -123,7 +144,7 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
             payload["prebreak"] = None
         # "score" is VEXH's legacy 6-gate count; setup_score is the 0-10 composite, keyed per strategy.
         payload["setup_score"] = {}
-        for strat_key in ("vexh", *_STRATEGY_MODULES.keys()):
+        for strat_key in _STRATEGY_MODULES:
             try:
                 payload["setup_score"][strat_key] = score.compute_score(payload, strat_key)
             except Exception:  # noqa: BLE001

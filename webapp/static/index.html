@@ -355,14 +355,6 @@
   </p>
 </div>
 <script>
-// Feature flag: legacy per-gate condition chips (TREND/BAND/RSI/DIST/VCEIL/
-// VFLR), being replaced by a new scoring system. Mirrors SHOW_LEGACY_CONDITIONS
-// in webapp/scoring.py -- keep both in sync by hand. On by default (unchanged
-// behavior) until the new system lands; with the backend flag off, r.conditions
-// is null, so this must also be off or the Conditions row would try to render
-// null and throw.
-const SHOW_LEGACY_CONDITIONS = true;
-
 // Feature flag: pre-breakout state chip (ported from pines/pre-break.pine),
 // applies across all strategies (ticker-level, not strategy-specific). On
 // by default; r.prebreak is null if the backend evaluator failed/had
@@ -396,17 +388,6 @@ function prebreakChips(pb) {
   ).join("");
 }
 
-const COND_LABELS = { trend:"TREND", band:"BAND", rsi:"RSI", sma_dist:"DIST", vol_ceil:"VCEIL", vol_floor:"VFLR" };
-
-const TIER_CLASS = { HIGH: "ok", MEDIUM: "mid", LOW: "no" };
-const TIER_LABEL = { HIGH: "HIGH", MEDIUM: "MID", LOW: "LOW" };
-
-function chip(key, c) {
-  if (key === "sma_dist" && c.tier) {
-    return `<span class="chip ${TIER_CLASS[c.tier]}" title="${String(c.value).replace(/"/g,"&quot;")}">DIST-${TIER_LABEL[c.tier]}</span>`;
-  }
-  return `<span class="chip ${c.pass ? "ok" : "no"}" title="${String(c.value).replace(/"/g,"&quot;")}">${COND_LABELS[key]}</span>`;
-}
 // Setup-quality score (0-10, scoring.md) -- the sole score display now
 // (the old x/5 pre-breakout-phase scorebar was removed; pre-breakout state
 // still feeds this score as two of its eight dimensions -- see score.py --
@@ -1283,10 +1264,6 @@ function render(data) {
           : '<span class="firetag">ENTRY</span>') : ""}
         <input type="checkbox" class="cardcheck" data-ticker="${r.ticker}" ${selectedTickers.has(r.ticker) ? "checked" : ""} title="Select for watchlist">
       </div>
-      ${SHOW_LEGACY_CONDITIONS && r.conditions ? `<div class="cardsection">
-        <span class="lbl">Conditions</span>
-        <span class="condgrid">${Object.entries(r.conditions).map(([k, c]) => chip(k, c)).join("")}</span>
-      </div>` : ""}
       ${SHOW_PREBREAK && r.prebreak ? `<div class="cardsection">
         <span class="lbl">Pre-Breakout</span>
         <span class="condgrid">${prebreakChips(r.prebreak)}</span>

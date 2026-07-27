@@ -11,7 +11,7 @@ deployment story the pickle files had, zero new infrastructure. Python's
 sqlite3 is stdlib, no new dependency.
 
 check_same_thread=False: the app's background threads (data.py's warm_cache
-worker pool, app.py's compute_all worker pool, scoring.py's earnings
+worker pool, app.py's compute_all worker pool, strategy_vexh.py's earnings
 executor) all write from threads other than the one that opened the
 connection. A single module-level connection + lock serializes all access,
 same discipline the old pickle caches used (each had a threading.Lock

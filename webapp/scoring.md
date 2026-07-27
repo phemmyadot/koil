@@ -167,20 +167,11 @@ Binary check for binary event risk. Any earnings release within a 21-calendar-da
 
 ### Score Computation
 
-Runs server-side, in `_compute_one()` alongside the existing `payload["prebreak"] = prebreak.evaluate(...)` call, once per strategy (`vexh`, `strategy_vcp`, `strategy_vcpo`, and `strategy_a`/`strategy_d` when `SHOW_ADX_VCPF` is on), stored as `payload["setup_score"][strategy_key]` — one scoring system, no base/training/holdout split. `r` is the in-progress `payload` dict. For `vexh`, stats sit flat on `r` itself (VEXH's `evaluate()` returns them at the top level). For everything else, `r[strategy]` is `{"baseline": {...}, "baseline_config": {...}}`, so stats live one level deeper, under `.get("baseline", {})`.
+Runs server-side, in `_compute_one()` alongside the existing `payload["prebreak"] = prebreak.evaluate(...)` call, once per strategy (`vexh`, `strategy_vcp`, `strategy_vcpo`), stored as `payload["setup_score"][strategy_key]`. `r` is the in-progress `payload` dict; `r[strategy]` is the same flat stats shape for all three strategies (see `webapp/strategy_common.py`).
 
 ```python
-def _strategy_stats(r: dict, strategy: str) -> dict:
-    # VEXH's evaluate() builds the payload itself, so its stats already sit
-    # at the top level; VCP/VCPO are bolted on afterwards one level deeper,
-    # under payload[strategy]["baseline"]. This is the only place that
-    # asymmetry is handled -- compute_score() itself has no special case.
-    if strategy == "vexh":
-        return r
-    return r.get(strategy, {}).get("baseline") or {}
-
 def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:
-    s = _strategy_stats(r, strategy)
+    s = r.get(strategy) or {}
     prebreak = r.get("prebreak") or {}
 
     # 1. Strategy Quality (0-3)

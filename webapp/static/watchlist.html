@@ -85,9 +85,8 @@
 </div>
 <script>
 const WATCHLIST_NAMES = ["VCP List", "VEXH List", "VCPO List"];
-// Which strategy's stats to show per list -- "vexh" reads top-level fields,
-// the others read that strategy's baseline stats object.
-const LIST_STRAT_KEY = { "VCP List": "strategy_vcp", "VEXH List": null, "VCPO List": "strategy_vcpo" };
+// Every strategy's stats live at the same flat row[key] shape -- see STRATEGY_ARCHITECTURE.md.
+const LIST_STRAT_KEY = { "VCP List": "strategy_vcp", "VEXH List": "vexh", "VCPO List": "strategy_vcpo" };
 
 function loadWatchlists() {
   try {
@@ -173,15 +172,10 @@ function statBadgesHtml(active, days, nTrades, wr, pf) {
 function statsFor(row, listName) {
   if (!row) return null;
   const key = LIST_STRAT_KEY[listName];
-  if (key === null) {
-    return { n_trades: row.n_trades, win_rate: row.win_rate, profit_factor: row.profit_factor,
-             active: !!row.open_trade, days: row.open_trade ? row.open_trade.bars_held : null };
-  }
   const s = row[key];
-  if (!s || !s.baseline) return null;
-  const b = s.baseline;
-  return { n_trades: b.n_trades, win_rate: b.win_rate, profit_factor: b.profit_factor,
-           active: b.in_position, days: b.open_position ? b.open_position.days_held : null };
+  if (!s) return null;
+  return { n_trades: s.n_trades, win_rate: s.win_rate, profit_factor: s.profit_factor,
+           active: !!s.open_position, days: s.open_position ? s.open_position.days_held : null };
 }
 
 let byTicker = {};
