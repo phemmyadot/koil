@@ -2,6 +2,15 @@
 
 Uses the exact production logic from p.py (single source of truth) so the
 score/open-trade status always matches the validated backtest.
+
+## Shared strategy-stats shape
+
+evaluate()'s "vexh" key, strategy_vcp.py's evaluate(), and strategy_vcpo.py's
+evaluate() all return the exact same shape: n_trades, win_rate,
+profit_factor, avg_trade_days, last5_trades, avg_mae_wins_pct,
+pct_near_zero_mae, max_trade_pnl_fraction, signal_today, open_position,
+verdict, verdict_reason, first_trade_date. open_position is {entry_date,
+entry_price, target, to_tp_pct, unrealized_pct, mae_pct, days_held} or None.
 """
 import os
 import sys
@@ -20,28 +29,16 @@ warnings.filterwarnings("ignore", message="Some trades remain open")
 
 E = PortfolioSizedEngine  # production config constants live on the engine class
 
-# Legacy per-gate condition chips (TREND/BAND/RSI/DIST/VCEIL/VFLR) are being
-# replaced by a new scoring system -- on by default (unchanged behavior)
-# until that lands, then flip to false. `score` still gets computed either
-# way (sorting/the "fire" tag depend on it and have no replacement yet) --
-# this only controls whether the per-condition detail dict is exposed/shown.
+# Controls whether the legacy per-condition detail dict is exposed/shown; `score` is computed either way.
 SHOW_LEGACY_CONDITIONS = os.environ.get("SHOW_LEGACY_CONDITIONS", "true").strip().lower() in ("1", "true", "yes", "on")
 
-# yf.Ticker.get_earnings_dates() has no built-in timeout and can hang on a
-# given ticker -- since compute_all() bulk-processes hundreds of tickers via
-# ThreadPoolExecutor.map(), one hung call would block the ENTIRE batch
-# forever (map waits for every result). Bound it with an explicit timeout so
-# a single bad ticker degrades to "no earnings data" instead of freezing startup.
+# Bounds yf.Ticker.get_earnings_dates(), which has no built-in timeout and can hang the whole batch.
 _EARNINGS_FETCH_TIMEOUT = 8
 _earnings_executor = ThreadPoolExecutor(max_workers=8)
 
 
 def _cached_earnings_dates(ticker: str) -> pd.DatetimeIndex:
-    """Earnings dates are known well in advance and don't change intraday,
-    unlike price data -- a 24h TTL (enforced inside db.get_earnings_dates)
-    is safe here. Persisted as a per-ticker DB upsert, not an in-memory dict
-    with a whole-file pickle save -- no debouncing needed since each write
-    only touches this one ticker's rows, not a shared blob."""
+    """24h-cached earnings dates, persisted as a per-ticker DB upsert."""
     cached = db.get_earnings_dates(ticker)
     if cached is not None:
         return cached
@@ -55,23 +52,17 @@ def _cached_earnings_dates(ticker: str) -> pd.DatetimeIndex:
 
 
 def _with_earnings_flags(bars: pd.DataFrame, ticker: str) -> pd.DataFrame:
-    """Attach earnings-window flag columns to a copy of the shared raw OHLCV
-    cache. Earnings dates have their own 24h cache (they don't change
-    intraday), independent of the shared price-data cache in webapp/data.py."""
+    """Attach earnings-window flag columns to a copy of the shared raw OHLCV cache."""
     df = bars.copy()
     df["EarningsWithinAvoidWindow"], df["EarningsImminent"] = earnings_flags_from_dates(
         df.index, _cached_earnings_dates(ticker))
     return df
 
 
-def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict], dict]:
-    """Native-loop port of backtesting.py's Backtest.run() (see
-    webapp/vexh_engine.py for the exact fill-semantics mapping) -- avoids
-    the library's general-purpose order/broker machinery, which dominated
-    this function's cost. Validated byte-identical against the old
-    Backtest.run()-based version across the full cached universe.
-    Returns (open_trade, avg_trade_days, last_5_closed_trades, trade_stats)."""
-    closed_trades, open_pos = vexh_engine.run(df)
+def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[dict], dict, bool, str | None]:
+    """Native-loop port of backtesting.py's Backtest.run(), validated byte-identical against it.
+    Returns (open_position, avg_trade_days, last5_trades, trade_stats, signal_today, first_trade_date)."""
+    closed_trades, open_pos, signal_today = vexh_engine.run(df)
 
     avg_trade_days = (round(sum(t["duration_days"] for t in closed_trades) / len(closed_trades), 1)
                        if closed_trades else None)
@@ -80,43 +71,33 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
         for t in closed_trades[-5:]
     ]
     trade_stats = _summarize_trades_native(closed_trades)
+    first_trade_date = closed_trades[0]["entry_time"].strftime("%Y-%m") if closed_trades else None
 
-    open_trade = None
+    open_position = None
     if open_pos is not None:
         entry_time = df.index[open_pos["entry_bar"]]
         entry_price = open_pos["entry_price"]
         basis = df.Close.rolling(E.bb_len).mean()
         target = float(basis.loc[entry_time])
         last_close = float(df.Close.iloc[-1])
-        bars_held = int(df.index.get_loc(df.index[-1]) - open_pos["entry_bar"])
-
-        macro_ma = df.Close.rolling(E.sma_slow_len).mean()
-        atr = ATR(df.High, df.Low, df.Close, 14)
-        entry_atr = float(atr.loc[entry_time])
-        entry_dist_atr = ((entry_price - float(macro_ma.loc[entry_time])) / entry_atr
-                           if entry_atr > 0 else 0.0)
-        entry_tier = _dist_confidence_tier(entry_dist_atr)
-        earnings_soon = bool(df["EarningsImminent"].iloc[-1])
-
-        advice, advice_reason = _trade_advice(target, last_close, bars_held, entry_tier, earnings_soon)
-        open_trade = {
+        days_held = int(df.index.get_loc(df.index[-1]) - open_pos["entry_bar"])
+        open_position = {
             "entry_date": str(entry_time.date()),
             "entry_price": round(entry_price, 4),
             "target": round(target, 4),
-            "bars_held": bars_held,
+            "to_tp_pct": round((target / last_close - 1) * 100, 2),
+            "days_held": days_held,
             "unrealized_pct": round(100 * (last_close / entry_price - 1), 2),
             "mae_pct": open_pos["mae_pct"],
-            "entry_confidence": entry_tier,
-            "advice": advice,
-            "advice_reason": advice_reason,
         }
-    return open_trade, avg_trade_days, last5_trades, trade_stats
+    return open_position, avg_trade_days, last5_trades, trade_stats, signal_today, first_trade_date
 
 
 def _summarize_trades_native(closed_trades: list[dict]) -> dict:
     if not closed_trades:
         return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
-                "avg_mae_wins_pct": None, "pct_near_zero_mae": None}
+                "avg_mae_wins_pct": None, "pct_near_zero_mae": None,
+                "max_trade_pnl_fraction": 1.0}
     returns_pct = [t["return_pct"] * 100 for t in closed_trades]
     wins_idx = [i for i, r in enumerate(returns_pct) if r > 0]
     losses = [r for r in returns_pct if r <= 0]
@@ -125,51 +106,38 @@ def _summarize_trades_native(closed_trades: list[dict]) -> dict:
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
     wr = len(wins_idx) / len(returns_pct) * 100
 
-    # Same fields/semantics as strategy_vcp.py's _summarize(): average MAE
-    # across winning trades only, and the share of those wins that barely
-    # dipped before working -- now that vexh_engine.py tracks mae_pct per
-    # trade the same way strategy_vcp.py's run() does.
+    # Average adverse excursion across winning trades, and share of those wins that barely dipped.
     mae_wins = [closed_trades[i]["mae_pct"] for i in wins_idx]
     avg_mae_wins_pct = round(sum(mae_wins) / len(mae_wins), 2) if mae_wins else None
     pct_near_zero_mae = (round(sum(1 for m in mae_wins if m < 1.0) / len(mae_wins) * 100, 1)
                           if mae_wins else None)
 
+    # Share of total %-return contributed by the single best trade (VEXH has no dollar sizing).
+    total_return = sum(returns_pct)
+    max_trade_pnl_fraction = (max(returns_pct) / total_return
+                               if total_return > 0 else 1.0)
+
     return {"n_trades": len(returns_pct), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
-            "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae}
+            "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae,
+            "max_trade_pnl_fraction": round(float(max_trade_pnl_fraction), 4)}
 
 
-def _trade_advice(target: float, last_close: float, bars_held: int, entry_tier: str,
-                   earnings_soon: bool = False) -> tuple[str, str]:
-    """TAKE/SKIP call for someone considering entering *now* on an already-open
-    signal, based on the same time stop (time_stop_bars) the engine itself uses
-    to force-close stale trades, whether the mean-reversion target is already
-    spent, the confidence tier the trade actually entered at (see
-    _dist_confidence_tier -- LOW-tier entries historically win only ~41-56% of
-    the time vs ~73%+ for HIGH-tier, so a LOW-tier open trade is a skip by
-    default even with room left on the clock), and whether an earnings report
-    is imminent (validated: holding through earnings drops win rate 62%->51%
-    and ~triples the big-loser rate -- the live engine would preemptively
-    close this position soon anyway, see PortfolioSizedEngine block 1b)."""
-    bars_left = E.time_stop_bars - bars_held
-    if last_close >= target:
-        return "SKIP", "already at/above target -- upside spent"
-    if earnings_soon:
-        return "SKIP", "earnings report imminent -- engine will preemptively close to avoid gap risk"
-    if bars_left <= 3:
-        return "SKIP", f"time stop in {bars_left}d -- thesis running out of room"
-    if entry_tier == "LOW":
-        return "SKIP", f"entered at LOW confidence (<1.5 ATR from SMA) -- historically ~41-56% win rate"
-    return "TAKE", f"{bars_left}d left before time stop, entered at {entry_tier} confidence"
+def _verdict(signal_today: bool, in_position: bool, n_trades: int, win_rate: float,
+             pf: float) -> tuple[str, str]:
+    """TAKE/SKIP/NO SIGNAL/IN TRADE, same logic as strategy_vcp.py's _verdict() (no TP HIT state)."""
+    if in_position:
+        return "IN TRADE", "a position from a prior signal is still open"
+    if not signal_today:
+        return "NO SIGNAL", "no entry signal on the latest close"
+    if n_trades < 5:
+        return "SKIP", f"only {n_trades} historical trades on this ticker -- not enough data to trust the signal"
+    if pf >= 1.5 and win_rate >= 40:
+        return "TAKE", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- real edge on this ticker"
+    return "SKIP", f"{n_trades} trades historically, {win_rate:.1f}% WR, PF {pf:.2f} -- no real edge on this ticker"
 
 
 def _dist_confidence_tier(dist_atr: float) -> str:
-    """LOW/MEDIUM/HIGH confidence tier from distance-above-SMA150 (in ATRs) at
-    entry. Backed by 1,624 closed trades across 336 tickers (trades_features.csv
-    analysis, validated on a 2022-24/2024-26 chronological split): win rate rises
-    from ~41% in the bottom quintile (<1.1 ATR) to ~73% in the top quintile
-    (>3.5 ATR). RSI-at-entry and ATR%-at-entry were tested too and rejected --
-    RSI showed only a weak effect and ATR% raises variance on both sides
-    (bigger winners AND bigger losers) rather than being a quality signal."""
+    """LOW/MEDIUM/HIGH confidence tier from distance-above-SMA150 in ATRs, validated on 1,624 closed trades."""
     if dist_atr >= 3.0:
         return "HIGH"
     if dist_atr >= 1.5:
@@ -177,11 +145,7 @@ def _dist_confidence_tier(dist_atr: float) -> str:
     return "LOW"
 
 
-# The sma_dist gate contributes graduated credit to the score instead of a
-# flat 0/1, reflecting the tier's own win-rate research above (LOW ~41-56%,
-# HIGH ~73%+) directly in the number shown -- a HIGH-tier entry scores a full
-# point, MEDIUM half a point, LOW none, so 6/6 now requires HIGH-tier
-# distance, not just clearing the (much lower) 0.5-ATR pass/fail threshold.
+# Graduated credit for the sma_dist gate instead of a flat 0/1.
 _DIST_TIER_CREDIT = {"HIGH": 1.0, "MEDIUM": 0.5, "LOW": 0.0}
 
 
@@ -216,10 +180,7 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
             "value": round(rsi_val, 1),
         },
         "sma_dist": {
-            # E.min_sma_dist_atr == 0 is a supported "gate off" mode in p.py/Pine
-            # (see PortfolioSizedEngine.min_sma_dist_atr's "0 = off" comment) --
-            # must short-circuit the same way here or the score would disagree
-            # with what the live engine actually does if that constant is ever 0.
+            # E.min_sma_dist_atr == 0 is p.py/Pine's "gate off" mode.
             "pass": E.min_sma_dist_atr == 0 or price >= sma150 + E.min_sma_dist_atr * atr_val,
             "value": f"{(price - sma150) / atr_val:.1f} ATR above SMA" if atr_val > 0 else "n/a",
             "tier": _dist_confidence_tier((price - sma150) / atr_val) if atr_val > 0 else "LOW",
@@ -234,10 +195,30 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
         },
     }
 
-    open_trade, avg_trade_days, last5_trades, trade_stats = _trade_history(df)
+    open_position, avg_trade_days, last5_trades, trade_stats, signal_today, first_trade_date = _trade_history(df)
 
     non_dist_score = sum(1 for k, v in conditions.items() if k != "sma_dist" and v["pass"])
     score = non_dist_score + _DIST_TIER_CREDIT[conditions["sma_dist"]["tier"]]
+
+    verdict, verdict_reason = _verdict(signal_today, open_position is not None,
+                                        trade_stats["n_trades"], trade_stats["win_rate"],
+                                        trade_stats["profit_factor"])
+
+    vexh_stats = {
+        "n_trades": trade_stats["n_trades"],
+        "win_rate": trade_stats["win_rate"],
+        "profit_factor": trade_stats["profit_factor"],
+        "avg_trade_days": avg_trade_days,
+        "last5_trades": last5_trades,
+        "avg_mae_wins_pct": trade_stats["avg_mae_wins_pct"],
+        "pct_near_zero_mae": trade_stats["pct_near_zero_mae"],
+        "max_trade_pnl_fraction": trade_stats["max_trade_pnl_fraction"],
+        "signal_today": signal_today,
+        "open_position": open_position,
+        "verdict": verdict,
+        "verdict_reason": verdict_reason,
+        "first_trade_date": first_trade_date,
+    }
 
     return {
         "ticker": ticker,
@@ -245,22 +226,6 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
         "date": str(df.index[-1].date()),
         "score": score,
         "conditions": conditions if SHOW_LEGACY_CONDITIONS else None,
-        "to_tp_pct": round(100 * (basis / price - 1), 2),
-        # Not one of the 6 score gates (keeps score comparable to the pre-existing
-        # UI/semantics) but a real, validated block on live entries in p.py's
-        # engine -- a 6/6 score with earnings_risk=True would NOT actually fire
-        # a buy in the production backtest.
         "earnings_risk": bool(df["EarningsWithinAvoidWindow"].iloc[-1]),
-        "open_trade": open_trade,
-        "avg_trade_days": avg_trade_days,
-        "last5_trades": last5_trades,
-        # PF/WR from closed trades -- lets the dashboard color Exhaustion's
-        # BASE chip on the same good/fair/bad scale as strategies A/D/VCP.
-        "n_trades": trade_stats["n_trades"],
-        "win_rate": trade_stats["win_rate"],
-        "profit_factor": trade_stats["profit_factor"],
-        # Same fields VCP/VCPO expose via _summarize() -- see
-        # _summarize_trades_native's docstring for why VEXH now has them too.
-        "avg_mae_wins_pct": trade_stats["avg_mae_wins_pct"],
-        "pct_near_zero_mae": trade_stats["pct_near_zero_mae"],
+        "vexh": vexh_stats,
     }

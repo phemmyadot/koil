@@ -355,13 +355,6 @@
   </p>
 </div>
 <script>
-// Feature flag: Training/Holdout sub-filters hidden from the Advanced Filter
-// panel. Mirrors SHOW_TRAINING_HOLDOUT in webapp/optimizer.py -- keep both in
-// sync by hand (this one can't read the backend's env var); with the backend
-// flag off, optimizer.get_optimized() always returns None anyway, so these
-// checkboxes would just sit inert if left visible.
-const SHOW_TRAINING_HOLDOUT = false;
-
 // Feature flag: legacy per-gate condition chips (TREND/BAND/RSI/DIST/VCEIL/
 // VFLR), being replaced by a new scoring system. Mirrors SHOW_LEGACY_CONDITIONS
 // in webapp/scoring.py -- keep both in sync by hand. On by default (unchanged
@@ -877,23 +870,6 @@ function showPlCalculator() {
   renderPlCalcForm();
 }
 
-// Color coding: blue = an active/open trade right now, otherwise green/yellow/red
-// by how good the historical result actually is (independent of live status).
-// qualityLabel is the single source of truth for the good/fair/bad thresholds --
-// both the chip color (via QUALITY_CSS) and the strategy score filter read it.
-// Same PF/WR breakpoints as pfColorClass/wrColorClass (scoring system's
-// dimension-1 tiers) so this modal's chip color agrees with the card badges
-// instead of using its own separate scale. See color-code.md.
-function qualityLabel(pf, wr) {
-  if (pf >= 3.5 && wr >= 75) return "good";
-  if (pf >= 2.5 && wr >= 70) return "fair";
-  if (pf >= 2.0 && wr >= 65) return "borderline";
-  return "bad";
-}
-const QUALITY_CSS = { good: "ok", fair: "mid", borderline: "neutral", bad: "no" };
-
-const QUALITY_RANK = { bad: 0, borderline: 1, fair: 2, good: 3 };
-
 // ---------------- Advance Filter ----------------
 // Flat: one Strategy radio (which strategy's stats to read) + Win Rate AND
 // Profit minimum-threshold sliders. Base/Training/Holdout sub-views are
@@ -935,13 +911,10 @@ function buildAdvFilterPanel() {
     <div class="advfilterfoot"><button id="advFilterClearBtn" class="clearfilters" type="button">Clear</button></div>`;
 }
 
-// Baseline WR/PF for one strategy -- null if that strategy has no data for
-// this ticker, which makes the filter fail to match (see matchesAdvFilter).
+// WR/PF for one strategy -- null if that strategy has no data for this ticker (see matchesAdvFilter).
 function advStrategyStats(r, strat) {
-  if (strat === "vexh") return { wr: r.win_rate, pf: r.profit_factor };
   const s = r[ADV_STRAT_KEY[strat]];
-  if (!s || !s.baseline) return null;
-  return { wr: s.baseline.win_rate, pf: s.baseline.profit_factor };
+  return s ? { wr: s.win_rate, pf: s.profit_factor } : null;
 }
 function readAdvFilter() {
   const stratEl = document.querySelector('#advFilterPanel input[name="advStrategy"]:checked');
@@ -977,10 +950,8 @@ function buildTradeOnPanel() {
     + `<div class="advfilterfoot"><button id="tradeOnClearBtn" class="clearfilters" type="button">Clear</button></div>`;
 }
 function isStrategyActive(r, key) {
-  if (key === "vexh") return !!r.open_trade;
   const s = r[ADV_STRAT_KEY[key]];
-  if (!s || !s.baseline) return false;
-  return strategyCandidates(s).some(c => c.active);
+  return !!(s && s.open_position);
 }
 function readTradeOnStrats() {
   return [...document.querySelectorAll("#tradeOnPanel input[type=checkbox]:checked")].map(cb => cb.dataset.strat);
@@ -1060,15 +1031,9 @@ function matchesPrebreakFilter(r, sel) {
   return true;
 }
 
-// n_trades for one strategy view -- VEXH's is a top-level field; A/D/VCP/VCPO
-// use whichever candidate strategyChips would surface (BASE, since
-// training/holdout is flagged off and strategyCandidates() only ever
-// returns BASE), same "best candidate" concept used for O/T/WR/PF badges.
 function strategyNTrades(r, key) {
-  if (key === "vexh") return r.n_trades;
   const s = r[ADV_STRAT_KEY[key]];
-  if (!s || !s.baseline) return null;
-  return pickBestCandidate(strategyCandidates(s)).n_trades;
+  return s ? s.n_trades : null;
 }
 // Min Trades only makes sense scoped to whichever strategy you're actually
 // looking at via Trade On / Advance Filter -- otherwise it's dominated by
@@ -1133,242 +1098,61 @@ function statBadges(active, days, nTrades, wr, pf, modalId) {
   ).join("") + `</span>`;
 }
 
-function optimizedBeatsBaseline(o, baseline) {
-  if (!o || !baseline) return false;
-  // Robust = worst-of-both-splits, same discipline used to pick the config in
-  // the first place -- only worth showing if it actually beats baseline.
-  const robustPf = Math.min(o.train_stats.profit_factor, o.holdout_stats.profit_factor);
-  const robustWr = Math.min(o.train_stats.win_rate, o.holdout_stats.win_rate);
-  return robustPf > baseline.profit_factor || robustWr > baseline.win_rate;
-}
-
-// Exhaustion's row: 4 O/T/WR/PF badges (see statBadges) -- entry date/price,
-// target, unrealized %, bars held, advice reasoning, and the strategy's own To TP %/
-// Avg Days/Last 5 TP % stats all move to the detail modal (click the chip).
-function exhaustionChip(r) {
-  const t = r.open_trade;
+// One shared modal builder for VEXH/VCP/VCPO -- all three payloads have the exact same shape.
+function strategyModal(name, s) {
   const rows = [
-    modalRow("Trades", r.n_trades),
-    modalRow("Profit factor", r.profit_factor),
-    modalRow("Win rate", r.win_rate + "%"),
+    modalRow("Trades", s.n_trades),
+    modalRow("Profit factor", s.profit_factor),
+    modalRow("Win rate", s.win_rate + "%"),
   ];
-  if (t) {
-    const sign = t.unrealized_pct >= 0 ? "+" : "";
-    rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("Entry", `${t.entry_date} @ ${t.entry_price}`));
-    rows.push(modalRow("Target", t.target));
-    rows.push(modalRow("Unrealized", `${sign}${t.unrealized_pct}%`));
-    rows.push(modalRow("Bars held", t.bars_held));
-    if (t.entry_confidence) rows.push(modalRow("Entry confidence", t.entry_confidence));
-  }
-  // Same fields/placement as strategy_vcp.py/vcpo.py's singleCandidateModal:
-  // right below Entry (no divider) with a limit-price hint when a trade is
-  // open, otherwise its own separator -- vexh_engine.py now tracks mae_pct
-  // the same way strategy_vcp.py's run() does.
-  if (r.avg_mae_wins_pct != null) {
-    const limitHint = t
-      ? ` [&rarr; limit at $${(t.entry_price * (1 - r.avg_mae_wins_pct / 100)).toFixed(2)}]`
-      : "";
-    if (!t) rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("Avg MAE (wins)", `-${r.avg_mae_wins_pct}%${limitHint}`));
-    if (r.pct_near_zero_mae != null) {
-      rows.push(modalRow("Wins w/ MAE&lt;1%", r.pct_near_zero_mae + "%"));
-    }
-  }
-  rows.push('<div class="modalsep"></div>');
-  rows.push(modalRow("To TP %", `${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%`));
-  rows.push(modalRow("Avg Days", r.avg_trade_days ?? "&mdash;"));
-  rows.push('<div class="modalsep"></div>');
-  rows.push(modalRow("Last 5 TP %", last5(r.last5_trades)));
-  if (t) {
-    rows.push('<div class="modalsep"></div>');
-    rows.push(`<div class="modalnote"><b>${t.advice}</b>: ${t.advice_reason}</div>`);
-  }
-  const id = registerModal("Exhaustion", rows);
-  return statBadges(!!t, t ? t.bars_held : null, r.n_trades, r.win_rate, r.profit_factor, id);
-}
-
-// Rows shared by the Training and Holdout modals -- same shape, different
-// stats/label passed in.
-// Build one candidate view per available source (BASE always; TRAIN/HOLD only
-// when the optimizer found a config that actually beats baseline).
-function strategyCandidates(s) {
-  const b = s.baseline;
-  const candidates = [{
-    source: "BASE", pf: b.profit_factor, wr: b.win_rate, n_trades: b.n_trades,
-    active: b.in_position, openPosition: b.open_position, config: s.baseline_config,
-    firstTradeDate: b.first_trade_date, verdict: b.verdict, verdictReason: b.verdict_reason,
-    avgTradeDays: b.avg_trade_days, last5Trades: b.last5_trades,
-    avgMaeWinsPct: b.avg_mae_wins_pct, pctNearZeroMae: b.pct_near_zero_mae,
-  }];
-  if (optimizedBeatsBaseline(s.optimized, b)) {
-    const o = s.optimized;
-    // TRAIN/HOLD share one live backtest run of the optimized config, so they
-    // share the same open-position state (see strategy_*.py's optimize()).
-    const oActive = !!o.open_position;
-    candidates.push({ source: "TRAIN", pf: o.train_stats.profit_factor, wr: o.train_stats.win_rate,
-      n_trades: o.train_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config,
-      avgTradeDays: o.train_stats.avg_trade_days, last5Trades: o.train_stats.last5_trades,
-      firstTradeDate: o.train_stats.first_trade_date });
-    candidates.push({ source: "HOLD", pf: o.holdout_stats.profit_factor, wr: o.holdout_stats.win_rate,
-      n_trades: o.holdout_stats.n_trades, active: oActive, openPosition: o.open_position, config: o.config,
-      avgTradeDays: o.holdout_stats.avg_trade_days, last5Trades: o.holdout_stats.last5_trades,
-      firstTradeDate: o.holdout_stats.first_trade_date });
-  }
-  return candidates;
-}
-
-// Pick the single chip to surface: prefer an active (in-trade) candidate --
-// best quality among actives if more than one -- otherwise the best-quality
-// candidate among all available views.
-function pickBestCandidate(candidates) {
-  const rank = c => QUALITY_RANK[qualityLabel(c.pf, c.wr)];
-  const actives = candidates.filter(c => c.active);
-  const pool = actives.length ? actives : candidates;
-  return pool.slice().sort((a, b) => rank(b) - rank(a) || b.pf - a.pf)[0];
-}
-
-// Longest days-held across ALL open positions on this ticker -- Exhaustion's
-// own open_trade plus any active BASE/TRAIN/HOLD candidate on strategy VCP/VCPO
-// (a ticker can be "in trade" on more than one strategy at once). null if
-// nothing is open anywhere, so it can sort after tickers that do have one.
-function maxDaysInTrade(r) {
-  let max = r.open_trade ? r.open_trade.bars_held : null;
-  for (const s of [r.strategy_vcp, r.strategy_vcpo]) {
-    if (!s || !s.baseline) continue;
-    for (const c of strategyCandidates(s)) {
-      if (c.active && c.openPosition && c.openPosition.days_held != null) {
-        max = max === null ? c.openPosition.days_held : Math.max(max, c.openPosition.days_held);
-      }
-    }
-  }
-  return max;
-}
-
-// One combined modal per strategy, laid out in columns (BASE / TRAIN / HOLD
-// side by side) so all views are comparable at a glance instead of needing a
-// separate modal per chip.
-function strategyColumnsModal(name, candidates) {
-  const cols = candidates.map(c => {
-    const cls = c.active ? "active" : QUALITY_CSS[qualityLabel(c.pf, c.wr)];
-    // Same field set/order/grouping as the Exhaustion modal: Trades/Profit
-    // factor/Win rate, then [divider] Entry(date)/Target/Unrealized/Bars held
-    // (only if open), then [divider] To TP %/Avg Days, then [divider] Last 5
-    // TP %, then [divider] verdict note. "Entry confidence" stays
-    // Exhaustion-only (vcp.pine/vcpo.pine have no graduated entry signal to
-    // tier -- entry is a plain boolean breakout_triggered) -- but "To TP %"
-    // now has a real Pine-native equivalent here: distance to the fixed
-    // tp_target level (op.target), not faked.
-    const rows = [];
-    if (c.config) rows.push(`<div class="modalcolrow"><span class="k">Cfg</span><span>${Object.values(c.config).join(", ")}</span></div>`);
-    rows.push(`<div class="modalcolrow"><span class="k">Trades</span><span>${c.n_trades}</span></div>`);
-    rows.push(`<div class="modalcolrow"><span class="k">Profit factor</span><span>${c.pf}</span></div>`);
-    rows.push(`<div class="modalcolrow"><span class="k">Win rate</span><span>${c.wr}%</span></div>`);
-    if (c.firstTradeDate) rows.push(`<div class="modalcolrow"><span class="k">Since</span><span>${c.firstTradeDate}</span></div>`);
-
-    if (c.openPosition) {
-      const op = c.openPosition;
-      const uCls = op.unrealized_pct >= 0 ? "pos" : "neg";
-      const uSign = op.unrealized_pct >= 0 ? "+" : "";
-      rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${op.entry_date ? op.entry_date + " @ " : ""}${op.entry_price}</span></div>`);
-      rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${op.target}</span></div>`);
-      if (op.unrealized_pct != null) rows.push(`<div class="modalcolrow"><span class="k">Unrealized</span><span class="${uCls}">${uSign}${op.unrealized_pct}%</span></div>`);
-      rows.push(`<div class="modalcolrow"><span class="k">Bars held</span><span>${op.days_held}</span></div>`);
-    }
-
-    if (c.openPosition && c.openPosition.to_tp_pct != null) {
-      const ttSign = c.openPosition.to_tp_pct > 0 ? "+" : "";
-      rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">To TP %</span><span>${ttSign}${c.openPosition.to_tp_pct.toFixed(1)}%</span></div>`);
-    }
-
-    if (c.avgTradeDays != null) {
-      rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">Avg Days</span><span>${c.avgTradeDays}</span></div>`);
-    }
-
-    if (c.last5Trades && c.last5Trades.length) {
-      rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">Last 5 TP %</span><span>${last5(c.last5Trades)}</span></div>`);
-    }
-
-    if (c.verdict) {
-      rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
-    }
-    return `<div class="modalcol"><div class="modalcolhead chip ${cls}">${c.source}</div>${rows.join("")}</div>`;
-  }).join("");
-  return registerModal(name, [`<div class="modalcolgrid">${cols}</div>`]);
-}
-
-// Flat single-column modal, same row structure/order as exhaustionChip's
-// "Exhaustion" modal -- used whenever there's only one candidate (always the
-// case for A/D/VCP/VCPO now that training/holdout is flagged off, since
-// strategyCandidates() then only ever returns BASE). No Cfg/Since rows
-// (VEXH's modal doesn't have them either). "Entry confidence" stays
-// Exhaustion-only (vcp.pine/vcpo.pine have no graduated entry signal to
-// tier); "To TP %" now has a real Pine-native equivalent (distance to the
-// fixed tp_target level) so it's shown here too.
-function singleCandidateModal(name, c) {
-  const rows = [
-    modalRow("Trades", c.n_trades),
-    modalRow("Profit factor", c.pf),
-    modalRow("Win rate", c.wr + "%"),
-  ];
-  if (c.openPosition) {
-    const op = c.openPosition;
+  if (s.first_trade_date) rows.push(modalRow("Since", s.first_trade_date));
+  const op = s.open_position;
+  if (op) {
     const sign = op.unrealized_pct >= 0 ? "+" : "";
     rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("Entry", op.entry_date ? `${op.entry_date} @ ${op.entry_price}` : op.entry_price));
+    rows.push(modalRow("Entry", `${op.entry_date} @ ${op.entry_price}`));
     rows.push(modalRow("Target", op.target));
-    if (op.unrealized_pct != null) rows.push(modalRow("Unrealized", `${sign}${op.unrealized_pct}%`));
+    rows.push(modalRow("Unrealized", `${sign}${op.unrealized_pct}%`));
     rows.push(modalRow("Bars held", op.days_held));
-  }
-  if (c.openPosition && c.openPosition.to_tp_pct != null) {
-    const ttSign = c.openPosition.to_tp_pct > 0 ? "+" : "";
+    const ttSign = op.to_tp_pct > 0 ? "+" : "";
     rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("To TP %", `${ttSign}${c.openPosition.to_tp_pct.toFixed(1)}%`));
+    rows.push(modalRow("To TP %", `${ttSign}${op.to_tp_pct.toFixed(1)}%`));
   }
-  if (c.avgMaeWinsPct != null) {
-    // The single number that actually drives a limit-order decision: how
-    // far winning trades typically dip below entry before working out.
-    // With an open position, converts straight to a price and sits right
-    // below Entry (no divider) so the two are visually adjacent; without an
-    // open position there's no entry price to anchor to, so it gets its own
-    // separator instead of dangling off the top Trades/PF/Win rate block.
-    const limitHint = c.openPosition
-      ? ` [&rarr; limit at $${(c.openPosition.entry_price * (1 - c.avgMaeWinsPct / 100)).toFixed(2)}]`
-      : "";
-    if (!c.openPosition) rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("Avg MAE (wins)", `-${c.avgMaeWinsPct}%${limitHint}`));
-    if (c.pctNearZeroMae != null) {
-      rows.push(modalRow("Wins w/ MAE&lt;1%", c.pctNearZeroMae + "%"));
-    }
+  if (s.avg_mae_wins_pct != null) {
+    // Sits right below Entry (no divider) when a position is open, with a limit-price hint; own separator otherwise.
+    const limitHint = op ? ` [&rarr; limit at $${(op.entry_price * (1 - s.avg_mae_wins_pct / 100)).toFixed(2)}]` : "";
+    if (!op) rows.push('<div class="modalsep"></div>');
+    rows.push(modalRow("Avg MAE (wins)", `-${s.avg_mae_wins_pct}%${limitHint}`));
+    if (s.pct_near_zero_mae != null) rows.push(modalRow("Wins w/ MAE&lt;1%", s.pct_near_zero_mae + "%"));
   }
   rows.push('<div class="modalsep"></div>');
-  rows.push(modalRow("Avg Days", c.avgTradeDays ?? "&mdash;"));
+  rows.push(modalRow("Avg Days", s.avg_trade_days ?? "&mdash;"));
   rows.push('<div class="modalsep"></div>');
-  rows.push(modalRow("Last 5 TP %", last5(c.last5Trades)));
-  if (c.verdict) {
+  rows.push(modalRow("Last 5 TP %", last5(s.last5_trades)));
+  if (s.verdict) {
     rows.push('<div class="modalsep"></div>');
-    rows.push(`<div class="modalnote"><b>${c.verdict}</b>: ${c.verdictReason || ""}</div>`);
+    rows.push(`<div class="modalnote"><b>${s.verdict}</b>: ${s.verdict_reason || ""}</div>`);
   }
   return registerModal(name, rows);
 }
 
-// A/D/VCP row: whichever of BASE/TRAIN/HOLD is active (or best-quality if
-// none are) drives 4 separate O/T/WR/PF badges (see statBadges). Which
-// source it actually is (BASE/TRAIN/HOLD) is only shown in the modal.
+// 4 O/T/WR/PF badges (see statBadges) for one strategy's payload -- same shape for VEXH/VCP/VCPO.
 function strategyChips(s, name) {
-  if (!s || !s.baseline) return '<span class="chip neutral">&mdash;</span>';
-  const candidates = strategyCandidates(s);
-  const best = pickBestCandidate(candidates);
-  const id = candidates.length === 1
-    ? singleCandidateModal(name, candidates[0])
-    : strategyColumnsModal(name, candidates);
-  const days = best.active && best.openPosition ? best.openPosition.days_held : null;
-  return statBadges(best.active, days, best.n_trades, best.wr, best.pf, id);
+  if (!s) return '<span class="chip neutral">&mdash;</span>';
+  const id = strategyModal(name, s);
+  const days = s.open_position ? s.open_position.days_held : null;
+  return statBadges(!!s.open_position, days, s.n_trades, s.win_rate, s.profit_factor, id);
+}
+
+// Longest days-held across all open positions on this ticker (VEXH/VCP/VCPO); null if nothing is open.
+function maxDaysInTrade(r) {
+  let max = null;
+  for (const s of [r.vexh, r.strategy_vcp, r.strategy_vcpo]) {
+    if (s && s.open_position) {
+      max = max === null ? s.open_position.days_held : Math.max(max, s.open_position.days_held);
+    }
+  }
+  return max;
 }
 const PAGE_SIZE = 9;
 let lastData = null;
@@ -1511,7 +1295,7 @@ function render(data) {
       <div class="scoresections">
         <div class="scorebox"><div class="strategygrid2">
           <div class="strategycell"><span class="strategyname">VEXH</span>
-            <div class="strategybody">${exhaustionChip(r)}</div></div>
+            <div class="strategybody">${strategyChips(r.vexh, "Exhaustion")}</div></div>
           <div class="strategycell"><span class="strategyname">VCP</span>
             <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
           <div class="strategycell"><span class="strategyname">VCPO</span>
@@ -1530,14 +1314,8 @@ function render(data) {
     html = `<p style="color:var(--muted)">No tickers match this filter</p>`;
   document.getElementById("rows").innerHTML = html;
   updateSelectionCount();
-  // A ticker counts as "open" if EITHER VEXH's own open_trade is set OR it
-  // has an active (in-position) BASE candidate on VCP/VCPO -- counting only
-  // r.open_trade (VEXH) undercounted real open positions on VCP/VCPO
-  // entirely, same class of gap maxDaysInTrade() below already accounts for.
-  const open = allRows.filter(r => !!r.open_trade
-    || (r.strategy_vcp && r.strategy_vcp.baseline && r.strategy_vcp.baseline.in_position)
-    || (r.strategy_vcpo && r.strategy_vcpo.baseline && r.strategy_vcpo.baseline.in_position)
-  ).length;
+  // A ticker counts as "open" if any of VEXH/VCP/VCPO has an open position.
+  const open = allRows.filter(r => maxDaysInTrade(r) != null).length;
   const advActive = adv.wrMin > WR_STEPS[0] || adv.pfMin > PF_STEPS[0];
   const prebreakActive = prebreak.phaseMin !== PHASE_STEPS[PHASE_DEFAULT_INDEX][1]
     || prebreak.coilMin > COIL_STEPS[0] || Object.values(prebreak.switches).some(Boolean);

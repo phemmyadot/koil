@@ -6,21 +6,8 @@ required before entry -- this module only computes the former.
 """
 
 
-def _strategy_stats(r: dict, strategy: str) -> dict:
-    """Every strategy's stats (n_trades, win_rate, profit_factor,
-    open_position, ...) as one flat dict, regardless of where they actually
-    live on the payload. VEXH's evaluate() builds the payload itself, so its
-    stats already sit at the top level; VCP/VCPO are bolted on afterwards as
-    payload[strategy] = {"baseline": {...}, "baseline_config": {...}}, one
-    level deeper. This is the only place that asymmetry is dealt with --
-    everything downstream just reads from the flat dict this returns."""
-    if strategy == "vexh":
-        return r
-    return r.get(strategy, {}).get("baseline") or {}
-
-
 def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:
-    s = _strategy_stats(r, strategy)
+    s = r.get(strategy) or {}
     prebreak = r.get("prebreak") or {}
 
     # 1. Strategy Quality (0-3)
@@ -45,11 +32,7 @@ def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:
     compression_pts = 1 if (prebreak.get("bb_squeeze", False)
                              and prebreak.get("vol_dry_up", False)) else 0
 
-    # 5. Signal Timing / MAE (0-1). VEXH has neither open_position (it's
-    # open_trade there, different shape) nor signal_today -- both .get()
-    # calls fall through to their defaults, so this dimension scores 0 for
-    # every VEXH ticker until VEXH gets equivalent fields. Fails closed
-    # rather than silently favourable, but is a known gap, not full parity.
+    # 5. Signal Timing / MAE (0-1)
     open_pos = s.get("open_position")
     avg_mae = s.get("avg_mae_wins_pct")
     if open_pos and avg_mae is not None:

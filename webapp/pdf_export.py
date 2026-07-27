@@ -23,40 +23,13 @@ _styles = {
 }
 
 
-def _strategy_stats(payload: dict, strategy: str) -> dict | None:
-    """Same VEXH-flat-vs-VCP/VCPO-nested asymmetry handled in score.py's
-    _strategy_stats -- VEXH's evaluate() puts its stats at the payload's top
-    level, VCP/VCPO sit one level deeper under payload[strategy]["baseline"]."""
-    if strategy == "vexh":
-        return payload
-    strat = payload.get(strategy)
-    if not strat:
-        return None
-    return strat.get("baseline")
-
-
-def _open_position_rows(stats: dict, strategy: str) -> list[str]:
-    """Open-position fields under whichever key/shape this strategy uses --
-    VEXH: open_trade (entry_date/entry_price/target/unrealized_pct/bars_held).
-    VCP/VCPO: open_position (entry_price/target/unrealized_pct/days_held),
-    no entry_date."""
-    if strategy == "vexh":
-        t = stats.get("open_trade")
-        if not t:
-            return []
-        sign = "+" if t["unrealized_pct"] >= 0 else ""
-        return [
-            f"Entry {t['entry_date']} @ {t['entry_price']}",
-            f"Target {t['target']}",
-            f"Unrealized {sign}{t['unrealized_pct']}%",
-            f"Bars held {t['bars_held']}",
-        ]
+def _open_position_rows(stats: dict) -> list[str]:
     t = stats.get("open_position")
     if not t:
         return []
     sign = "+" if t["unrealized_pct"] >= 0 else ""
     return [
-        f"Entry @ {t['entry_price']}",
+        f"Entry {t['entry_date']} @ {t['entry_price']}",
         f"Target {t['target']}",
         f"Unrealized {sign}{t['unrealized_pct']}%",
         f"Bars held {t['days_held']}",
@@ -74,10 +47,8 @@ def _last5_str(last5_trades: list[dict]) -> str:
 
 
 def _strategy_block(payload: dict, strategy: str) -> list:
-    """One strategy's flowables: label, score, Trades/PF/WR, open-position
-    fields (if any), To TP %/Avg Days (VEXH only -- no VCP/VCPO equivalent,
-    same field asymmetry as the dashboard modal), Last 5 TP %."""
-    stats = _strategy_stats(payload, strategy)
+    """One strategy's flowables: label, score, Trades/PF/WR, open-position fields (if any), Last 5 TP %."""
+    stats = payload.get(strategy)
     label = STRATEGY_LABELS[strategy]
     flow = [Paragraph(label, _styles["h2"])]
     if not stats:
@@ -92,12 +63,7 @@ def _strategy_block(payload: dict, strategy: str) -> list:
         f"Profit factor {stats.get('profit_factor', 0)}",
         f"Win rate {stats.get('win_rate', 0)}%",
     ]
-    lines.extend(_open_position_rows(stats, strategy))
-    if strategy == "vexh":
-        to_tp = stats.get("to_tp_pct")
-        if to_tp is not None:
-            sign = "+" if to_tp >= 0 else ""
-            lines.append(f"To TP % {sign}{to_tp:.1f}%")
+    lines.extend(_open_position_rows(stats))
     avg_days = stats.get("avg_trade_days")
     lines.append(f"Avg Days {avg_days if avg_days is not None else '&mdash;'}")
     lines.append(f"Last 5 TP % {_last5_str(stats.get('last5_trades', []))}")

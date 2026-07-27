@@ -32,13 +32,15 @@ import pandas as pd
 from p import SMA, RSI, ATR, PortfolioSizedEngine as E
 
 
-def run(df: pd.DataFrame) -> tuple[list[dict], dict | None]:
-    """Returns (closed_trades, open_trade_dict_or_None).
+def run(df: pd.DataFrame) -> tuple[list[dict], dict | None, bool]:
+    """Returns (closed_trades, open_trade_dict_or_None, signal_today).
     closed_trades: [{entry_time, entry_price, exit_time, exit_price,
     return_pct, duration_days, mae_pct}], oldest first. mae_pct mirrors
     strategy_vcp.py's own field: (entry_price - low_since) / entry_price *
     100, tracked from entry_bar through the bar the trade closes.
     open_trade_dict: {entry_bar, entry_price, mae_pct} or None.
+    signal_today: same semantics as strategy_vcp.py's signal_today -- entry
+    gate passes on the last bar AND no position is currently open.
     """
     c, h, l, o = df.Close, df.High, df.Low, df.Open
     macro_ma = SMA(c, E.sma_slow_len)
@@ -158,7 +160,12 @@ def run(df: pd.DataFrame) -> tuple[list[dict], dict | None]:
             "mae_pct": round((entry_price - position["low_since"]) / entry_price * 100, 2),
         }
 
-    return closed_trades, open_trade
+    # Same semantics as strategy_vcp.py's signal_today: the entry gate
+    # passes on the very last bar AND no position is currently open (an
+    # open position blocks a new entry regardless of what the gate says).
+    signal_today = bool(entry_signal_arr[-1]) and position is None
+
+    return closed_trades, open_trade, signal_today
 
 
 def _close(closed_trades, df, position, exit_bar, exit_price, commission_rate):
