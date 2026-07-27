@@ -105,6 +105,7 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
             "target": round(target, 4),
             "bars_held": bars_held,
             "unrealized_pct": round(100 * (last_close / entry_price - 1), 2),
+            "mae_pct": open_pos["mae_pct"],
             "entry_confidence": entry_tier,
             "advice": advice,
             "advice_reason": advice_reason,
@@ -114,15 +115,27 @@ def _trade_history(df: pd.DataFrame) -> tuple[dict | None, float | None, list[di
 
 def _summarize_trades_native(closed_trades: list[dict]) -> dict:
     if not closed_trades:
-        return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0}
+        return {"n_trades": 0, "win_rate": 0.0, "profit_factor": 0.0,
+                "avg_mae_wins_pct": None, "pct_near_zero_mae": None}
     returns_pct = [t["return_pct"] * 100 for t in closed_trades]
-    wins = [r for r in returns_pct if r > 0]
+    wins_idx = [i for i, r in enumerate(returns_pct) if r > 0]
     losses = [r for r in returns_pct if r <= 0]
-    gross_win = sum(wins)
+    gross_win = sum(returns_pct[i] for i in wins_idx)
     gross_loss = -sum(losses)
     pf = gross_win / gross_loss if gross_loss > 0 else (99.99 if gross_win > 0 else 0.0)
-    wr = len(wins) / len(returns_pct) * 100
-    return {"n_trades": len(returns_pct), "win_rate": round(wr, 1), "profit_factor": round(pf, 2)}
+    wr = len(wins_idx) / len(returns_pct) * 100
+
+    # Same fields/semantics as strategy_vcp.py's _summarize(): average MAE
+    # across winning trades only, and the share of those wins that barely
+    # dipped before working -- now that vexh_engine.py tracks mae_pct per
+    # trade the same way strategy_vcp.py's run() does.
+    mae_wins = [closed_trades[i]["mae_pct"] for i in wins_idx]
+    avg_mae_wins_pct = round(sum(mae_wins) / len(mae_wins), 2) if mae_wins else None
+    pct_near_zero_mae = (round(sum(1 for m in mae_wins if m < 1.0) / len(mae_wins) * 100, 1)
+                          if mae_wins else None)
+
+    return {"n_trades": len(returns_pct), "win_rate": round(wr, 1), "profit_factor": round(pf, 2),
+            "avg_mae_wins_pct": avg_mae_wins_pct, "pct_near_zero_mae": pct_near_zero_mae}
 
 
 def _trade_advice(target: float, last_close: float, bars_held: int, entry_tier: str,
@@ -246,4 +259,8 @@ def evaluate(ticker: str, bars: pd.DataFrame) -> dict:
         "n_trades": trade_stats["n_trades"],
         "win_rate": trade_stats["win_rate"],
         "profit_factor": trade_stats["profit_factor"],
+        # Same fields VCP/VCPO expose via _summarize() -- see
+        # _summarize_trades_native's docstring for why VEXH now has them too.
+        "avg_mae_wins_pct": trade_stats["avg_mae_wins_pct"],
+        "pct_near_zero_mae": trade_stats["pct_near_zero_mae"],
     }

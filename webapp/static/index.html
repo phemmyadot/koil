@@ -1161,6 +1161,20 @@ function exhaustionChip(r) {
     rows.push(modalRow("Bars held", t.bars_held));
     if (t.entry_confidence) rows.push(modalRow("Entry confidence", t.entry_confidence));
   }
+  // Same fields/placement as strategy_vcp.py/vcpo.py's singleCandidateModal:
+  // right below Entry (no divider) with a limit-price hint when a trade is
+  // open, otherwise its own separator -- vexh_engine.py now tracks mae_pct
+  // the same way strategy_vcp.py's run() does.
+  if (r.avg_mae_wins_pct != null) {
+    const limitHint = t
+      ? ` [&rarr; limit at $${(t.entry_price * (1 - r.avg_mae_wins_pct / 100)).toFixed(2)}]`
+      : "";
+    if (!t) rows.push('<div class="modalsep"></div>');
+    rows.push(modalRow("Avg MAE (wins)", `-${r.avg_mae_wins_pct}%${limitHint}`));
+    if (r.pct_near_zero_mae != null) {
+      rows.push(modalRow("Wins w/ MAE&lt;1%", r.pct_near_zero_mae + "%"));
+    }
+  }
   rows.push('<div class="modalsep"></div>');
   rows.push(modalRow("To TP %", `${r.to_tp_pct > 0 ? "+" : ""}${r.to_tp_pct.toFixed(1)}%`));
   rows.push(modalRow("Avg Days", r.avg_trade_days ?? "&mdash;"));
@@ -1238,13 +1252,13 @@ function strategyColumnsModal(name, candidates) {
   const cols = candidates.map(c => {
     const cls = c.active ? "active" : QUALITY_CSS[qualityLabel(c.pf, c.wr)];
     // Same field set/order/grouping as the Exhaustion modal: Trades/Profit
-    // factor/Win rate, then [divider] Entry/Target/Unrealized/Bars held (only
-    // if open), then [divider] Avg Days, then [divider] Last 5 TP %, then
-    // [divider] verdict note. NOTE: "Entry confidence" and "To TP %" are
-    // Exhaustion-specific (its validated SMA-distance tier and Bollinger-
-    // midline target both need a reference line that exists on every bar,
-    // not just while a trade is open) -- A/D/VCP have no equivalent, so
-    // those two rows are intentionally omitted here rather than faked.
+    // factor/Win rate, then [divider] Entry(date)/Target/Unrealized/Bars held
+    // (only if open), then [divider] To TP %/Avg Days, then [divider] Last 5
+    // TP %, then [divider] verdict note. "Entry confidence" stays
+    // Exhaustion-only (vcp.pine/vcpo.pine have no graduated entry signal to
+    // tier -- entry is a plain boolean breakout_triggered) -- but "To TP %"
+    // now has a real Pine-native equivalent here: distance to the fixed
+    // tp_target level (op.target), not faked.
     const rows = [];
     if (c.config) rows.push(`<div class="modalcolrow"><span class="k">Cfg</span><span>${Object.values(c.config).join(", ")}</span></div>`);
     rows.push(`<div class="modalcolrow"><span class="k">Trades</span><span>${c.n_trades}</span></div>`);
@@ -1257,10 +1271,16 @@ function strategyColumnsModal(name, candidates) {
       const uCls = op.unrealized_pct >= 0 ? "pos" : "neg";
       const uSign = op.unrealized_pct >= 0 ? "+" : "";
       rows.push('<div class="modalsep"></div>');
-      rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${op.entry_price}</span></div>`);
+      rows.push(`<div class="modalcolrow"><span class="k">Entry</span><span>${op.entry_date ? op.entry_date + " @ " : ""}${op.entry_price}</span></div>`);
       rows.push(`<div class="modalcolrow"><span class="k">Target</span><span>${op.target}</span></div>`);
       if (op.unrealized_pct != null) rows.push(`<div class="modalcolrow"><span class="k">Unrealized</span><span class="${uCls}">${uSign}${op.unrealized_pct}%</span></div>`);
       rows.push(`<div class="modalcolrow"><span class="k">Bars held</span><span>${op.days_held}</span></div>`);
+    }
+
+    if (c.openPosition && c.openPosition.to_tp_pct != null) {
+      const ttSign = c.openPosition.to_tp_pct > 0 ? "+" : "";
+      rows.push('<div class="modalsep"></div>');
+      rows.push(`<div class="modalcolrow"><span class="k">To TP %</span><span>${ttSign}${c.openPosition.to_tp_pct.toFixed(1)}%</span></div>`);
     }
 
     if (c.avgTradeDays != null) {
@@ -1286,9 +1306,10 @@ function strategyColumnsModal(name, candidates) {
 // "Exhaustion" modal -- used whenever there's only one candidate (always the
 // case for A/D/VCP/VCPO now that training/holdout is flagged off, since
 // strategyCandidates() then only ever returns BASE). No Cfg/Since rows
-// (VEXH's modal doesn't have them either); "To TP %" and "Entry confidence"
-// stay omitted since they're Exhaustion-specific fields with no VCP/VCPO
-// equivalent (see strategyColumnsModal's comment for why).
+// (VEXH's modal doesn't have them either). "Entry confidence" stays
+// Exhaustion-only (vcp.pine/vcpo.pine have no graduated entry signal to
+// tier); "To TP %" now has a real Pine-native equivalent (distance to the
+// fixed tp_target level) so it's shown here too.
 function singleCandidateModal(name, c) {
   const rows = [
     modalRow("Trades", c.n_trades),
@@ -1299,10 +1320,15 @@ function singleCandidateModal(name, c) {
     const op = c.openPosition;
     const sign = op.unrealized_pct >= 0 ? "+" : "";
     rows.push('<div class="modalsep"></div>');
-    rows.push(modalRow("Entry", op.entry_price));
+    rows.push(modalRow("Entry", op.entry_date ? `${op.entry_date} @ ${op.entry_price}` : op.entry_price));
     rows.push(modalRow("Target", op.target));
     if (op.unrealized_pct != null) rows.push(modalRow("Unrealized", `${sign}${op.unrealized_pct}%`));
     rows.push(modalRow("Bars held", op.days_held));
+  }
+  if (c.openPosition && c.openPosition.to_tp_pct != null) {
+    const ttSign = c.openPosition.to_tp_pct > 0 ? "+" : "";
+    rows.push('<div class="modalsep"></div>');
+    rows.push(modalRow("To TP %", `${ttSign}${c.openPosition.to_tp_pct.toFixed(1)}%`));
   }
   if (c.avgMaeWinsPct != null) {
     // The single number that actually drives a limit-order decision: how

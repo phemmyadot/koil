@@ -187,9 +187,18 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
     if position is not None:
         entry_price = position["entry_price"]
         last_close = float(c.iloc[-1])
+        target = float(entry_price) * (1 + tp_target_pct / 100)
         open_position = {
+            "entry_date": str(df.index[position["entry_i"]].date()),
             "entry_price": round(float(entry_price), 4),
-            "target": round(float(entry_price) * (1 + tp_target_pct / 100), 4),
+            "target": round(target, 4),
+            # Distance from current price to the fixed partial-TP level
+            # (vcpo.pine's tp_target %, same level `target` above is computed
+            # from) -- unlike VEXH's To TP %, which tracks a moving Bollinger
+            # midline, VCP/VCPO's TP is a fixed level set at entry, so this is
+            # 0% at entry and shrinks (or goes negative once past target) as
+            # price moves toward/through it.
+            "to_tp_pct": round((target / last_close - 1) * 100, 2),
             "days_held": (len(df) - 1) - position["entry_i"],
             "unrealized_pct": round((last_close / entry_price - 1) * 100, 2),
             "mae_pct": round((entry_price - position["low_since"]) / entry_price * 100, 2),

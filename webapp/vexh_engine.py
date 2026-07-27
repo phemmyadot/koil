@@ -35,8 +35,10 @@ from p import SMA, RSI, ATR, PortfolioSizedEngine as E
 def run(df: pd.DataFrame) -> tuple[list[dict], dict | None]:
     """Returns (closed_trades, open_trade_dict_or_None).
     closed_trades: [{entry_time, entry_price, exit_time, exit_price,
-    return_pct, duration_days}], oldest first.
-    open_trade_dict: {entry_time, entry_price, entry_bar} or None.
+    return_pct, duration_days, mae_pct}], oldest first. mae_pct mirrors
+    strategy_vcp.py's own field: (entry_price - low_since) / entry_price *
+    100, tracked from entry_bar through the bar the trade closes.
+    open_trade_dict: {entry_bar, entry_price, mae_pct} or None.
     """
     c, h, l, o = df.Close, df.High, df.Low, df.Open
     macro_ma = SMA(c, E.sma_slow_len)
@@ -70,6 +72,7 @@ def run(df: pd.DataFrame) -> tuple[list[dict], dict | None]:
     bb_basis_arr = bb_basis.to_numpy()
     c_arr = c.to_numpy()
     h_arr = h.to_numpy()
+    l_arr = l.to_numpy()
     o_arr = o.to_numpy()
     earn_imminent_arr = earn_imminent.to_numpy()
     entry_signal_arr = entry_signal.to_numpy()
@@ -86,6 +89,13 @@ def run(df: pd.DataFrame) -> tuple[list[dict], dict | None]:
     time_stop_bars = E.time_stop_bars
 
     for i in range(1, n):
+        # Running low-water-mark for MAE, updated for every bar the position
+        # is open -- including the bar it may close on below -- BEFORE any
+        # exit check, same convention as strategy_vcp.py's low_since (updated
+        # unconditionally each bar prior to that bar's own exit logic).
+        if position is not None:
+            position["low_since"] = min(position["low_since"], l_arr[i])
+
         # --- TP fill check, processed first each bar (mirrors _process_orders
         # running at the START of next(), before this bar's own exit/entry logic) ---
         if (position is not None and pending_tp is not None and i > position["entry_bar"]
@@ -135,12 +145,18 @@ def run(df: pd.DataFrame) -> tuple[list[dict], dict | None]:
             # recorded as entered on the signal bar itself (i), even though
             # the fill is only processed (and becomes visible to exit checks)
             # starting the broker's next() call at bar i+1.
-            position = {"entry_bar": i, "entry_price": current_price, "visible_from": i + 1}
+            position = {"entry_bar": i, "entry_price": current_price, "visible_from": i + 1,
+                        "low_since": l_arr[i]}
             pending_tp = bb_basis_arr[i]
 
     open_trade = None
     if position is not None and position["visible_from"] <= n - 1:
-        open_trade = {"entry_bar": position["entry_bar"], "entry_price": position["entry_price"]}
+        entry_price = position["entry_price"]
+        open_trade = {
+            "entry_bar": position["entry_bar"],
+            "entry_price": entry_price,
+            "mae_pct": round((entry_price - position["low_since"]) / entry_price * 100, 2),
+        }
 
     return closed_trades, open_trade
 
@@ -151,6 +167,7 @@ def _close(closed_trades, df, position, exit_bar, exit_price, commission_rate):
     exit_commission = commission_rate * exit_price
     commission_pct = (entry_commission + exit_commission) / entry_price
     return_pct = (exit_price / entry_price - 1) - commission_pct
+    mae_pct = (entry_price - position["low_since"]) / entry_price * 100
     closed_trades.append({
         "entry_bar": position["entry_bar"],
         "entry_time": df.index[position["entry_bar"]],
@@ -160,4 +177,5 @@ def _close(closed_trades, df, position, exit_bar, exit_price, commission_rate):
         "exit_price": exit_price,
         "return_pct": return_pct,
         "duration_days": (df.index[exit_bar] - df.index[position["entry_bar"]]).days,
+        "mae_pct": round(float(mae_pct), 2),
     })
