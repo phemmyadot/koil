@@ -1191,20 +1191,37 @@ function updateSelectionCount() {
   document.getElementById("refresh").style.display = has ? "none" : "";
 }
 
-// Downloads a PDF covering exactly the selected tickers (cherry-picked or
-// via "Select all"), built server-side from the already-computed payloads
-// -- no client-side PDF library, no recompute.
-async function exportSelectedPdf() {
+// Export picker -- same interactive-modal pattern as showWatchlistPicker: click Export,
+// choose PDF or CSV, downloads immediately and closes. Both formats are scoped to exactly
+// the selected tickers AND whichever strategy is currently chosen in the Advance Filter
+// (ADV_STRAT_KEY[...strategy]) -- matches what the user is actually looking at, not all 3.
+function showExportPicker() {
+  if (!selectedTickers.size) return;
+  document.getElementById("modalBox").innerHTML =
+    `<div class="modaltitle">Export ${selectedTickers.size} ticker(s) as&hellip;</div>
+     <div class="modalbody watchlistpicker">
+       <button type="button" class="watchlistpickbtn" onclick="runExport('pdf')">PDF</button>
+       <button type="button" class="watchlistpickbtn" onclick="runExport('csv')">CSV</button>
+     </div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+}
+
+// Downloads a PDF or CSV covering exactly the selected tickers (cherry-picked or via "Select
+// all") and the Advance Filter's current strategy, built server-side from the already-computed
+// payloads -- no client-side PDF library, no recompute.
+async function runExport(format) {
+  hideModal();
   const btn = document.getElementById("exportPdfBtn");
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Exporting…";
   try {
-    const resp = await fetch("/api/export/pdf", {
+    const resp = await fetch(`/api/export/${format}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         tickers: Array.from(selectedTickers),
+        strategy: ADV_STRAT_KEY[readAdvFilter().strategy],
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
     });
@@ -1216,7 +1233,7 @@ async function exportSelectedPdf() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filenameMatch ? filenameMatch[1].trim() : `exhaustion-export-${today}.pdf`;
+    a.download = filenameMatch ? filenameMatch[1].trim() : `exhaustion-export-${today}.${format}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1728,7 +1745,7 @@ document.getElementById("clearSelectionBtn").addEventListener("click", () => {
   if (lastData) render(lastData);
 });
 document.getElementById("addToWatchlistBtn").addEventListener("click", showWatchlistPicker);
-document.getElementById("exportPdfBtn").addEventListener("click", exportSelectedPdf);
+document.getElementById("exportPdfBtn").addEventListener("click", showExportPicker);
 document.getElementById("plCalcBtn").addEventListener("click", showPlCalculator);
 
 load(false);

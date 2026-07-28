@@ -1,7 +1,8 @@
 """PDF export for the dashboard's ticker cards -- one full-width card per
-selected asset, covering Pre-Breakout state and all three strategies
-(VEXH/VCP/VCPO), built entirely from the already-computed payload dicts in
-app.py's _computed (no recompute, no network/DB access at export time).
+selected asset, covering Pre-Breakout state and the single strategy currently
+selected in the dashboard's Advance Filter, built entirely from the
+already-computed payload dicts in app.py's _computed (no recompute, no
+network/DB access at export time).
 """
 from datetime import datetime, timezone
 from io import BytesIO
@@ -239,11 +240,11 @@ def _card_header(payload: dict) -> Table:
     return header
 
 
-def _asset_section(payload: dict) -> KeepTogether:
-    """Pre-Breakout + the 3 strategies as 4 stacked horizontal strips (each spanning the
-    full card width), not 4 side-by-side columns -- far denser use of the page's width,
-    since each strip is one or two wrapped lines tall instead of a whole narrow column."""
-    row_flows = [_prebreak_row(payload)] + [_strategy_row(payload, key) for key in STRATEGY_LABELS]
+def _asset_section(payload: dict, strategy: str) -> KeepTogether:
+    """Pre-Breakout (ticker-level, not strategy-specific, so always shown) + the one selected
+    strategy's row, stacked as horizontal strips spanning the full card width -- scoped to
+    strategy since the export mirrors whatever's selected in the dashboard's Advance Filter."""
+    row_flows = [_prebreak_row(payload), _strategy_row(payload, strategy)]
 
     body_rows = []
     for flow in row_flows:
@@ -269,12 +270,17 @@ def _asset_section(payload: dict) -> KeepTogether:
     return KeepTogether([card])
 
 
-def build_pdf(payloads: list[dict], generated_at_local: datetime | None = None) -> bytes:
+def build_pdf(payloads: list[dict], strategy: str,
+              generated_at_local: datetime | None = None) -> bytes:
     """payloads: the enriched per-ticker dicts already computed by app.py
     (same shape sent to the frontend via /api/tickers), one full-width card
-    per entry, in the given order. generated_at_local: the export moment already
-    converted to the requesting browser's local timezone by app.py's endpoint
-    (falls back to UTC here if not provided, e.g. when called directly/in tests)."""
+    per entry, in the given order. strategy: the payload key ("vexh",
+    "strategy_vcp", or "strategy_vcpo") to show -- matches the dashboard's
+    Advance Filter strategy selector, so the export only covers whichever
+    strategy the user is currently looking at, not all three.
+    generated_at_local: the export moment already converted to the requesting
+    browser's local timezone by app.py's endpoint (falls back to UTC here if
+    not provided, e.g. when called directly/in tests)."""
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter,
                              leftMargin=0.65 * inch, rightMargin=0.65 * inch,
@@ -284,8 +290,9 @@ def build_pdf(payloads: list[dict], generated_at_local: datetime | None = None) 
         generated_at = generated_at_local.strftime(f"%Y-%m-%d %H:%M {tz_label}")
     else:
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    strategy_label = STRATEGY_LABELS.get(strategy, strategy)
     title_row = Table(
-        [[Paragraph("Exhaustion Dashboard Export", ParagraphStyle(
+        [[Paragraph(f"Exhaustion Dashboard Export &mdash; {strategy_label}", ParagraphStyle(
             "title", fontSize=14, leading=17, fontName="Helvetica-Bold", textColor=INK)),
           Paragraph(f"Generated {generated_at}", _styles["docheader"])]],
         colWidths=[PAGE_WIDTH * 0.6, PAGE_WIDTH * 0.4])
@@ -301,6 +308,6 @@ def build_pdf(payloads: list[dict], generated_at_local: datetime | None = None) 
     for i, payload in enumerate(payloads):
         if i > 0:
             story.append(Spacer(1, 16))
-        story.append(_asset_section(payload))
+        story.append(_asset_section(payload, strategy))
     doc.build(story)
     return buf.getvalue()

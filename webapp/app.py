@@ -36,10 +36,11 @@ _compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
 # that ticker's bars happened not to change since the shape changed.
 PAYLOAD_SCHEMA_VERSION = 5
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 
 import webapp.build_universe as build_universe
+import webapp.csv_export as csv_export
 import webapp.data as data
 import webapp.db as db
 import webapp.pdf_export as pdf_export
@@ -403,14 +404,34 @@ def sync_watchlist_tickers(tickers: list[str]):
     return {"ok": True}
 
 
+_EXPORT_STRATEGY_KEYS = {"vexh", "strategy_vcp", "strategy_vcpo"}
+
+
+def _resolve_export_payloads(tickers: list[str]) -> list[dict]:
+    with _compute_lock:
+        by_ticker = {p["ticker"]: p for p in _computed}
+    return [by_ticker[tk] for tk in tickers if tk in by_ticker]
+
+
+def _resolve_export_strategy(body: dict) -> str:
+    """body.strategy must be one of the 3 real payload keys -- matches the dashboard's
+    Advance Filter strategy selector (ADV_STRAT_KEY in index.html), so the export only
+    covers whichever strategy the user is currently looking at, not all three."""
+    strategy = body.get("strategy")
+    if strategy not in _EXPORT_STRATEGY_KEYS:
+        raise HTTPException(status_code=400, detail=f"invalid strategy: {strategy!r}")
+    return strategy
+
+
 @app.post("/api/export/pdf")
 def export_pdf(body: dict):
-    """PDF export for a user-selected subset of tickers, built entirely from already-computed
-    payloads. body: {tickers: [...], timezone: <IANA name, e.g. "America/New_York">} -- the
+    """PDF export for a user-selected subset of tickers, scoped to one strategy, built
+    entirely from already-computed payloads. body: {tickers: [...], strategy: "vexh"|
+    "strategy_vcp"|"strategy_vcpo", timezone: <IANA name, e.g. "America/New_York">} -- the
     timezone is the browser's own (Intl.DateTimeFormat().resolvedOptions().timeZone), so the
     "Generated ..." header and the download filename's date reflect the exporting user's local
     date/time, not the server's. Falls back to UTC if missing or not a real IANA name."""
-    tickers = body.get("tickers", [])
+    strategy = _resolve_export_strategy(body)
     tz_name = body.get("timezone")
     try:
         tz = ZoneInfo(tz_name) if tz_name else timezone.utc
@@ -418,12 +439,29 @@ def export_pdf(body: dict):
         tz = timezone.utc
     generated_at_local = datetime.now(tz)
 
-    with _compute_lock:
-        by_ticker = {p["ticker"]: p for p in _computed}
-    payloads = [by_ticker[tk] for tk in tickers if tk in by_ticker]
-    pdf_bytes = pdf_export.build_pdf(payloads, generated_at_local=generated_at_local)
-    filename = f"exhaustion-export-{generated_at_local.strftime('%Y-%m-%d')}.pdf"
+    payloads = _resolve_export_payloads(body.get("tickers", []))
+    pdf_bytes = pdf_export.build_pdf(payloads, strategy, generated_at_local=generated_at_local)
+    filename = f"exhaustion-export-{strategy}-{generated_at_local.strftime('%Y-%m-%d')}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
+                     headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@app.post("/api/export/csv")
+def export_csv(body: dict):
+    """CSV export for a user-selected subset of tickers, scoped to one strategy -- same
+    scope/body shape as /api/export/pdf (see _resolve_export_strategy), one row per ticker."""
+    strategy = _resolve_export_strategy(body)
+    tz_name = body.get("timezone")
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+    local_date = datetime.now(tz).strftime("%Y-%m-%d")
+
+    payloads = _resolve_export_payloads(body.get("tickers", []))
+    csv_text = csv_export.build_csv(payloads, strategy)
+    filename = f"exhaustion-export-{strategy}-{local_date}.csv"
+    return Response(content=csv_text, media_type="text/csv",
                      headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
