@@ -147,6 +147,7 @@
   .chip.mid { background: var(--gold-bg); color: var(--gold); }
   .chip.neutral { background: var(--line); color: var(--muted); }
   .chip.active { background: var(--blue-bg); color: var(--blue); }
+  .chip.pending { background: var(--accent-bg); color: var(--accent); }
   .badgerow { display: flex; flex-wrap: wrap; gap: 4px; }
   .condgrid { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 6px; }
   .pos { color: var(--green); } .neg { color: var(--red); }
@@ -1063,17 +1064,20 @@ function tradeCountColorClass(n) {
   return "no";
 }
 // 4 separate small badges (O/T/WR/PF) instead of one combined chip, each
-// with its own color grading. All 4 open the same modal.
-function statBadges(active, days, nTrades, wr, pf, modalId) {
+// with its own color grading. All 4 open the same modal. pending adds a 5th
+// badge when THIS strategy's own signal fired on the latest close with no
+// position open yet -- fills at the next bar's open, not today.
+function statBadges(active, days, nTrades, wr, pf, modalId, pending) {
   // Win count derived from the rounded win_rate% and n_trades (backend only
   // stores the percentage, not the raw win count) -- rounding error here is
   // at most the last decimal of wr%, negligible for display purposes.
   const wins = Math.round(wr / 100 * nTrades);
   const badges = [];
-  if (active) badges.push(["active", `O-${days}`]);
-  badges.push([tradeCountColorClass(nTrades), `T${nTrades}`]);
-  badges.push([wrColorClass(wr), `WR${wr}%(${wins}/${nTrades})`]);
-  badges.push([pfColorClass(pf), `PF${pf}`]);
+  if (active) badges.push(["active", `Open -${days}D`]);
+  if (pending) badges.push(["pending", "PENDING"]);
+  badges.push([tradeCountColorClass(nTrades), `T ${nTrades}`]);
+  badges.push([wrColorClass(wr), `WR ${wr.toFixed(2)}%(${wins}/${nTrades})`]);
+  badges.push([pfColorClass(pf), `PF ${pf.toFixed(2)}`]);
   return `<span class="badgerow">` + badges.map(([cls, text]) =>
     `<span class="chip ${cls} hasdetail" onclick="showModal('${modalId}')">${text}</span>`
   ).join("") + `</span>`;
@@ -1123,7 +1127,8 @@ function strategyChips(s, name) {
   if (!s) return '<span class="chip neutral">&mdash;</span>';
   const id = strategyModal(name, s);
   const days = s.open_position ? s.open_position.days_held : null;
-  return statBadges(!!s.open_position, days, s.n_trades, s.win_rate, s.profit_factor, id);
+  const pending = !!(s.signal_today && !s.open_position);
+  return statBadges(!!s.open_position, days, s.n_trades, s.win_rate, s.profit_factor, id, pending);
 }
 
 // Longest days-held across all open positions on this ticker (VEXH/VCP/VCPO); null if nothing is open.
@@ -1198,7 +1203,10 @@ async function exportSelectedPdf() {
     const resp = await fetch("/api/export/pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Array.from(selectedTickers)),
+      body: JSON.stringify({
+        tickers: Array.from(selectedTickers),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
     });
     if (!resp.ok) throw new Error(`export failed (${resp.status})`);
     const disposition = resp.headers.get("Content-Disposition") || "";

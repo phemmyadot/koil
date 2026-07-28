@@ -19,6 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # _compute_one() is CPU-bound, unlike data.py's network-bound FETCH_WORKERS -- a high worker count isn't free here.
 COMPUTE_WORKERS = os.cpu_count() or 4
@@ -403,13 +404,25 @@ def sync_watchlist_tickers(tickers: list[str]):
 
 
 @app.post("/api/export/pdf")
-def export_pdf(tickers: list[str]):
-    """PDF export for a user-selected subset of tickers, built entirely from already-computed payloads."""
+def export_pdf(body: dict):
+    """PDF export for a user-selected subset of tickers, built entirely from already-computed
+    payloads. body: {tickers: [...], timezone: <IANA name, e.g. "America/New_York">} -- the
+    timezone is the browser's own (Intl.DateTimeFormat().resolvedOptions().timeZone), so the
+    "Generated ..." header and the download filename's date reflect the exporting user's local
+    date/time, not the server's. Falls back to UTC if missing or not a real IANA name."""
+    tickers = body.get("tickers", [])
+    tz_name = body.get("timezone")
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+    generated_at_local = datetime.now(tz)
+
     with _compute_lock:
         by_ticker = {p["ticker"]: p for p in _computed}
     payloads = [by_ticker[tk] for tk in tickers if tk in by_ticker]
-    pdf_bytes = pdf_export.build_pdf(payloads)
-    filename = f"exhaustion-export-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.pdf"
+    pdf_bytes = pdf_export.build_pdf(payloads, generated_at_local=generated_at_local)
+    filename = f"exhaustion-export-{generated_at_local.strftime('%Y-%m-%d')}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
                      headers={"Content-Disposition": f"attachment; filename={filename}"})
 

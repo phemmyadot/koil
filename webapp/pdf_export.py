@@ -97,13 +97,14 @@ def _kv_row_html(rows: list[tuple[str, str, str]]) -> str:
 
 
 def _open_position_rows(stats: dict) -> list[tuple[str, str, str]]:
+    """Target/Unrealized/Days held for an already-filled position -- entry date/price itself
+    now lives in the strategy's header line (see _entry_status_html), not here."""
     t = stats.get("open_position")
     if not t:
         return []
     sign = "+" if t["unrealized_pct"] >= 0 else ""
     unreal_style = "value_pos" if t["unrealized_pct"] >= 0 else "value_neg"
     return [
-        ("Entry", f"{t['entry_date']} @ {t['entry_price']}", "value"),
         ("Target", str(t["target"]), "value"),
         ("Unrealized", f"{sign}{t['unrealized_pct']}%", unreal_style),
         ("Days held", str(t["days_held"]), "value"),
@@ -121,11 +122,26 @@ def _last5_str(last5_trades: list[dict]) -> str:
     return "  &middot;  ".join(parts)
 
 
+def _entry_status_html(payload: dict, stats: dict) -> str:
+    """'Entry <date> @ <price>' once a position is actually filled, using the real
+    per-strategy open_position entry. Just 'Pending' when the strategy's own breakout
+    condition fired on the latest close but nothing has filled yet -- no date or price shown
+    because the actual fill happens at the NEXT bar's open, which hasn't happened yet and
+    can't be known in advance (see STRATEGY_ARCHITECTURE.md)."""
+    op = stats.get("open_position")
+    if op:
+        return f'Entry {op["entry_date"]} @ {op["entry_price"]}'
+    if stats.get("signal_today"):
+        color = ACCENT.hexval()[2:]
+        return f'<font color="#{color}">Pending</font>'
+    return ""
+
+
 def _strategy_row(payload: dict, strategy: str) -> list:
-    """One strategy's flowables: a single-line header ("VEXH  7/10") followed by one wrapping
-    line of all its stats (Trades/PF/WR/MAE/MFE/open-position/Avg Days) and one line for
-    Last 5 -- a short horizontal strip instead of a tall stacked column, so the full card
-    stays compact regardless of how many stats a strategy has."""
+    """One strategy's flowables: a single-line header ("VEXH  7/10 - Pending/Entry ...")
+    followed by one wrapping line of all its stats (Trades/PF/WR/MAE/MFE/open-position/Avg
+    Days) and one line for Last 5 -- a short horizontal strip instead of a tall stacked
+    column, so the full card stays compact regardless of how many stats a strategy has."""
     stats = payload.get(strategy)
     label = STRATEGY_LABELS[strategy]
 
@@ -133,6 +149,10 @@ def _strategy_row(payload: dict, strategy: str) -> list:
     score_text = f"{score}/10" if score is not None else "&mdash;/10"
     score_color = _score_color(score).hexval()[2:]  # HexColor -> "rrggbb" for inline <font>
     header_html = f'<b>{label}</b> &nbsp; <font color="#{score_color}"><b>{score_text}</b></font>'
+    if stats:
+        status = _entry_status_html(payload, stats)
+        if status:
+            header_html += f" &nbsp;-&nbsp; {status}"
     flow = [Paragraph(header_html, _styles["h2"])]
 
     if not stats:
@@ -249,15 +269,21 @@ def _asset_section(payload: dict) -> KeepTogether:
     return KeepTogether([card])
 
 
-def build_pdf(payloads: list[dict]) -> bytes:
+def build_pdf(payloads: list[dict], generated_at_local: datetime | None = None) -> bytes:
     """payloads: the enriched per-ticker dicts already computed by app.py
     (same shape sent to the frontend via /api/tickers), one full-width card
-    per entry, in the given order."""
+    per entry, in the given order. generated_at_local: the export moment already
+    converted to the requesting browser's local timezone by app.py's endpoint
+    (falls back to UTC here if not provided, e.g. when called directly/in tests)."""
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter,
                              leftMargin=0.65 * inch, rightMargin=0.65 * inch,
                              topMargin=0.6 * inch, bottomMargin=0.6 * inch)
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if generated_at_local is not None:
+        tz_label = generated_at_local.tzname() or "local"
+        generated_at = generated_at_local.strftime(f"%Y-%m-%d %H:%M {tz_label}")
+    else:
+        generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     title_row = Table(
         [[Paragraph("Exhaustion Dashboard Export", ParagraphStyle(
             "title", fontSize=14, leading=17, fontName="Helvetica-Bold", textColor=INK)),

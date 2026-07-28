@@ -11,7 +11,7 @@ var string G_TIME   = "Stage 5: Intelligent Time Stop"
 var string G_DTE    = "Stage 6: DTE Elapsed Flag (visual only)"
 
 // Stage 0b Inputs - Date Filter
-bool use_date_filter = input.bool(false, title="Restrict Backtest to Date Range", group=G_DATE)
+bool use_date_filter = input.bool(true, title="Restrict Backtest to Date Range", group=G_DATE)
 int start_date        = input.time(timestamp("1 Jan 2022 00:00 +0000"), title="Start Date", group=G_DATE)
 int end_date           = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="End Date", group=G_DATE)
 bool in_date_range     = not use_date_filter or (time >= start_date and time <= end_date)
@@ -33,7 +33,7 @@ int max_bars        = input.int(20, title="Max Bars to Stagnancy Check", group=G
 // Visual-only: flags N candles after EVERY entry, independent of the actual
 // time stop above -- lets you eyeball where each trade would be on a fixed
 // DTE clock without changing strategy behavior.
-bool show_dte_flag = input.bool(true, title="Show DTE Elapsed Flag", group=G_DTE)
+bool show_dte_flag = input.bool(false, title="Show DTE Elapsed Flag", group=G_DTE)
 int dte_bars        = input.int(20, title="DTE (candles)", group=G_DTE, minval=1, maxval=500)
 
 
@@ -188,3 +188,4 @@ if show_dte_flag and barstate.islast
     table.cell(dte_table, 1, 2, str.tostring(dte_avg_pct_loss, "#.#") + "%", text_color=color.blue, text_size=size.small)
     table.cell(dte_table, 0, 3, "Count", text_color=color.blue, text_size=size.small)
     table.cell(dte_table, 1, 3, str.tostring(dte_count), text_color=color.blue, text_size=size.small)
+    
