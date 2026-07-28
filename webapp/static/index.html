@@ -1141,6 +1141,16 @@ function maxDaysInTrade(r) {
   }
   return max;
 }
+// True if ANY strategy's own signal fired on the latest close with no position open yet --
+// same "pending" condition as strategyChips()'s PENDING badge, checked across all 3 strategies
+// (not scoped to whichever one Advance Filter happens to have selected) so a card sorts to the
+// front the moment any of its strategies has a fresh signal.
+function hasPendingSignal(r) {
+  for (const s of [r.vexh, r.strategy_vcp, r.strategy_vcpo]) {
+    if (s && s.signal_today && !s.open_position) return true;
+  }
+  return false;
+}
 const PAGE_SIZE = 9;
 let lastData = null;
 let currentPage = 1;
@@ -1265,9 +1275,9 @@ function render(data) {
   const minTradesStrats = activeMinTradesStrats(tradeOnStrats, adv);
   // Advance Filter, Trade On, and Pre-Breakout each AND against each other
   // (separate .filter() calls); within Trade On, checking multiple
-  // strategies is OR. No user-facing sort control anymore -- always sorted
-  // by days-in-trade, newest first (smallest days_held; no open trade
-  // anywhere sorts last).
+  // strategies is OR. No user-facing sort control anymore -- always 3
+  // tiers: any strategy PENDING first, then open trades by days-in-trade
+  // (newest first, smallest days_held), then everything else last.
   const allRows = data.tickers.slice()
     .filter(r => !tickerQuery || r.ticker.toUpperCase().includes(tickerQuery))
     .filter(r => matchesMinTrades(r, minTrades, minTradesStrats))
@@ -1275,6 +1285,8 @@ function render(data) {
     .filter(r => matchesTradeOnFilter(r, tradeOnStrats))
     .filter(r => matchesPrebreakFilter(r, prebreak))
     .sort((a, b) => {
+      const pa = hasPendingSignal(a), pb = hasPendingSignal(b);
+      if (pa !== pb) return pa ? -1 : 1;
       const da = maxDaysInTrade(a), db = maxDaysInTrade(b);
       if (da === null && db === null) return 0;
       if (da === null) return 1;
