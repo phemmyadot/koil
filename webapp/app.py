@@ -70,6 +70,14 @@ _computed_asof: str | None = None
 _computed_source_fetch: dict[str, str] = {}
 _compute_lock = threading.Lock()
 
+# Serializes whole refresh_and_compute() passes (distinct from _compute_lock, which only
+# guards individual dict mutations within a pass).
+_refresh_pass_lock = threading.Lock()
+
+# Serializes compute_all() itself, since it's also called directly from _on_startup(),
+# bypassing _refresh_pass_lock.
+_compute_pass_lock = threading.Lock()
+
 
 def _load_computed_from_db() -> None:
     """Best-effort load on import; restores _computed_asof from the DB too so a warm restart isn't treated as cold."""
@@ -174,72 +182,79 @@ def _active_tickers() -> list[str]:
 
 
 def compute_all() -> None:
-    """Recompute only tickers whose bars changed since the last pass; staleness keyed off last_bar_date, not fetch time."""
+    """Recompute only tickers whose bars changed since the last pass; staleness keyed off last_bar_date, not fetch time.
+    Never runs two passes concurrently -- see _compute_pass_lock."""
     global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
 
-    with _compute_lock:
-        prior_by_ticker = {p["ticker"]: p for p in _computed}
-        prior_source_fetch = dict(_computed_source_fetch)
-        prior_errors = dict(_computed_errors)
-
-    to_compute = []
-    reused_payloads: dict[str, dict] = {}
-    reused_source_fetch: dict[str, str] = {}
-    reused_errors: dict[str, str] = {}
-    for tk in _active_tickers():
-        last_bar_date = db.get_last_bar_date(tk)
-        prior_payload = prior_by_ticker.get(tk)
-        # Bars unchanged AND the cached payload's shape is current -- otherwise force a recompute even
-        # though bars didn't change, so a payload-shape change (PAYLOAD_SCHEMA_VERSION bump) can't leave
-        # old-shaped entries frozen in the cache forever just because that ticker's bars happen to be stable.
-        shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
-        if last_bar_date is not None and prior_source_fetch.get(tk) == last_bar_date and shape_current:
-            if tk in prior_by_ticker:
-                reused_payloads[tk] = prior_payload
-                reused_source_fetch[tk] = last_bar_date
-            elif tk in prior_errors:
-                reused_errors[tk] = prior_errors[tk]
-                reused_source_fetch[tk] = last_bar_date
-            else:
-                to_compute.append(tk)  # stale bookkeeping, e.g. after a cache format change
-        else:
-            to_compute.append(tk)
-
-    with _compute_lock:
-        _compute_progress = {"done": 0, "total": len(to_compute)}
+    if not _compute_pass_lock.acquire(blocking=False):
+        print("app: compute_all() already running -- skipping this overlapping call.")
+        return
     try:
-        results = []
-        if to_compute:
-            futures = [_compute_executor.submit(_compute_one, tk) for tk in to_compute]
-            for future in as_completed(futures):
-                results.append(future.result())
-                with _compute_lock:
-                    _compute_progress["done"] += 1
         with _compute_lock:
-            # Lock-ordering invariant: _compute_lock is always acquired before db._lock, never the reverse.
-            new_source_fetch = {tk: db.get_last_bar_date(tk) for tk, payload, err in results
-                                 if payload is not None or err is not None}
-            _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
-            _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}
-            _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
-            _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            computed_at = time.time()
-            # Only tickers actually (re)computed this pass get written; one bad DB write must not abort the pass.
-            for tk, payload, err in results:
-                if payload is not None or err is not None:
-                    source_bar_date = new_source_fetch.get(tk)
-                    if source_bar_date is None:
-                        print(f"app: skipping DB persist for {tk} -- no last_bar_date "
-                              f"available (bars missing or not yet recorded); will retry next pass.")
-                        continue
-                    try:
-                        db.upsert_computed(tk, payload, source_bar_date, computed_at, err)
-                    except Exception as e:  # noqa: BLE001
-                        print(f"app: db.upsert_computed failed for {tk} ({e}); "
-                              f"continuing with the rest of this pass.")
+            prior_by_ticker = {p["ticker"]: p for p in _computed}
+            prior_source_fetch = dict(_computed_source_fetch)
+            prior_errors = dict(_computed_errors)
+
+        to_compute = []
+        reused_payloads: dict[str, dict] = {}
+        reused_source_fetch: dict[str, str] = {}
+        reused_errors: dict[str, str] = {}
+        for tk in _active_tickers():
+            last_bar_date = db.get_last_bar_date(tk)
+            prior_payload = prior_by_ticker.get(tk)
+            # Bars unchanged AND the cached payload's shape is current -- otherwise force a recompute even
+            # though bars didn't change, so a payload-shape change (PAYLOAD_SCHEMA_VERSION bump) can't leave
+            # old-shaped entries frozen in the cache forever just because that ticker's bars happen to be stable.
+            shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
+            if last_bar_date is not None and prior_source_fetch.get(tk) == last_bar_date and shape_current:
+                if tk in prior_by_ticker:
+                    reused_payloads[tk] = prior_payload
+                    reused_source_fetch[tk] = last_bar_date
+                elif tk in prior_errors:
+                    reused_errors[tk] = prior_errors[tk]
+                    reused_source_fetch[tk] = last_bar_date
+                else:
+                    to_compute.append(tk)  # stale bookkeeping, e.g. after a cache format change
+            else:
+                to_compute.append(tk)
+
+        with _compute_lock:
+            _compute_progress = {"done": 0, "total": len(to_compute)}
+        try:
+            results = []
+            if to_compute:
+                futures = [_compute_executor.submit(_compute_one, tk) for tk in to_compute]
+                for future in as_completed(futures):
+                    results.append(future.result())
+                    with _compute_lock:
+                        _compute_progress["done"] += 1
+            with _compute_lock:
+                # Lock-ordering invariant: _compute_lock is always acquired before db._lock, never the reverse.
+                new_source_fetch = {tk: db.get_last_bar_date(tk) for tk, payload, err in results
+                                     if payload is not None or err is not None}
+                _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
+                _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}
+                _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
+                _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                computed_at = time.time()
+                # Only tickers actually (re)computed this pass get written; one bad DB write must not abort the pass.
+                for tk, payload, err in results:
+                    if payload is not None or err is not None:
+                        source_bar_date = new_source_fetch.get(tk)
+                        if source_bar_date is None:
+                            print(f"app: skipping DB persist for {tk} -- no last_bar_date "
+                                  f"available (bars missing or not yet recorded); will retry next pass.")
+                            continue
+                        try:
+                            db.upsert_computed(tk, payload, source_bar_date, computed_at, err)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"app: db.upsert_computed failed for {tk} ({e}); "
+                                  f"continuing with the rest of this pass.")
+        finally:
+            with _compute_lock:
+                _compute_progress = None
     finally:
-        with _compute_lock:
-            _compute_progress = None
+        _compute_pass_lock.release()
 
 
 def rebuild_universe() -> str | None:
@@ -283,21 +298,28 @@ def _universe_refresh_if_needed() -> None:
 
 
 def refresh_and_compute(force: bool = False) -> None:
-    """Gap-fetch prices then recompute whatever changed; force=True re-fetches everything (manual Refresh)."""
-    active = _active_tickers()
-    fetch_time_before = data.last_fetch_time()
-    data.warm_cache(active, force=force)
-    fetch_time_after = data.last_fetch_time()
-
-    with _compute_lock:
-        computed_count = len(_computed)
-    compute_caught_up = computed_count >= len(active) * 0.9  # allow for a few per-ticker errors
-
-    if not force and fetch_time_before == fetch_time_after and compute_caught_up:
-        print(f"app: nothing fetched this pass and compute is already caught up "
-              f"({computed_count}/{len(TICKERS)}) -- skipping compute_all()'s per-ticker check entirely.")
+    """Gap-fetch prices then recompute whatever changed; force=True re-fetches everything (manual Refresh).
+    Never runs two passes concurrently -- see _refresh_pass_lock."""
+    if not _refresh_pass_lock.acquire(blocking=False):
+        print("app: refresh_and_compute() already running -- skipping this overlapping call.")
         return
-    compute_all()
+    try:
+        active = _active_tickers()
+        fetch_time_before = data.last_fetch_time()
+        data.warm_cache(active, force=force)
+        fetch_time_after = data.last_fetch_time()
+
+        with _compute_lock:
+            computed_count = len(_computed)
+        compute_caught_up = computed_count >= len(active) * 0.9  # allow for a few per-ticker errors
+
+        if not force and fetch_time_before == fetch_time_after and compute_caught_up:
+            print(f"app: nothing fetched this pass and compute is already caught up "
+                  f"({computed_count}/{len(TICKERS)}) -- skipping compute_all()'s per-ticker check entirely.")
+            return
+        compute_all()
+    finally:
+        _refresh_pass_lock.release()
 
 
 def _on_startup():
