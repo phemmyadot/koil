@@ -3,6 +3,15 @@ import pandas as pd
 import numpy as np
 from backtesting import Strategy, Backtest
 
+# Disables yfinance's on-disk tz/cookie/isin caches -- see webapp/yf_cache_patch.py's
+# docstring. webapp/__init__.py already applies this before p.py loads when running as
+# part of the app; this covers p.py used standalone (CLI backtesting) too.
+try:
+    from webapp.yf_cache_patch import apply as _apply_yf_cache_patch
+    _apply_yf_cache_patch()
+except ImportError:
+    pass  # webapp package not importable from this context (e.g. run outside the repo root)
+
 def SMA(values, n):
     return pd.Series(values).rolling(n).mean()
 
