@@ -398,12 +398,23 @@ def debug_memory():
     }
 
 
+def _run_manual_refresh() -> None:
+    err = rebuild_universe()
+    if err:
+        print(f"app: manual refresh's rebuild_universe() failed ({err}); keeping existing tickers.py")
+    refresh_and_compute(force=True)
+
+
 @app.get("/api/tickers")
 def tickers(refresh: int = 0):
-    universe_error = None
+    # refresh=1 starts the pipeline in the background and returns immediately -- it used to
+    # run rebuild_universe() + refresh_and_compute() inline and block on the response, which
+    # could take several minutes and got killed by Cloudflare Tunnel's timeout well before
+    # finishing. The frontend already polls /api/meta's screen/fetch/compute progress and
+    # re-fetches /api/tickers once done (see index.html's load()), so this now behaves the
+    # same way the background loop's own periodic refresh already does.
     if refresh:
-        universe_error = rebuild_universe()
-        refresh_and_compute(force=True)
+        threading.Thread(target=_run_manual_refresh, daemon=True).start()
     with _compute_lock:
         computed_snapshot = list(_computed)
         asof, errors = _computed_asof, dict(_computed_errors)
@@ -412,7 +423,7 @@ def tickers(refresh: int = 0):
         "cached": not refresh,
         "tickers": computed_snapshot,
         "errors": errors,
-        "universe_error": universe_error,
+        "universe_error": None,
     }
 
 

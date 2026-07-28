@@ -1371,48 +1371,7 @@ function renderPager(page, pageCount) {
   document.getElementById("prevPage").addEventListener("click", () => { currentPage--; render(lastData); });
   document.getElementById("nextPage").addEventListener("click", () => { currentPage++; render(lastData); });
 }
-// Progress bar is an ESTIMATE, not a real per-ticker completion signal --
-// /api/tickers blocks server-side until every ticker (and its 4 strategy
-// evaluations) finish, so there's no live progress to stream. Instead we
-// track a rolling average of (elapsed_ms / ticker_count) from real past
-// loads in localStorage, and animate toward that estimate.
-const AVG_MS_KEY = "dashboardAvgMsPerTicker";
-const DEFAULT_AVG_MS_PER_TICKER = 900; // seed guess before any real data exists
-
-function getAvgMsPerTicker() {
-  const stored = Number(localStorage.getItem(AVG_MS_KEY));
-  return stored > 0 ? stored : DEFAULT_AVG_MS_PER_TICKER;
-}
-function updateAvgMsPerTicker(elapsedMs, tickerCount) {
-  if (!tickerCount) return;
-  const measured = elapsedMs / tickerCount;
-  const prev = getAvgMsPerTicker();
-  // Exponential moving average so one slow/fast run doesn't swing the estimate wildly.
-  const next = prev * 0.7 + measured * 0.3;
-  localStorage.setItem(AVG_MS_KEY, String(next));
-}
-
 let progressTimer = null;
-function startProgress(tickerCount) {
-  const wrap = document.getElementById("progresswrap");
-  const fill = document.getElementById("progressfill");
-  const label = document.getElementById("progresslabel");
-  const estimatedMs = Math.max(1000, tickerCount * getAvgMsPerTicker());
-  const t0 = Date.now();
-  wrap.style.display = "flex";
-  fill.style.width = "0%";
-  const tick = () => {
-    const elapsed = Date.now() - t0;
-    // Ease toward 92% over the estimate; never claim 100% until actually done.
-    const pct = Math.min(92, (elapsed / estimatedMs) * 92);
-    fill.style.width = pct.toFixed(1) + "%";
-    const remainingMs = Math.max(0, estimatedMs - elapsed);
-    label.textContent = `~${Math.ceil(remainingMs / 1000)}s remaining (estimate, ${tickerCount} tickers)`;
-  };
-  tick();
-  progressTimer = setInterval(tick, 250);
-  return t0;
-}
 function finishProgress() {
   if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
   const wrap = document.getElementById("progresswrap");
@@ -1514,13 +1473,11 @@ let firstLoadAttempts = 0;
 async function load(refresh) {
   const btn = document.getElementById("refresh");
   btn.disabled = true;
-  let tickerCount = lastData ? lastData.tickers.length : null;
   let meta = null;
-  if (tickerCount === null || !refresh) {
+  if (!lastData || !refresh) {
     try {
       meta = await (await fetch("/api/meta")).json();
-      if (tickerCount === null) tickerCount = meta.total_tickers;
-    } catch (e) { tickerCount = tickerCount ?? 474; }
+    } catch (e) { /* refreshInFlight below just treats a failed /api/meta as "not in flight" */ }
   }
   // A plain page load (including a browser reload) has no idea whether a
   // refresh triggered from a DIFFERENT page load/tab is still running on the
@@ -1532,12 +1489,6 @@ async function load(refresh) {
   // cached data with no progress bar, looking like the refresh had vanished.
   const refreshInFlight = !refresh && meta
     && (meta.screen_progress || meta.fetch_progress || meta.compute_progress);
-  // Only the real backend-progress poller runs the label/bar now -- it used
-  // to run alongside startProgress()'s time-estimate ticker on its own
-  // separate, faster interval, and the two competed to overwrite the same
-  // progresslabel element, which is why the label looked like it wasn't
-  // adjusting to the actual fetch/compute stage (the estimate ticker kept
-  // stomping it with its own "~Xs remaining" text).
   if (refresh || refreshInFlight) {
     showPageOverlay(refreshInFlight ? "Refresh already in progress…" : "Refreshing all tickers…");
     if (!realProgressTimer) startRealProgressPolling();
@@ -1549,12 +1500,21 @@ async function load(refresh) {
     setTimeout(() => load(false), FIRST_LOAD_POLL_MS);
     return;
   }
-  const t0 = Date.now();
   try {
     const params = refresh ? "?refresh=1" : "";
     const res = await fetch("/api/tickers" + params);
     const data = await res.json();
-    if (refresh) updateAvgMsPerTicker(Date.now() - t0, tickerCount);
+
+    if (refresh) {
+      // The server now just kicks the refresh off in the background and responds
+      // immediately (see app.py's /api/tickers) instead of blocking on the whole
+      // rebuild_universe()+refresh_and_compute() pipeline -- this response is NOT the
+      // finished result, it's still the pre-refresh snapshot. Fall into the same
+      // poll-until-done loop refreshInFlight uses above, rather than rendering this
+      // stale data and tearing down the progress bar as if the refresh were complete.
+      setTimeout(() => load(false), FIRST_LOAD_POLL_MS);
+      return;
+    }
 
     if (!refresh && data.asof === null) {
       firstLoadAttempts++;
