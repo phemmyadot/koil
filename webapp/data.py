@@ -31,7 +31,6 @@ import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 
 import webapp.db as db
-from webapp.tickers import TICKERS
 
 # How often the background loop wakes to gap-fetch prices, re-check the
 # ticker universe, and re-check earnings dates. One shared interval for all
@@ -148,7 +147,7 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
         return ticker, None, str(e) or type(e).__name__
 
 
-def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
+def warm_cache(tickers: list[str], force: bool = False) -> None:
     """Bulk-fetch raw OHLCV. Blocking; run this off the request path (startup
     + background refresher) except for the manual Refresh button, which
     passes force=True and accepts the wait.
@@ -174,7 +173,7 @@ def warm_cache(tickers: list[str] | None = None, force: bool = False) -> None:
     exit entirely, since "get everything as of right now" is the whole point
     of a manual refresh."""
     global _last_fetch_time, _fetch_progress
-    to_fetch = tickers or TICKERS
+    to_fetch = tickers
     now = time.time()
 
     if not force:

@@ -1307,11 +1307,10 @@ function hidePageOverlay() {
   document.getElementById("pageoverlay").style.display = "none";
 }
 
-// screen_progress -> fetch_progress -> compute_progress are three sequential
-// backend stages (rebuild_universe()'s screen_technicals() ->
-// refresh_and_compute()'s data.warm_cache() -> compute_all()), shown as ONE
-// continuous bar instead of three independent 0-99% bars that visibly reset
-// at each handoff: screening fills 0-33%, fetching 33-66%, computing 66-100%.
+// fetch_progress -> compute_progress are two sequential backend stages
+// (refresh_and_compute()'s data.warm_cache() -> compute_all()), shown as ONE
+// continuous bar instead of two independent 0-99% bars that visibly reset
+// at the handoff: fetching fills 0-50%, computing 50-100%.
 let realProgressTimer = null;
 function startRealProgressPolling() {
   const wrap = document.getElementById("progresswrap");
@@ -1327,21 +1326,16 @@ function startRealProgressPolling() {
   const poll = async () => {
     try {
       const meta = await (await fetch("/api/meta")).json();
-      const sp = meta.screen_progress;
       const fp = meta.fetch_progress;
       const cp = meta.compute_progress;
       if (cp && cp.total > 0) {
-        const pct = 200 / 3 + Math.min(100 / 3 - 0.1, (cp.done / cp.total) * (100 / 3));
+        const pct = 50 + Math.min(50 - 0.1, (cp.done / cp.total) * 50);
         fill.style.width = pct.toFixed(1) + "%";
         label.textContent = `Now computing… ${cp.done} of ${cp.total} tickers`;
       } else if (fp && fp.total > 0) {
-        const pct = 100 / 3 + Math.min(100 / 3 - 0.1, (fp.done / fp.total) * (100 / 3));
+        const pct = Math.min(50, (fp.done / fp.total) * 50);
         fill.style.width = pct.toFixed(1) + "%";
         label.textContent = `Now fetching tickers… ${fp.done} of ${fp.total}`;
-      } else if (sp && sp.total > 0) {
-        const pct = Math.min(100 / 3, (sp.done / sp.total) * (100 / 3));
-        fill.style.width = pct.toFixed(1) + "%";
-        label.textContent = `Now screening tickers… ${sp.done} of ${sp.total}`;
       }
     } catch (e) { /* keep showing the last known state */ }
   };
@@ -1378,14 +1372,13 @@ async function load(refresh) {
   try {
     meta = await (await fetch("/api/meta")).json();
   } catch (e) { /* refreshInFlight below just treats a failed /api/meta as "not in flight" */ }
-  // screen_progress/fetch_progress/compute_progress are global backend state
-  // (see app.py), not scoped to whichever request started them -- so a
-  // refresh survives a browser reload even though the JS state tracking it
-  // (realProgressTimer, the disabled button) doesn't. Without this check,
-  // reloading mid-refresh would silently render old cached data with no
-  // progress bar.
+  // fetch_progress/compute_progress are global backend state (see app.py),
+  // not scoped to whichever request started them -- so a refresh survives a
+  // browser reload even though the JS state tracking it (realProgressTimer,
+  // the disabled button) doesn't. Without this check, reloading mid-refresh
+  // would silently render old cached data with no progress bar.
   const refreshInFlight = meta
-    && (meta.screen_progress || meta.fetch_progress || meta.compute_progress);
+    && (meta.fetch_progress || meta.compute_progress);
   if (refresh || refreshInFlight) {
     // Full-page block only when there's no cached data to keep browsing -- otherwise just
     // the top progress bar, so a refresh (whether the user just clicked it, or one already
@@ -1616,7 +1609,7 @@ async function checkForBackgroundRefresh() {
   } catch (e) {
     return; // try again next tick
   }
-  if (!(meta.screen_progress || meta.fetch_progress || meta.compute_progress)) return;
+  if (!(meta.fetch_progress || meta.compute_progress)) return;
 
   startRealProgressPolling();
   const waitUntilDone = async () => {
@@ -1627,7 +1620,7 @@ async function checkForBackgroundRefresh() {
       setTimeout(waitUntilDone, BACKGROUND_WATCH_MS);
       return;
     }
-    if (m.screen_progress || m.fetch_progress || m.compute_progress) {
+    if (m.fetch_progress || m.compute_progress) {
       setTimeout(waitUntilDone, BACKGROUND_WATCH_MS);
       return;
     }

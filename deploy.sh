@@ -15,14 +15,10 @@ if [ -z "$DEPLOY_SH_REEXECED" ]; then
   exec bash "$0" "$@"
 fi
 
-# Bind-mounted as files in docker-compose.yml -- if they don't exist yet on
-# the host, Docker creates them as directories instead of files, which
-# breaks the webapp/__init__.py bootstrap. Ensure both exist as real files
-# before compose ever touches them (empty tickers.py must still be valid
-# Python, not just any empty file, so it's written properly, not touch'd).
-if [ ! -f webapp/tickers.py ]; then
-  printf '"""Bootstrap placeholder."""\n\nTICKERS = []\n' > webapp/tickers.py
-fi
+# Bind-mounted as a file in docker-compose.yml -- if it doesn't exist yet on
+# the host, Docker creates it as a directory instead of a file, which breaks
+# the db.py schema init. Ensure it exists as a real file before compose ever
+# touches it.
 if [ ! -f webapp/app_data.db ]; then
   touch webapp/app_data.db  # db.py creates the schema fresh in an empty file
 fi

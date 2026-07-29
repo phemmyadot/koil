@@ -1,31 +1,26 @@
 """
-Rebuild webapp/tickers.py from scratch.
+Universe candidate screening.
 
-Server-side filter narrows to cap/volume/price/exchange candidates via
-Yahoo's equity screener API; client-side filter then keeps only tickers
-whose latest close actually matches one of the three dashboard strategies'
-real entry conditions (VEXH, VCP, or VCPO -- see matches_vexh_setup/
-matches_vcp_setup/matches_vcpo_setup), instead of a generic trend/volatility
-stand-in unrelated to what the strategies look for.
-
-Run from the project root:
-    .\\.venv\\Scripts\\python.exe -m webapp.build_universe
+Server-side filter (fetch_candidates) narrows to cap/volume/price/exchange
+candidates via Yahoo's equity screener API -- symbols only, no price
+history. passes_technical_filters() then checks whether a candidate's
+latest close matches one of the three dashboard strategies' actual entry
+conditions (VEXH, VCP, or VCPO -- see matches_vexh_setup/matches_vcp_setup/
+matches_vcpo_setup), instead of a generic trend/volatility stand-in
+unrelated to what the strategies look for. app.py calls this against bars
+already fetched into the DB by the normal per-ticker fetch path -- there's
+no separate download here.
 
 Screening criteria default from the constants below but can be overridden via
 env vars (BUILD_UNIVERSE_MIN_CAP, BUILD_UNIVERSE_MIN_VOL, BUILD_UNIVERSE_PRICE_MIN,
-BUILD_UNIVERSE_PRICE_MAX, BUILD_UNIVERSE_EXCHANGES, BUILD_UNIVERSE_MERGE,
-BUILD_UNIVERSE_ALLOW_OTC) so criteria changes don't require a code push --
-just set the env var and rerun.
+BUILD_UNIVERSE_PRICE_MAX, BUILD_UNIVERSE_EXCHANGES, BUILD_UNIVERSE_ALLOW_OTC)
+so criteria changes don't require a code push -- just set the env var.
 """
 import os
 import time
 
-import numpy as np
 import pandas as pd
 import yfinance as yf
-
-OUT_PATH = os.path.join(os.path.dirname(__file__), "tickers.py")
-CHUNK = 100
 
 
 def _load_dotenv() -> None:
@@ -71,7 +66,6 @@ DEFAULT_MIN_CAP = int(os.environ.get("BUILD_UNIVERSE_MIN_CAP", 300_000_000))
 DEFAULT_MIN_VOL = int(os.environ.get("BUILD_UNIVERSE_MIN_VOL", 500_000))
 DEFAULT_PRICE_MIN = int(os.environ.get("BUILD_UNIVERSE_PRICE_MIN", 5))
 DEFAULT_PRICE_MAX = int(os.environ.get("BUILD_UNIVERSE_PRICE_MAX", 50))
-DEFAULT_MERGE = _env_bool("BUILD_UNIVERSE_MERGE")
 DEFAULT_ALLOW_OTC = _env_bool("BUILD_UNIVERSE_ALLOW_OTC")
 
 # Combine each strategy's two regime conditions with "or" (looser, lets more
@@ -176,93 +170,7 @@ def matches_vcpo_setup(df: pd.DataFrame, mode: str = DEFAULT_MATCH_MODE) -> bool
 
 
 def passes_technical_filters(df: pd.DataFrame) -> bool:
-    """Client-side filter: a ticker passes if its latest close matches ANY of
-    the three dashboard strategies' actual entry conditions (VEXH, VCP,
-    VCPO), rather than a generic SMA200/trend/volatility stand-in unrelated
-    to what the strategies themselves look for."""
+    """A ticker passes if its latest close matches ANY of the three dashboard strategies'
+    actual entry conditions (VEXH, VCP, VCPO), rather than a generic SMA200/trend/
+    volatility stand-in unrelated to what the strategies themselves look for."""
     return (matches_vexh_setup(df) or matches_vcp_setup(df) or matches_vcpo_setup(df))
-
-
-def screen_technicals(symbols: list[str], on_progress=None) -> list[str]:
-    """on_progress(done, total), if given, is called after each chunk --
-    lets callers (app.py) surface live progress the same way data.py's
-    warm_cache()/app.py's compute_all() already do, without this module
-    needing to know anything about app.py's global progress state."""
-    passed = []
-    total = len(symbols)
-    for i in range(0, total, CHUNK):
-        chunk = symbols[i:i + CHUNK]
-        t0 = time.time()
-        try:
-            df = yf.download(chunk, period="2y", interval="1d", group_by="ticker",
-                              progress=False, auto_adjust=False, threads=True)
-        except Exception as e:  # noqa: BLE001 - one bad chunk shouldn't kill the run
-            print(f"  chunk {i // CHUNK + 1}: download failed: {e}")
-            if on_progress:
-                on_progress(min(i + CHUNK, total), total)
-            continue
-        for sym in chunk:
-            try:
-                sub = df[sym] if len(chunk) > 1 else df
-                if passes_technical_filters(sub):
-                    passed.append(sym)
-            except Exception:  # noqa: BLE001 - per-symbol data issues are expected/skippable
-                continue
-        print(f"  chunk {i // CHUNK + 1}/{(total + CHUNK - 1) // CHUNK}: "
-              f"{len(chunk)} tickers in {time.time() - t0:.1f}s, {len(passed)} passing so far")
-        if on_progress:
-            on_progress(min(i + CHUNK, total), total)
-    return passed
-
-
-def write_tickers_file(tickers: list[str], note: str = "") -> None:
-    lines = [
-        '"""',
-        "Screened ticker universe for the exhaustion dashboard.",
-        "",
-        "Rebuild with: .venv/Scripts/python.exe -m webapp.build_universe",
-        "Base criteria: cap/volume/price/exchange floor (tunable, see",
-        "--min-cap/--min-vol), then kept only if the latest close matches",
-        "VEXH's, VCP's, or VCPO's actual entry condition.",
-    ]
-    if note:
-        lines.append(note)
-    lines += ['"""', "", "TICKERS = ["]
-    tickers = sorted(tickers)
-    for i in range(0, len(tickers), 8):
-        lines.append("    " + ", ".join(repr(t) for t in tickers[i:i + 8]) + ",")
-    lines.append("]")
-    with open(OUT_PATH, "w") as f:
-        f.write("\n".join(lines) + "\n")
-
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--min-cap", type=int, default=DEFAULT_MIN_CAP)
-    parser.add_argument("--min-vol", type=int, default=DEFAULT_MIN_VOL)
-    parser.add_argument("--merge", action="store_true", default=DEFAULT_MERGE,
-                         help="union with the existing webapp/tickers.py instead of replacing it "
-                              "(default from BUILD_UNIVERSE_MERGE)")
-    parser.add_argument("--allow-otc", action="store_true", default=DEFAULT_ALLOW_OTC,
-                         help="skip the major-exchange filter (allows OTC/Pink Sheet names through) "
-                              "(default from BUILD_UNIVERSE_ALLOW_OTC)")
-    args = parser.parse_args()
-
-    candidates = fetch_candidates(min_cap=args.min_cap, min_vol=args.min_vol,
-                                   exchanges=None if args.allow_otc else MAJOR_EXCHANGES)
-    print(f"Screening {len(candidates)} candidates for SMA200/SMA50/weekly-volatility criteria "
-          f"(cap>{args.min_cap:,}, vol>{args.min_vol:,})...")
-    passed = screen_technicals(candidates)
-
-    if args.merge:
-        from webapp.tickers import TICKERS as existing
-        before = len(existing)
-        merged = sorted(set(existing) | set(passed))
-        write_tickers_file(merged, note=f"Merged run: cap>{args.min_cap:,}, vol>{args.min_vol:,} added "
-                                         f"{len(merged) - before} new names on top of the base screen.")
-        print(f"\nDONE. {len(passed)} passed this run, merged with {before} existing -> {len(merged)} total.")
-    else:
-        write_tickers_file(passed)
-        print(f"\nDONE. {len(passed)} tickers passed all criteria out of {len(candidates)} candidates.")
-    print(f"Wrote {OUT_PATH}")

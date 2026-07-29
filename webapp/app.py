@@ -4,15 +4,24 @@ Run from the project root:
     .\\.venv\\Scripts\\python.exe -m uvicorn webapp.app:app --port 8123
 
 Architecture: fetch and compute are decoupled from the request path entirely
--- see webapp/refresh_architecture.md for the full rules. webapp/data.py
-owns a shared raw-OHLCV cache, gap-fetched on a fixed background-loop
-cadence (no per-request or per-page-load fetch ever happens). Whatever
-tickers' prices actually changed get recomputed; everything else is reused
-from the last compute pass. A page request is always just a fast in-memory
-read -- no network call, no per-request backtest run, regardless of how
-stale or fresh the underlying data happens to be at that moment.
+-- see webapp/refresh_architecture.md for the full rules. A page request is
+always just a fast in-memory read -- no network call, no per-request
+backtest run, regardless of how stale or fresh the data happens to be.
+
+The refresh cycle (see webapp/SCREENING_FETCH_REFACTOR.md), run by
+refresh_and_compute():
+  1. Fetch candidate tickers (Yahoo screener) -> save to DB (candidate_tickers).
+  2. Pull each candidate's price data -> save to DB (webapp/data.py, incremental
+     gap-fetch if already stored, full history if new).
+  3. Run the technical entry-condition filter once, over all candidates
+     (webapp/build_universe.py's passes_technical_filters). For each ticker
+     that passes: compute only if its bars checksum changed since last
+     compute -> save results to DB.
+
+Runs when: no computed data exists yet (cold start, blocks until done);
+the user clicks Refresh; the background loop wakes (every CHECK_INTERVAL).
+A plain page load with existing computed data just reads it -- no cycle.
 """
-import importlib
 import os
 import threading
 import time
@@ -46,7 +55,6 @@ import webapp.db as db
 import webapp.pdf_export as pdf_export
 import webapp.prebreak as prebreak
 import webapp.score as score
-import webapp.tickers as tickers_module
 import webapp.strategy_common as strategy_common
 import webapp.strategy_vcp as strategy_vcp
 import webapp.strategy_vcpo as strategy_vcpo
@@ -62,7 +70,6 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Exhaustion Dashboard", lifespan=_lifespan)
 
-TICKERS = tickers_module.TICKERS
 _computed: list[dict] = []
 _computed_errors: dict[str, str] = {}
 _computed_asof: str | None = None
@@ -97,18 +104,10 @@ _load_computed_from_db()
 # Live progress for the current compute_all() call, if one is in flight.
 _compute_progress: dict[str, int] | None = None
 
-# Live progress for rebuild_universe()'s screen_technicals() chunk loop.
-_screen_progress: dict[str, int] | None = None
-
 
 def compute_progress() -> dict[str, int] | None:
     with _compute_lock:
         return dict(_compute_progress) if _compute_progress is not None else None
-
-
-def screen_progress() -> dict[str, int] | None:
-    with _compute_lock:
-        return dict(_screen_progress) if _screen_progress is not None else None
 
 _STRATEGY_MODULES = {"vexh": strategy_vexh, "strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
 
@@ -128,12 +127,9 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
     try:
         if bars.empty:
             raise ValueError("no data")
-        # Derived from the SAME bars object used to compute below, not a separate later DB
-        # read (compute_all() used to re-read db.get_last_bar_close() after _compute_one()
-        # returned -- if a concurrent fetch updated that ticker's bars in between, the
-        # payload (computed off old bars) got stored under a fingerprint reflecting NEWER
-        # bars, permanently masking the fact that a real recompute was still needed).
-        fingerprint = f"{bars.index[-1].strftime('%Y-%m-%d')}|{float(bars.Close.iloc[-1])}"
+        # Read from the DB here (not derived from the in-memory bars object) so the checksum
+        # matches exactly what db.get_bars_checksum() will compare against on the next pass.
+        checksum = db.get_bars_checksum(ticker)
         # VCP/VCPO need identical ATR/EMA/resistance -- compute once, share the dict (~17ms/ticker saved).
         # VEXH computes its own indicators (different set entirely), so it gets ind=None.
         try:
@@ -179,35 +175,24 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
 
 
 def _active_tickers() -> list[str]:
-    """TICKERS (the screened universe) plus any ticker a client has ever reported as
-    watchlisted -- a watchlisted ticker that later fails re-screening must keep being
+    """Candidate tickers (from the DB table -- see step 1 of the cycle in this module's
+    docstring, NOT a live Yahoo screener call) plus any ticker a client has ever reported as
+    watchlisted -- a watchlisted ticker that later fails the technical filter must keep being
     fetched/computed, or its saved watchlist row silently goes stale forever."""
+    candidates = db.get_candidate_tickers()
     watchlisted = db.get_watchlist_tickers()
-    seen = set(TICKERS)
-    return TICKERS + [tk for tk in watchlisted if tk not in seen]
-
-
-def _bar_fingerprint(ticker: str) -> str | None:
-    """last_bar_date alone isn't enough to detect a change -- Yahoo can revise a same-day
-    bar's Close as the session settles without the date moving at all, which silently
-    looked like "nothing changed" to compute_all()'s reuse check. Folding the close price
-    into the fingerprint catches that: same date, different close -> different fingerprint
-    -> forced recompute."""
-    last_bar_date = db.get_last_bar_date(ticker)
-    if last_bar_date is None:
-        return None
-    close = db.get_last_bar_close(ticker, last_bar_date)
-    return f"{last_bar_date}|{close}"
+    seen = set(candidates)
+    return candidates + [tk for tk in watchlisted if tk not in seen]
 
 
 def compute_all(force: bool = False) -> None:
-    """Recompute only tickers whose bars changed since the last pass; staleness keyed off
-    _bar_fingerprint() (date + close), not fetch time. force=True (manual Refresh) skips the
-    reuse check entirely and recomputes every active ticker -- a "hard refresh" that only
-    forced the fetch phase (data.warm_cache) but still let compute_all() reuse a matching
-    fingerprint could never actually recompute a ticker whose cached payload was wrong for
-    reasons the fingerprint alone can't detect (e.g. an entry poisoned by a since-fixed race).
-    Never runs two passes concurrently -- see _compute_pass_lock."""
+    """Runs the technical filter once, up front, over every active ticker's stored bars --
+    membership in the universe is decided here, a single time, not per ticker on each reuse
+    check (see webapp/SCREENING_FETCH_REFACTOR.md). Tickers that pass are then recomputed
+    only if their bars checksum (db.get_bars_checksum(), a hash of every stored bar) changed
+    since the last pass; force=True (manual Refresh) skips the reuse check entirely and
+    recomputes every filtered ticker. Never runs two passes concurrently -- see
+    _compute_pass_lock."""
     global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
 
     if not _compute_pass_lock.acquire(blocking=False):
@@ -219,18 +204,28 @@ def compute_all(force: bool = False) -> None:
             prior_source_fetch = dict(_computed_source_fetch)
             prior_errors = dict(_computed_errors)
 
+        filtered_tickers = []
+        for tk in _active_tickers():
+            bars = data.get_bars(tk)
+            try:
+                passes = bars is not None and not bars.empty and build_universe.passes_technical_filters(bars)
+            except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
+                passes = False
+            if passes:
+                filtered_tickers.append(tk)
+
         to_compute = []
         reused_payloads: dict[str, dict] = {}
         reused_source_fetch: dict[str, str] = {}
         reused_errors: dict[str, str] = {}
-        for tk in _active_tickers():
-            fingerprint = _bar_fingerprint(tk)
+        for tk in filtered_tickers:
+            checksum = db.get_bars_checksum(tk)
             prior_payload = prior_by_ticker.get(tk)
             # Bars unchanged AND the cached payload's shape is current -- otherwise force a recompute even
             # though bars didn't change, so a payload-shape change (PAYLOAD_SCHEMA_VERSION bump) can't leave
             # old-shaped entries frozen in the cache forever just because that ticker's bars happen to be stable.
             shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
-            if not force and fingerprint is not None and prior_source_fetch.get(tk) == fingerprint and shape_current:
+            if not force and checksum is not None and prior_source_fetch.get(tk) == checksum and shape_current:
                 if tk in prior_by_ticker:
                     reused_payloads[tk] = prior_payload
                     reused_source_fetch[tk] = fingerprint
@@ -253,9 +248,9 @@ def compute_all(force: bool = False) -> None:
                     with _compute_lock:
                         _compute_progress["done"] += 1
             with _compute_lock:
-                # fingerprint comes from _compute_one() itself (derived from the exact bars it
-                # computed against), not a fresh DB read here -- a fresh read could observe
-                # bars a concurrent fetch already moved past what this payload was computed from.
+                # checksum comes from _compute_one() itself (read from the DB right before it
+                # computed), not a fresh DB read here -- a fresh read could observe bars a
+                # concurrent fetch already moved past what this payload was computed from.
                 new_source_fetch = {tk: fp for tk, payload, err, fp in results
                                      if payload is not None or err is not None}
                 _computed = list(reused_payloads.values()) + [p for _, p, _, _ in results if p is not None]
@@ -283,53 +278,21 @@ def compute_all(force: bool = False) -> None:
         _compute_pass_lock.release()
 
 
-def rebuild_universe() -> str | None:
-    """Re-screen Yahoo and overwrite webapp/tickers.py in-process; returns an error string on failure, None on success."""
-    global TICKERS, _screen_progress
-
-    def _on_progress(done: int, total: int) -> None:
-        # A nested function needs its own `global` declaration, separate from the enclosing function's.
-        global _screen_progress
-        with _compute_lock:
-            _screen_progress = {"done": done, "total": total}
-
-    try:
-        candidates = build_universe.fetch_candidates()
-        with _compute_lock:
-            _screen_progress = {"done": 0, "total": len(candidates)}
-        passed = build_universe.screen_technicals(candidates, on_progress=_on_progress)
-        build_universe.write_tickers_file(passed)
-    except Exception as e:  # noqa: BLE001 - fall back to the existing tickers.py
-        return str(e) or type(e).__name__
-    finally:
-        with _compute_lock:
-            _screen_progress = None
-    importlib.reload(tickers_module)
-    TICKERS = tickers_module.TICKERS
-    db.set_last_screened_at(time.time())
-    return None
-
-
-UNIVERSE_REFRESH_INTERVAL = 2 * 60 * 60  # matches data.CHECK_INTERVAL -- see refresh_architecture.md
-
-
-def _universe_refresh_if_needed() -> None:
-    """Automatic counterpart to the manual Refresh button, re-screening at most once every UNIVERSE_REFRESH_INTERVAL."""
-    last_screened = db.get_last_screened_at()
-    if last_screened is not None and time.time() - last_screened < UNIVERSE_REFRESH_INTERVAL:
-        return
-    err = rebuild_universe()
-    if err:
-        print(f"app: automatic universe refresh failed ({err}); keeping existing tickers.py")
-
-
 def refresh_and_compute(force: bool = False) -> None:
-    """Gap-fetch prices then recompute whatever changed; force=True re-fetches everything (manual Refresh).
-    Never runs two passes concurrently -- see _refresh_pass_lock."""
+    """The 3-step cycle (see webapp/SCREENING_FETCH_REFACTOR.md): fetch candidate tickers and
+    persist them, gap-fetch/full-fetch each one's price data, then run compute_all() (which
+    itself runs the technical filter once up front and recomputes only checksum-changed
+    tickers). force=True (manual Refresh) always runs the full cycle -- no fetch-time or
+    compute-caught-up short-circuit -- since a hard refresh must not be a no-op just because
+    a prior pass already looked complete. Never runs two passes concurrently -- see
+    _refresh_pass_lock."""
     if not _refresh_pass_lock.acquire(blocking=False):
         print("app: refresh_and_compute() already running -- skipping this overlapping call.")
         return
     try:
+        candidates = build_universe.fetch_candidates()
+        db.set_candidate_tickers(candidates, time.time())
+
         active = _active_tickers()
         fetch_time_before = data.last_fetch_time()
         data.warm_cache(active, force=force)
@@ -341,7 +304,7 @@ def refresh_and_compute(force: bool = False) -> None:
 
         if not force and fetch_time_before == fetch_time_after and compute_caught_up:
             print(f"app: nothing fetched this pass and compute is already caught up "
-                  f"({computed_count}/{len(TICKERS)}) -- skipping compute_all()'s per-ticker check entirely.")
+                  f"({computed_count}/{len(active)}) -- skipping compute_all()'s per-ticker check entirely.")
             return
         compute_all(force=force)
     finally:
@@ -356,7 +319,6 @@ def _on_startup():
         if not db.has_any_bars():
             print("app: DB is empty (no bars at all) -- running an eager fetch+compute.")
             try:
-                _universe_refresh_if_needed()
                 refresh_and_compute()
             except Exception as e:  # noqa: BLE001 - the loop below still starts either way
                 print(f"app: eager startup fetch+compute failed ({e}); will retry on the normal cadence.")
@@ -370,7 +332,6 @@ def _on_startup():
         while True:
             time.sleep(data.CHECK_INTERVAL)
             try:
-                _universe_refresh_if_needed()
                 refresh_and_compute()
             except Exception as e:  # noqa: BLE001 - one bad pass must not permanently kill the refresh loop
                 print(f"app: background refresh loop pass failed ({e}); will retry next cycle instead of stopping.")
@@ -380,10 +341,8 @@ def _on_startup():
 @app.get("/api/meta")
 def meta():
     return {
-        "total_tickers": len(TICKERS),
+        "total_tickers": len(db.get_candidate_tickers()),
         "last_fetch": data.last_fetch_time(),
-        # Non-null only while rebuild_universe()'s screening is actively running (earliest phase of a Refresh).
-        "screen_progress": screen_progress(),
         # Non-null only while a warm_cache() fetch is actively in flight.
         "fetch_progress": data.fetch_progress(),
         # Non-null only while compute_all() is actively running; never overlaps fetch_progress.
@@ -425,20 +384,17 @@ def debug_memory():
 
 
 def _run_manual_refresh() -> None:
-    err = rebuild_universe()
-    if err:
-        print(f"app: manual refresh's rebuild_universe() failed ({err}); keeping existing tickers.py")
     refresh_and_compute(force=True)
 
 
 @app.get("/api/tickers")
 def tickers(refresh: int = 0):
-    # refresh=1 starts the pipeline in the background and returns immediately -- it used to
-    # run rebuild_universe() + refresh_and_compute() inline and block on the response, which
-    # could take several minutes and got killed by Cloudflare Tunnel's timeout well before
-    # finishing. The frontend already polls /api/meta's screen/fetch/compute progress and
-    # re-fetches /api/tickers once done (see index.html's load()), so this now behaves the
-    # same way the background loop's own periodic refresh already does.
+    # refresh=1 starts the cycle in the background and returns immediately -- it used to
+    # run refresh_and_compute() inline and block on the response, which could take several
+    # minutes and got killed by Cloudflare Tunnel's timeout well before finishing. The
+    # frontend already polls /api/meta's fetch/compute progress and re-fetches /api/tickers
+    # once done (see index.html's load()), so this now behaves the same way the background
+    # loop's own periodic refresh already does.
     if refresh:
         threading.Thread(target=_run_manual_refresh, daemon=True).start()
     with _compute_lock:

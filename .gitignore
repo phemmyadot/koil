@@ -2,7 +2,6 @@ venv/
 .venv/
 __pycache__/
 .env
-webapp/tickers.py
 webapp/app_data.db
 webapp/app_data.db-wal
 webapp/app_data.db-shm

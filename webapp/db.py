@@ -17,6 +17,7 @@ connection. A single module-level connection + lock serializes all access,
 same discipline the old pickle caches used (each had a threading.Lock
 around their in-memory dict).
 """
+import hashlib
 import json
 import os
 import sqlite3
@@ -79,6 +80,11 @@ def _init_schema() -> None:
             CREATE TABLE IF NOT EXISTS watchlist_tickers (
                 ticker TEXT PRIMARY KEY,
                 added_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS candidate_tickers (
+                ticker TEXT PRIMARY KEY,
+                fetched_at REAL NOT NULL
             );
         """)
     _migrate_universe_meta_date_to_epoch()
@@ -177,6 +183,22 @@ def get_watchlist_tickers() -> list[str]:
     return [r[0] for r in rows]
 
 
+def set_candidate_tickers(tickers: list[str], fetched_at: float) -> None:
+    """Replaces the full candidate ticker set -- the Yahoo screener result for the cycle
+    currently running. Written once per cycle (step 1) so every other step/reader
+    (_active_tickers(), the technical filter) reads this table instead of re-hitting Yahoo."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM candidate_tickers")
+        _conn.executemany("INSERT INTO candidate_tickers (ticker, fetched_at) VALUES (?, ?)",
+                           [(tk, fetched_at) for tk in tickers])
+
+
+def get_candidate_tickers() -> list[str]:
+    with _lock:
+        rows = _conn.execute("SELECT ticker FROM candidate_tickers").fetchall()
+    return [r[0] for r in rows]
+
+
 def has_any_computed() -> bool:
     """True if computed_results has ANY row at all -- same pure existence
     check as has_any_bars(), for the same reason: bars can exist (so the
@@ -201,16 +223,25 @@ def get_last_bar_date(ticker: str) -> str | None:
     return row[0] if row else None
 
 
-def get_last_bar_close(ticker: str, date: str) -> float | None:
-    """Close price stored for this ticker on `date`. Yahoo can revise a same-day bar's
-    Close as the session settles without changing last_bar_date at all (still today's
-    date) -- compute_all()'s reuse check needs this alongside the date, or a same-day
-    price correction silently never triggers a recompute."""
+def get_bars_checksum(ticker: str) -> str | None:
+    """Hash of every stored bar for this ticker (date + OHLCV, in date order) -- the
+    staleness key compute_all() reuses a cached payload against. A last-bar-only
+    fingerprint (date + close) misses a revision to an EARLIER bar in the history (Yahoo
+    has been observed revising settled data, not just the current session's still-open
+    bar); hashing the whole stored history catches any change anywhere in it. None if
+    this ticker has no bars stored at all."""
     with _lock:
-        row = _conn.execute(
-            "SELECT close FROM bars WHERE ticker = ? AND date = ?", (ticker, date)
-        ).fetchone()
-    return row[0] if row else None
+        rows = _conn.execute(
+            "SELECT date, open, high, low, close, volume FROM bars WHERE ticker = ? ORDER BY date",
+            (ticker,)
+        ).fetchall()
+    if not rows:
+        return None
+    h = hashlib.sha256()
+    for row in rows:
+        h.update("|".join(str(v) for v in row).encode())
+        h.update(b"\n")
+    return h.hexdigest()
 
 
 def get_fetched_at(ticker: str) -> float | None:
@@ -355,9 +386,9 @@ def load_all_fetch_meta() -> tuple[dict[str, float], dict[str, str]]:
 def get_computed(ticker: str) -> tuple[dict | None, str | None, str | None]:
     """Returns (payload, source_bar_date, error) for one ticker. payload
     is None if the last compute attempt for this ticker errored.
-    source_bar_date is app.py's _bar_fingerprint() this result was computed
-    from ("date|close", not a bare date -- see its docstring) -- the
-    staleness key: recompute only if the current fingerprint no longer matches."""
+    source_bar_date is the get_bars_checksum() value this result was computed
+    from -- the staleness key: recompute only if the current checksum no
+    longer matches."""
     with _lock:
         row = _conn.execute(
             "SELECT payload, source_bar_date, error FROM computed_results WHERE ticker = ?",

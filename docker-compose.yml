@@ -7,14 +7,12 @@ services:
     env_file:
       - .env
     volumes:
-      # tickers.py is generated at runtime by the daily universe re-screen.
       # app_data.db (+ its WAL sidecar files) is the single SQLite database
-      # backing everything else -- price bars, computed strategy results,
-      # earnings dates, and the daily-screen marker (see webapp/db.py) --
+      # backing everything -- price bars, computed strategy results,
+      # candidate tickers, and earnings dates (see webapp/db.py) --
       # persisted here so a rebuild doesn't force a full re-screen/re-fetch/
       # recompute of ~2000 tickers against Yahoo (and several minutes of
       # pure CPU work) on every deploy.
-      - ./webapp/tickers.py:/app/webapp/tickers.py
       - ./webapp/app_data.db:/app/webapp/app_data.db
       - ./webapp/app_data.db-wal:/app/webapp/app_data.db-wal
       - ./webapp/app_data.db-shm:/app/webapp/app_data.db-shm

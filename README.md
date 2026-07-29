@@ -57,16 +57,12 @@ Then open `http://127.0.0.1:8123`.
   classification, Wilder's ATR).
 - `score.py` — the 0-10 setup-quality score (see `webapp/scoring.md`), independent of any
   single strategy's own PF/WR verdict.
-- `tickers.py` — the screened ticker universe (generated file, see below). Gitignored --
-  each environment (dev/prod) keeps its own local copy, so pulling/pushing never conflicts
-  over it. **Not present on a fresh clone** -- run `build_universe.py` once before starting
-  the app for the first time.
-- `build_universe.py` — rebuilds `tickers.py` from scratch by screening Yahoo Finance for
-  cap/volume/price/exchange criteria, then filtering for SMA200/SMA50/weekly-volatility
-  technicals. Supports `--min-cap`, `--min-vol`, `--merge`, `--allow-otc` flags:
-  ```
-  .venv/Scripts/python.exe -m webapp.build_universe --min-cap 100000000 --min-vol 300000
-  ```
+- `build_universe.py` — `fetch_candidates()` screens Yahoo Finance for cap/volume/price/
+  exchange criteria (symbols only); `passes_technical_filters()` checks a candidate's stored
+  bars against each strategy's actual entry condition. Both are called by `app.py`'s refresh
+  cycle -- there's no separate CLI step and no generated `tickers.py` file; the screened
+  universe lives in the DB (`webapp/db.py`'s `candidate_tickers` table) and is rebuilt fresh
+  on every fetch/compute cycle.
 - `static/index.html` — single-page frontend (no build step, no framework).
 
 ## Key validated findings
