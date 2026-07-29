@@ -121,13 +121,19 @@ def _eval_strategy(module, ticker: str, bars, ind: dict | None) -> dict | None:
         return None
 
 
-def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
+def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]:
     bars = data.get_bars(ticker)
     if bars is None:
-        return ticker, None, data.get_error(ticker) or "no data"
+        return ticker, None, data.get_error(ticker) or "no data", None
     try:
         if bars.empty:
             raise ValueError("no data")
+        # Derived from the SAME bars object used to compute below, not a separate later DB
+        # read (compute_all() used to re-read db.get_last_bar_close() after _compute_one()
+        # returned -- if a concurrent fetch updated that ticker's bars in between, the
+        # payload (computed off old bars) got stored under a fingerprint reflecting NEWER
+        # bars, permanently masking the fact that a real recompute was still needed).
+        fingerprint = f"{bars.index[-1].strftime('%Y-%m-%d')}|{float(bars.Close.iloc[-1])}"
         # VCP/VCPO need identical ATR/EMA/resistance -- compute once, share the dict (~17ms/ticker saved).
         # VEXH computes its own indicators (different set entirely), so it gets ind=None.
         try:
@@ -167,9 +173,9 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None]:
             except Exception:  # noqa: BLE001
                 payload["setup_score"][strat_key] = None
         payload["_schema_version"] = PAYLOAD_SCHEMA_VERSION
-        return ticker, payload, None
+        return ticker, payload, None, fingerprint
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
-        return ticker, None, str(e) or type(e).__name__
+        return ticker, None, str(e) or type(e).__name__, fingerprint
 
 
 def _active_tickers() -> list[str]:
@@ -243,16 +249,18 @@ def compute_all() -> None:
                     with _compute_lock:
                         _compute_progress["done"] += 1
             with _compute_lock:
-                # Lock-ordering invariant: _compute_lock is always acquired before db._lock, never the reverse.
-                new_source_fetch = {tk: _bar_fingerprint(tk) for tk, payload, err in results
+                # fingerprint comes from _compute_one() itself (derived from the exact bars it
+                # computed against), not a fresh DB read here -- a fresh read could observe
+                # bars a concurrent fetch already moved past what this payload was computed from.
+                new_source_fetch = {tk: fp for tk, payload, err, fp in results
                                      if payload is not None or err is not None}
-                _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
-                _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}
+                _computed = list(reused_payloads.values()) + [p for _, p, _, _ in results if p is not None]
+                _computed_errors = {**reused_errors, **{t: e for t, _, e, _ in results if e is not None}}
                 _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
                 _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 computed_at = time.time()
                 # Only tickers actually (re)computed this pass get written; one bad DB write must not abort the pass.
-                for tk, payload, err in results:
+                for tk, payload, err, fp in results:
                     if payload is not None or err is not None:
                         source_bar_date = new_source_fetch.get(tk)
                         if source_bar_date is None:
