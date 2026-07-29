@@ -9,7 +9,9 @@ Status: design, not implemented.
    Before pulling, check the DB for that ticker's last candle date.
    No existing data → pull full history. Data exists → pull only from the
    last candle date onward (incremental).
-3. Filter + compute each ticker → save results to DB.
+3. Technical filter runs once, over all candidates. For each ticker that
+   passes: compute only if its data changed (checksum) since last compute
+   → save results to DB.
 
 One cycle, one download per ticker, everything persisted as it goes.
 
@@ -29,11 +31,16 @@ flowchart TD
         s2full["Pull full history"]
         s2gap["Pull from last candle\ndate onward"]
         s2save["Save to DB"]
-        s3["3. Filter + compute each ticker\n→ save results to DB"]
+        s3filt["3. Technical filter\n— runs ONCE, over all candidates"]
+        s3check{"Per filtered ticker:\nchecksum changed\nsince last compute?"}
+        s3compute["Compute\n→ save results to DB"]
+        s3reuse["Reuse cached result"]
         s1 --> s2check
         s2check -->|no| s2full --> s2save
         s2check -->|yes| s2gap --> s2save
-        s2save --> s3
+        s2save --> s3filt --> s3check
+        s3check -->|yes| s3compute
+        s3check -->|no| s3reuse
     end
 
     cycle --> serve
@@ -59,9 +66,20 @@ flowchart TD
 Empty DB (fresh deploy, wiped DB) — nothing exists yet for the app to
 serve, so the first load waits until the cycle finishes.
 
-## To do before writing code
+## Resolved
 
-- `_active_tickers()` / candidate table: make sure nothing double-fetches
-  or double-calls Yaho screener in one cycle.
-- `compute_all()`'s existing "reuse if bars unchanged" logic needs to still
-  run the pass/fail filter, not skip it for reused tickers.
+- **No double screener call.** `_active_tickers()` only reads the candidate
+  table (+ watchlist) from the DB. It never calls the Yahoo screener
+  itself — step 1 of the cycle is the only place that happens, once, before
+  `_active_tickers()` is read.
+- **Filter runs once, up front — not per ticker on reuse.** `compute_all()`
+  runs the technical filter a single time over all candidates, first thing.
+  Only tickers that pass move on to the per-ticker checksum check; only
+  those whose checksum changed get recomputed, the rest reuse their cached
+  result. The filter itself isn't re-run per ticker as part of the reuse
+  decision.
+- **Checksum, not last-bar-only fingerprint.** "Unchanged" is decided by
+  hashing all of a ticker's stored bars (date + OHLCV), not just the most
+  recent one. The current code only fingerprints the last bar's date+close,
+  which misses a revision to an earlier bar in the history — a full
+  checksum catches that too, for a small, still-cheap (no network) cost.
