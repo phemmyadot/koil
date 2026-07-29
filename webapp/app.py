@@ -181,9 +181,23 @@ def _active_tickers() -> list[str]:
     return TICKERS + [tk for tk in watchlisted if tk not in seen]
 
 
+def _bar_fingerprint(ticker: str) -> str | None:
+    """last_bar_date alone isn't enough to detect a change -- Yahoo can revise a same-day
+    bar's Close as the session settles without the date moving at all, which silently
+    looked like "nothing changed" to compute_all()'s reuse check. Folding the close price
+    into the fingerprint catches that: same date, different close -> different fingerprint
+    -> forced recompute."""
+    last_bar_date = db.get_last_bar_date(ticker)
+    if last_bar_date is None:
+        return None
+    close = db.get_last_bar_close(ticker, last_bar_date)
+    return f"{last_bar_date}|{close}"
+
+
 def compute_all() -> None:
-    """Recompute only tickers whose bars changed since the last pass; staleness keyed off last_bar_date, not fetch time.
-    Never runs two passes concurrently -- see _compute_pass_lock."""
+    """Recompute only tickers whose bars changed since the last pass; staleness keyed off
+    _bar_fingerprint() (date + close), not fetch time. Never runs two passes concurrently
+    -- see _compute_pass_lock."""
     global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
 
     if not _compute_pass_lock.acquire(blocking=False):
@@ -200,19 +214,19 @@ def compute_all() -> None:
         reused_source_fetch: dict[str, str] = {}
         reused_errors: dict[str, str] = {}
         for tk in _active_tickers():
-            last_bar_date = db.get_last_bar_date(tk)
+            fingerprint = _bar_fingerprint(tk)
             prior_payload = prior_by_ticker.get(tk)
             # Bars unchanged AND the cached payload's shape is current -- otherwise force a recompute even
             # though bars didn't change, so a payload-shape change (PAYLOAD_SCHEMA_VERSION bump) can't leave
             # old-shaped entries frozen in the cache forever just because that ticker's bars happen to be stable.
             shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
-            if last_bar_date is not None and prior_source_fetch.get(tk) == last_bar_date and shape_current:
+            if fingerprint is not None and prior_source_fetch.get(tk) == fingerprint and shape_current:
                 if tk in prior_by_ticker:
                     reused_payloads[tk] = prior_payload
-                    reused_source_fetch[tk] = last_bar_date
+                    reused_source_fetch[tk] = fingerprint
                 elif tk in prior_errors:
                     reused_errors[tk] = prior_errors[tk]
-                    reused_source_fetch[tk] = last_bar_date
+                    reused_source_fetch[tk] = fingerprint
                 else:
                     to_compute.append(tk)  # stale bookkeeping, e.g. after a cache format change
             else:
@@ -230,7 +244,7 @@ def compute_all() -> None:
                         _compute_progress["done"] += 1
             with _compute_lock:
                 # Lock-ordering invariant: _compute_lock is always acquired before db._lock, never the reverse.
-                new_source_fetch = {tk: db.get_last_bar_date(tk) for tk, payload, err in results
+                new_source_fetch = {tk: _bar_fingerprint(tk) for tk, payload, err in results
                                      if payload is not None or err is not None}
                 _computed = list(reused_payloads.values()) + [p for _, p, _ in results if p is not None]
                 _computed_errors = {**reused_errors, **{t: e for t, _, e in results if e is not None}}

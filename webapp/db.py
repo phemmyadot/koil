@@ -201,6 +201,18 @@ def get_last_bar_date(ticker: str) -> str | None:
     return row[0] if row else None
 
 
+def get_last_bar_close(ticker: str, date: str) -> float | None:
+    """Close price stored for this ticker on `date`. Yahoo can revise a same-day bar's
+    Close as the session settles without changing last_bar_date at all (still today's
+    date) -- compute_all()'s reuse check needs this alongside the date, or a same-day
+    price correction silently never triggers a recompute."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT close FROM bars WHERE ticker = ? AND date = ?", (ticker, date)
+        ).fetchone()
+    return row[0] if row else None
+
+
 def get_fetched_at(ticker: str) -> float | None:
     with _lock:
         row = _conn.execute(
@@ -343,9 +355,9 @@ def load_all_fetch_meta() -> tuple[dict[str, float], dict[str, str]]:
 def get_computed(ticker: str) -> tuple[dict | None, str | None, str | None]:
     """Returns (payload, source_bar_date, error) for one ticker. payload
     is None if the last compute attempt for this ticker errored.
-    source_bar_date is the last_bar_date this result was computed from --
-    the staleness key: recompute only if get_last_bar_date(ticker) no
-    longer matches this value."""
+    source_bar_date is app.py's _bar_fingerprint() this result was computed
+    from ("date|close", not a bare date -- see its docstring) -- the
+    staleness key: recompute only if the current fingerprint no longer matches."""
     with _lock:
         row = _conn.execute(
             "SELECT payload, source_bar_date, error FROM computed_results WHERE ticker = ?",
