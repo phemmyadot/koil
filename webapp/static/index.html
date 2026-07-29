@@ -1362,6 +1362,19 @@ const FIRST_LOAD_POLL_MS = 3000;
 const FIRST_LOAD_MAX_ATTEMPTS = 100;
 let firstLoadAttempts = 0;
 
+function applyRateLimitState(meta) {
+  const btn = document.getElementById("refresh");
+  const until = meta && meta.rate_limited_until;
+  if (until && until * 1000 > Date.now()) {
+    const mins = Math.ceil((until * 1000 - Date.now()) / 60000);
+    btn.disabled = true;
+    btn.title = `Yahoo rate-limited the last refresh attempt -- try again in ~${mins} min.`;
+    return true;
+  }
+  btn.title = "";
+  return false;
+}
+
 async function load(refresh) {
   const btn = document.getElementById("refresh");
   btn.disabled = true;
@@ -1372,6 +1385,7 @@ async function load(refresh) {
   try {
     meta = await (await fetch("/api/meta")).json();
   } catch (e) { /* refreshInFlight below just treats a failed /api/meta as "not in flight" */ }
+  if (applyRateLimitState(meta)) return;
   // fetch_progress/compute_progress are global backend state (see app.py),
   // not scoped to whichever request started them -- so a refresh survives a
   // browser reload even though the JS state tracking it (realProgressTimer,
@@ -1409,6 +1423,15 @@ async function load(refresh) {
     }
 
     if (!refresh && data.asof === null) {
+      let freshMeta = null;
+      try {
+        freshMeta = await (await fetch("/api/meta")).json();
+      } catch (e) { /* fall through to the normal retry/cap handling below */ }
+      if (applyRateLimitState(freshMeta)) {
+        stopRealProgressPolling();
+        showPageOverlay("Yahoo rate-limited the last refresh attempt -- see the Refresh button for when to retry.");
+        return;
+      }
       firstLoadAttempts++;
       if (firstLoadAttempts >= FIRST_LOAD_MAX_ATTEMPTS) {
         stopRealProgressPolling();
@@ -1429,7 +1452,7 @@ async function load(refresh) {
     stopRealProgressPolling();
     render(data);
     hidePageOverlay();
-    btn.disabled = false;
+    if (!applyRateLimitState(meta)) btn.disabled = false;
     // Unconditional, not gated on refresh -- startRealProgressPolling() shows
     // progresswrap on BOTH the manual-Refresh and cold-start paths, so it must
     // be hidden on both.
@@ -1601,14 +1624,15 @@ load(false);
 // even left running indefinitely.
 const BACKGROUND_WATCH_MS = 20000;
 async function checkForBackgroundRefresh() {
-  // Don't double up with an already-visible progress bar.
-  if (realProgressTimer) return;
   let meta;
   try {
     meta = await (await fetch("/api/meta")).json();
   } catch (e) {
     return; // try again next tick
   }
+  applyRateLimitState(meta);
+  // Don't double up with an already-visible progress bar.
+  if (realProgressTimer) return;
   if (!(meta.fetch_progress || meta.compute_progress)) return;
 
   startRealProgressPolling();

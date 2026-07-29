@@ -47,6 +47,7 @@ PAYLOAD_SCHEMA_VERSION = 5
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
+from yfinance.exceptions import YFRateLimitError
 
 import webapp.build_universe as build_universe
 import webapp.csv_export as csv_export
@@ -84,6 +85,9 @@ _refresh_pass_lock = threading.Lock()
 # Serializes compute_all() itself, since it's also called directly from _on_startup(),
 # bypassing _refresh_pass_lock.
 _compute_pass_lock = threading.Lock()
+
+RATE_LIMIT_BACKOFF = 20 * 60
+_rate_limited_until: float | None = None
 
 
 def _load_computed_from_db() -> None:
@@ -169,9 +173,9 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
             except Exception:  # noqa: BLE001
                 payload["setup_score"][strat_key] = None
         payload["_schema_version"] = PAYLOAD_SCHEMA_VERSION
-        return ticker, payload, None, fingerprint
+        return ticker, payload, None, checksum
     except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
-        return ticker, None, str(e) or type(e).__name__, fingerprint
+        return ticker, None, str(e) or type(e).__name__, checksum
 
 
 def _active_tickers() -> list[str]:
@@ -286,12 +290,24 @@ def refresh_and_compute(force: bool = False) -> None:
     compute-caught-up short-circuit -- since a hard refresh must not be a no-op just because
     a prior pass already looked complete. Never runs two passes concurrently -- see
     _refresh_pass_lock."""
+    global _rate_limited_until
+
     if not _refresh_pass_lock.acquire(blocking=False):
         print("app: refresh_and_compute() already running -- skipping this overlapping call.")
         return
     try:
-        candidates = build_universe.fetch_candidates()
-        db.set_candidate_tickers(candidates, time.time())
+        try:
+            candidates = build_universe.fetch_candidates()
+            db.set_candidate_tickers(candidates, time.time())
+            _rate_limited_until = None
+        except YFRateLimitError:
+            _rate_limited_until = time.time() + RATE_LIMIT_BACKOFF
+            print(f"app: fetch_candidates() rate-limited by Yahoo; skipping this cycle "
+                  f"entirely, Refresh disabled for {RATE_LIMIT_BACKOFF // 60} minutes.")
+            return
+        except Exception as e:  # noqa: BLE001 - any other screener failure
+            print(f"app: fetch_candidates() failed ({e}); falling back to the existing "
+                  f"candidate_tickers table for this pass instead of aborting the cycle.")
 
         active = _active_tickers()
         fetch_time_before = data.last_fetch_time()
@@ -347,6 +363,7 @@ def meta():
         "fetch_progress": data.fetch_progress(),
         # Non-null only while compute_all() is actively running; never overlaps fetch_progress.
         "compute_progress": compute_progress(),
+        "rate_limited_until": _rate_limited_until,
     }
 
 
