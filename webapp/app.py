@@ -200,10 +200,14 @@ def _bar_fingerprint(ticker: str) -> str | None:
     return f"{last_bar_date}|{close}"
 
 
-def compute_all() -> None:
+def compute_all(force: bool = False) -> None:
     """Recompute only tickers whose bars changed since the last pass; staleness keyed off
-    _bar_fingerprint() (date + close), not fetch time. Never runs two passes concurrently
-    -- see _compute_pass_lock."""
+    _bar_fingerprint() (date + close), not fetch time. force=True (manual Refresh) skips the
+    reuse check entirely and recomputes every active ticker -- a "hard refresh" that only
+    forced the fetch phase (data.warm_cache) but still let compute_all() reuse a matching
+    fingerprint could never actually recompute a ticker whose cached payload was wrong for
+    reasons the fingerprint alone can't detect (e.g. an entry poisoned by a since-fixed race).
+    Never runs two passes concurrently -- see _compute_pass_lock."""
     global _computed, _computed_errors, _computed_asof, _computed_source_fetch, _compute_progress
 
     if not _compute_pass_lock.acquire(blocking=False):
@@ -226,7 +230,7 @@ def compute_all() -> None:
             # though bars didn't change, so a payload-shape change (PAYLOAD_SCHEMA_VERSION bump) can't leave
             # old-shaped entries frozen in the cache forever just because that ticker's bars happen to be stable.
             shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
-            if fingerprint is not None and prior_source_fetch.get(tk) == fingerprint and shape_current:
+            if not force and fingerprint is not None and prior_source_fetch.get(tk) == fingerprint and shape_current:
                 if tk in prior_by_ticker:
                     reused_payloads[tk] = prior_payload
                     reused_source_fetch[tk] = fingerprint
@@ -339,7 +343,7 @@ def refresh_and_compute(force: bool = False) -> None:
             print(f"app: nothing fetched this pass and compute is already caught up "
                   f"({computed_count}/{len(TICKERS)}) -- skipping compute_all()'s per-ticker check entirely.")
             return
-        compute_all()
+        compute_all(force=force)
     finally:
         _refresh_pass_lock.release()
 
