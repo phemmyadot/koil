@@ -480,18 +480,16 @@ def api_estimate_entry(body: dict):
     bars = data.get_bars(ticker)
     sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
                  if bars is not None else {"support": [], "resistance": []})
-    # Only the single nearest support feeds Estimate Entry -- not a list, and resistance
-    # isn't used at all here (compute_sr_levels() itself still returns up to 3 of each,
-    # matching sr.pine's own default, for any other future consumer).
-    nearest_support = sr_levels["support"][:1]
+    nearest = sr_levels["support"][:1]
+    nearest_price = [p for p, _ in nearest]
 
     result = entry_estimate.estimate_entry(
         current_price=payload["price"],
         entry_price=open_position["entry_price"],
         avg_mae_wins_pct=avg_mae_wins_pct,
-        support_levels=nearest_support,
+        support_levels=nearest_price,
     )
-    result["sr_levels_considered"] = nearest_support
+    result["support_touches"] = nearest[0][1] if nearest else None
     return result
 
 

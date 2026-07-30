@@ -886,15 +886,10 @@ async function calcEstimateEntry(ticker, stratKey) {
   }
   eeLastEstimate = est;
 
-  // Only the single nearest support feeds the recommendation now (see app.py's
-  // /api/estimate_entry) -- at most one value, not a list.
-  const nearestSupport = (est.sr_levels_considered || [])[0];
-
   document.getElementById("eeResults").innerHTML = `
     <div class="modalsep"></div>
-    ${modalRow("Nearest support", nearestSupport != null ? "$" + nearestSupport.toFixed(2) : "&mdash; (none found)")}
     ${modalRow("MAE floor", "$" + est.mae_floor.toFixed(2))}
-    ${modalRow("Support used", "$" + est.support_used.toFixed(2))}
+    ${modalRow("Support used", "$" + est.support_used.toFixed(2) + (est.support_touches != null ? ` (${est.support_touches}x)` : ""))}
     <div class="eerecommend">
       <div class="eerecommendlabel">Recommended limit</div>
       <div class="eerecommendvalue">$${est.recommended_limit.toFixed(2)}</div>
