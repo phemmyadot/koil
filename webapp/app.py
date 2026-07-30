@@ -53,6 +53,7 @@ import webapp.build_universe as build_universe
 import webapp.csv_export as csv_export
 import webapp.data as data
 import webapp.db as db
+import webapp.entry_estimate as entry_estimate
 import webapp.pdf_export as pdf_export
 import webapp.prebreak as prebreak
 import webapp.score as score
@@ -453,6 +454,40 @@ def _resolve_export_strategy(body: dict) -> str:
     if strategy not in _EXPORT_STRATEGY_KEYS:
         raise HTTPException(status_code=400, detail=f"invalid strategy: {strategy!r}")
     return strategy
+
+
+@app.post("/api/estimate_entry")
+def api_estimate_entry(body: dict):
+    """Estimate Entry (see docs/superpowers/specs/2026-07-29-estimate-entry-design.md).
+    body: {ticker, strategy: "vexh"|"strategy_vcp"|"strategy_vcpo", support_levels: [float, ...]}.
+    Only valid for a ticker+strategy with a live open_position -- current_price alone isn't
+    a real simulated entry, so there's nothing honest to compute without one."""
+    ticker = body.get("ticker")
+    strategy = _resolve_export_strategy(body)
+    support_levels = body.get("support_levels") or []
+    if not isinstance(support_levels, list) or not all(isinstance(s, (int, float)) for s in support_levels):
+        raise HTTPException(status_code=400, detail="support_levels must be a list of numbers")
+
+    with _compute_lock:
+        payload = next((p for p in _computed if p["ticker"] == ticker), None)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"no computed data for {ticker!r}")
+
+    strat = payload.get(strategy)
+    open_position = strat.get("open_position") if strat else None
+    if open_position is None:
+        raise HTTPException(status_code=400, detail=f"{ticker} has no open {strategy} position")
+
+    avg_mae_wins_pct = strat.get("avg_mae_wins_pct")
+    if avg_mae_wins_pct is None:
+        raise HTTPException(status_code=400, detail=f"{ticker}/{strategy} has no avg_mae_wins_pct")
+
+    return entry_estimate.estimate_entry(
+        current_price=payload["price"],
+        entry_price=open_position["entry_price"],
+        avg_mae_wins_pct=avg_mae_wins_pct,
+        support_levels=support_levels,
+    )
 
 
 @app.post("/api/export/pdf")

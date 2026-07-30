@@ -231,6 +231,26 @@
   .plcalc .plnote { font-size: 11px; color: var(--muted); margin: 6px 2px 0; line-height: 1.4; }
   .plcalc .pllegend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin: 4px 2px 0; flex-wrap: wrap; }
   .modalnote { color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .estimateentrybtn { width: 100%; padding: 7px 0; margin-top: 4px; border: 1px solid var(--accent);
+                       background: var(--accent-bg); color: var(--accent); border-radius: 7px;
+                       font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .eecalc .formrow { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+                      font-size: 12.5px; margin: 6px 0; }
+  .eecalc .formrow label { color: var(--muted); text-transform: uppercase; font-size: 11px;
+                            letter-spacing: 0.04em; flex: 1 1 auto; }
+  .eecalc .formrow input[type=number] { width: 110px; text-align: right; }
+  .eecalc .modebtn { width: 100%; padding: 7px 0; margin-top: 4px; border: 1px solid var(--line);
+                      background: var(--bg); color: var(--muted); border-radius: 7px; font-size: 12.5px;
+                      font-weight: 600; cursor: pointer; }
+  .eecalc .eeoptiontoggle { display: block; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .eecalc .eerecommend { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+                          padding: 10px 12px; margin-top: 6px; text-align: center; }
+  .eecalc .eerecommendlabel { color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+                               letter-spacing: 0.04em; }
+  .eecalc .eerecommendvalue { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
+                               color: var(--accent); }
+  .eecalc .eerecommendpct { color: var(--muted); font-size: 11px; }
+  .modalbox:has(.eecalc) { width: 420px; }
 
   @media (max-width: 1080px) {
     .cardgrid { grid-template-columns: repeat(2, 1fr); }
@@ -807,6 +827,119 @@ function showPlCalculator() {
   renderPlCalcForm();
 }
 
+const EE_DAYS_ELAPSED_TO_DIP = 3;   // matches the design doc's fixed assumption
+const EE_DAYS_TO_TP = 15;           // matches the design doc's fixed assumption
+
+function showEstimateModal(ticker, stratKey) {
+  const r = (lastData?.tickers || []).find(t => t.ticker === ticker);
+  const s = r?.[stratKey];
+  const op = s?.open_position;
+  if (!r || !s || !op) return; // stale modal id after a re-render; nothing to show
+
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modaltitle">Estimate Entry &mdash; ${ticker}</div>
+    <div class="modalbody eecalc" id="eeModalBody">
+      ${modalRow("Current price", "$" + r.price.toFixed(2))}
+      ${modalRow("Sim entry", "$" + op.entry_price.toFixed(2))}
+      ${modalRow("Avg MAE (wins)", "-" + s.avg_mae_wins_pct + "%")}
+      <div class="modalsep"></div>
+      <div class="formrow"><label>Nearest support below price</label>
+        <input type="number" id="eeSupport" step="0.01" placeholder="e.g. 58.50"></div>
+      <button type="button" class="modebtn" onclick="calcEstimateEntry('${ticker}','${stratKey}')">Calculate</button>
+      <div id="eeResults"></div>
+
+      <div class="modalsep"></div>
+      <label class="eeoptiontoggle"><input type="checkbox" id="eeShowOptions" onchange="toggleEeOptions()"> Show as option</label>
+      <div id="eeOptionsForm" style="display:none">
+        <div class="formrow"><label>Strike</label><input type="number" id="eeStrike" step="0.5" oninput="calcEstimateEntry('${ticker}','${stratKey}')"></div>
+        <div class="formrow"><label>Days to expiry</label><input type="number" id="eeDte" step="1" oninput="calcEstimateEntry('${ticker}','${stratKey}')"></div>
+        <div class="formrow"><label>IV (%)</label><input type="number" id="eeIv" step="1" oninput="calcEstimateEntry('${ticker}','${stratKey}')"></div>
+        <div id="eeOptionResults"></div>
+      </div>
+    </div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+}
+
+function toggleEeOptions() {
+  const on = document.getElementById("eeShowOptions").checked;
+  document.getElementById("eeOptionsForm").style.display = on ? "" : "none";
+}
+
+// eeLastEstimate holds the most recent /api/estimate_entry response so the options
+// section (recomputed locally on every keystroke) doesn't need to re-POST just to
+// read recommended_limit again.
+let eeLastEstimate = null;
+
+async function calcEstimateEntry(ticker, stratKey) {
+  const supportVal = parseFloat(document.getElementById("eeSupport").value);
+  const support_levels = Number.isFinite(supportVal) ? [supportVal] : [];
+
+  let est;
+  try {
+    const res = await fetch("/api/estimate_entry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker, strategy: stratKey, support_levels }),
+    });
+    if (!res.ok) {
+      document.getElementById("eeResults").innerHTML = `<div class="modalnote">Failed: ${(await res.json()).detail || res.status}</div>`;
+      return;
+    }
+    est = await res.json();
+  } catch (e) {
+    document.getElementById("eeResults").innerHTML = `<div class="modalnote">Failed: ${e}</div>`;
+    return;
+  }
+  eeLastEstimate = est;
+
+  document.getElementById("eeResults").innerHTML = `
+    <div class="modalsep"></div>
+    ${modalRow("MAE floor", "$" + est.mae_floor.toFixed(2))}
+    ${modalRow("Support used", "$" + est.support_used.toFixed(2))}
+    <div class="eerecommend">
+      <div class="eerecommendlabel">Recommended limit</div>
+      <div class="eerecommendvalue">$${est.recommended_limit.toFixed(2)}</div>
+      <div class="eerecommendpct">${est.pct_below_current}% vs current</div>
+    </div>
+    <button type="button" class="modebtn" onclick="navigator.clipboard.writeText('${est.recommended_limit}')">Copy price</button>`;
+
+  if (document.getElementById("eeShowOptions").checked) updateEeOptions(ticker, stratKey);
+}
+
+function updateEeOptions(ticker, stratKey) {
+  const out = document.getElementById("eeOptionResults");
+  if (!eeLastEstimate) { out.innerHTML = ""; return; }
+  const r = (lastData?.tickers || []).find(t => t.ticker === ticker);
+  const op = r?.[stratKey]?.open_position;
+  const strike = parseFloat(document.getElementById("eeStrike").value);
+  const dte = parseFloat(document.getElementById("eeDte").value);
+  const ivPct = parseFloat(document.getElementById("eeIv").value);
+  if (!op || !Number.isFinite(strike) || !Number.isFinite(dte) || !Number.isFinite(ivPct) || dte <= 0 || ivPct <= 0) {
+    out.innerHTML = "";
+    return;
+  }
+  const iv = ivPct / 100;
+  const T_now = dte / 365;
+  const optionNow = blackScholes("call", r.price, strike, T_now, iv, RISK_FREE_RATE).price;
+
+  const T_dip = Math.max(dte - EE_DAYS_ELAPSED_TO_DIP, 0) / 365;
+  const optionDip = blackScholes("call", eeLastEstimate.recommended_limit, strike, T_dip, iv, RISK_FREE_RATE).price;
+
+  const T_tp = Math.max(dte - EE_DAYS_TO_TP, 0) / 365;
+  const optionTp = blackScholes("call", op.target, strike, T_tp, iv, RISK_FREE_RATE).price;
+
+  const expectedReturnPct = optionDip > 0 ? ((optionTp - optionDip) / optionDip * 100) : null;
+
+  out.innerHTML = `
+    <div class="modalsep"></div>
+    ${modalRow("Option now", "$" + optionNow.toFixed(2))}
+    ${modalRow("Option at dip (limit)", "$" + optionDip.toFixed(2))}
+    ${modalRow("Option at TP", "$" + optionTp.toFixed(2))}
+    ${expectedReturnPct != null ? modalRow("Expected return", (expectedReturnPct >= 0 ? "+" : "") + expectedReturnPct.toFixed(1) + "%") : ""}
+    <button type="button" class="modebtn" onclick="navigator.clipboard.writeText('${optionDip.toFixed(2)}')">Copy premium</button>
+    <div class="modalnote">Same-IV approximation -- IV at the dip may differ from IV now (selloffs often spike IV), so this is a planning aid, not a fill guarantee.</div>`;
+}
+
 // ---------------- Advance Filter ----------------
 // One Strategy radio (which strategy's stats to read) + Win Rate AND
 // Profit minimum-threshold sliders. See FILTER_ARCHITECTURE.md.
@@ -1019,7 +1152,7 @@ function statBadges(active, days, nTrades, wr, pf, modalId, pending) {
   ).join("") + `</span>`;
 }
 
-function strategyModal(name, s) {
+function strategyModal(name, s, ticker, stratKey) {
   const rows = [
     modalRow("Trades", s.n_trades),
     modalRow("Profit factor", s.profit_factor),
@@ -1053,12 +1186,17 @@ function strategyModal(name, s) {
     rows.push('<div class="modalsep"></div>');
     rows.push(`<div class="modalnote"><b>${s.verdict}</b>: ${s.verdict_reason || ""}</div>`);
   }
+ 
+  if (op) {
+    rows.push('<div class="modalsep"></div>');
+    rows.push(`<button type="button" class="estimateentrybtn" onclick="showEstimateModal('${ticker}','${stratKey}')">Estimate Entry</button>`);
+  }
   return registerModal(name, rows);
 }
 
-function strategyChips(s, name) {
+function strategyChips(s, name, ticker, stratKey) {
   if (!s) return '<span class="chip neutral">&mdash;</span>';
-  const id = strategyModal(name, s);
+  const id = strategyModal(name, s, ticker, stratKey);
   const days = s.open_position ? s.open_position.days_held : null;
   const pending = !!(s.signal_today && !s.open_position);
   return statBadges(!!s.open_position, days, s.n_trades, s.win_rate, s.profit_factor, id, pending);
@@ -1245,11 +1383,11 @@ function render(data) {
       <div class="scoresections">
         <div class="scorebox"><div class="strategygrid2">
           <div class="strategycell"><span class="strategyname">VEXH</span>
-            <div class="strategybody">${strategyChips(r.vexh, "Exhaustion")}</div></div>
+            <div class="strategybody">${strategyChips(r.vexh, "Exhaustion", r.ticker, "vexh")}</div></div>
           <div class="strategycell"><span class="strategyname">VCP</span>
-            <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master")}</div></div>
+            <div class="strategybody">${strategyChips(r.strategy_vcp, "VCP Master", r.ticker, "strategy_vcp")}</div></div>
           <div class="strategycell"><span class="strategyname">VCPO</span>
-            <div class="strategybody">${strategyChips(r.strategy_vcpo, "VCPO")}</div></div>
+            <div class="strategybody">${strategyChips(r.strategy_vcpo, "VCPO", r.ticker, "strategy_vcpo")}</div></div>
         </div></div>
       </div>
     </div>`;
