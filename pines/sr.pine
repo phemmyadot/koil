@@ -1,0 +1,144 @@
+//@version=6
+indicator("Adaptive SR Levels (Fixed Buffer Limit)", shorttitle="Adaptive SR", overlay=true, max_lines_count=400, max_labels_count=500)
+
+// =====================================================================
+// INPUTS & ADAPTIVE LOGIC
+// =====================================================================
+grp_sig = "Adaptive Signal Engine"
+autoStrength = input.bool(true, "Auto-Adapt Strength to Interval", group=grp_sig, tooltip="Automatically adjusts pivot lookbacks based on chart timeframe.")
+manualStrength = input.int(10, "Manual Pivot Strength", minval=2, maxval=50, group=grp_sig)
+
+// Pine Script limit for historical offset is 1498. 
+int MAX_ALLOWED_STRENGTH = 149 
+
+// Adaptive Interval Calculation with Integrated Hard Caps
+f_adaptiveStrength(bool auto, int manual, int max_allowed) =>
+    int strength = manual
+    if auto
+        if timeframe.isintraday
+            mult = timeframe.multiplier
+            strength := (mult < 15) ? math.min(20, mult * 2) : 15
+        else if timeframe.isdaily
+            strength := 10
+        else
+            strength := 7
+    
+    // Safety Force Capping
+    math.min(max_allowed, strength)
+
+// Resolve Pivot Strength
+pivotStrength = f_adaptiveStrength(autoStrength, manualStrength, MAX_ALLOWED_STRENGTH)
+
+atrLen = input.int(22, "ATR Length for Zone Tolerance", minval=2, group=grp_sig)
+
+grp_dash = "Visualization"
+showSRLevels = input.bool(true, "Show Support/Resistance Levels", group=grp_dash)
+SR_LEVELS_EACH_SIDE = input.int(3, "Levels to Show on Each Side", minval=1, maxval=10, group=grp_dash)
+
+// Dynamic Constants based on Volatility
+float SR_TOL_ATR = 0.75 
+float SR_TOL_PCT = 0.005
+
+// =====================================================================
+// DEFINITIONS & BUFFER ALLOCATIONS
+// =====================================================================
+int SR_MAX_ZONES = 60 
+
+// Use var arrays to persist data across bars efficiently
+var float[] zonePrice = array.new<float>()
+var int[]   zoneTouch = array.new<int>()
+var int[]   zoneBar   = array.new<int>()
+
+// CRITICAL FIX: Allocate historical buffer using a standard series variable.
+// This tricks the compiler into opening up lookback memory without passing the array ID itself.
+int bar_check = bar_index
+max_bars_back(bar_check, 500)
+
+// =====================================================================
+// ENGINE COMPUTATIONS
+// =====================================================================
+atrVal = ta.atr(atrLen)
+pivotLowPrice  = ta.pivotlow(low, pivotStrength, pivotStrength)
+pivotHighPrice = ta.pivothigh(high, pivotStrength, pivotStrength)
+
+f_addPivotZone(float p, float atr, float close_val, int strength) =>
+    tol = math.max(SR_TOL_ATR * atr, SR_TOL_PCT * close_val)
+    merged = false
+    
+    // Check if we have data to merge with
+    if array.size(zonePrice) > 0
+        for i = 0 to array.size(zonePrice) - 1
+            if not merged and math.abs(p - array.get(zonePrice, i)) <= tol
+                t = array.get(zoneTouch, i)
+                // Merge logic: Weighted average based on touch count
+                array.set(zonePrice, i, (array.get(zonePrice, i) * t + p) / (t + 1))
+                array.set(zoneTouch, i, t + 1)
+                array.set(zoneBar, i, bar_index - strength) // Store relative bar index safely
+                merged := true
+    
+    if not merged
+        array.push(zonePrice, p)
+        array.push(zoneTouch, 1)
+        array.push(zoneBar, bar_index - strength)
+        
+        // Cleanup old zones if too many
+        if array.size(zonePrice) > SR_MAX_ZONES
+            array.shift(zonePrice)
+            array.shift(zoneTouch)
+            array.shift(zoneBar)
+
+if not na(pivotHighPrice)
+    f_addPivotZone(pivotHighPrice, atrVal, close, pivotStrength)
+if not na(pivotLowPrice)
+    f_addPivotZone(pivotLowPrice, atrVal, close, pivotStrength)
+
+// =====================================================================
+// DYNAMIC DRAWINGS (Optimized for v6)
+// =====================================================================
+var line[] srLines = array.new<line>()
+var label[] srLabels = array.new<label>()
+
+if barstate.islast
+    // Clear old elements cleanly to prevent buffer overflow
+    while array.size(srLines) > 0
+        line.delete(array.pop(srLines))
+    while array.size(srLabels) > 0
+        label.delete(array.pop(srLabels))
+        
+    if showSRLevels and array.size(zonePrice) > 0
+        for side = 0 to 1
+            float lastPicked = na
+            for k = 1 to SR_LEVELS_EACH_SIDE
+                float best = na
+                int bestIdx = -1
+                
+                for i = 0 to array.size(zonePrice) - 1
+                    zp = array.get(zonePrice, i)
+                    isSide = (side == 0) ? (zp > close) : (zp < close)
+                    beyond = na(lastPicked) or (side == 0 ? zp > lastPicked : zp < lastPicked)
+                    closer = na(best) or (side == 0 ? zp < best : zp > best)
+                    
+                    if isSide and beyond and closer
+                        best := zp
+                        bestIdx := i
+                
+                if bestIdx >= 0
+                    lastPicked := best
+                    touches = array.get(zoneTouch, bestIdx)
+                    
+                    // Safety check: Ensure the start bar is within our allocated memory limits
+                    rawStartBar = array.get(zoneBar, bestIdx)
+                    startBar = math.max(bar_index - 499, rawStartBar)
+                    
+                    // Calculate line width and transparency
+                    lw = touches > 3 ? 2 : 1
+                    transp = math.max(15, 75 - (touches * 8))
+                    
+                    color lc = side == 0 ? color.new(color.red, transp) : color.new(color.green, transp)
+                    color labelColor = side == 0 ? color.new(color.red, 40) : color.new(color.green, 40)
+                    
+                    // Draw Line: Start from stored bar index to current + buffer
+                    array.push(srLines, line.new(x1=startBar, y1=best, x2=bar_index + 6, y2=best, color=lc, width=lw, style=line.style_dashed))
+                    
+                    if array.size(srLabels) <= 1000
+                        array.push(srLabels, label.new(x=bar_index + 6, y=best, text=str.tostring(best, "#.##") + " (" + str.tostring(touches) + "x)", style=label.style_label_left, textcolor=color.white, color=labelColor, size=size.small))

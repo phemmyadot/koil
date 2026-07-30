@@ -842,11 +842,7 @@ function showEstimateModal(ticker, stratKey) {
       ${modalRow("Current price", "$" + r.price.toFixed(2))}
       ${modalRow("Sim entry", "$" + op.entry_price.toFixed(2))}
       ${modalRow("Avg MAE (wins)", "-" + s.avg_mae_wins_pct + "%")}
-      <div class="modalsep"></div>
-      <div class="formrow"><label>Nearest support below price</label>
-        <input type="number" id="eeSupport" step="0.01" placeholder="e.g. 58.50"></div>
-      <button type="button" class="modebtn" onclick="calcEstimateEntry('${ticker}','${stratKey}')">Calculate</button>
-      <div id="eeResults"></div>
+      <div id="eeResults"><div class="modalnote">Computing&hellip;</div></div>
 
       <div class="modalsep"></div>
       <label class="eeoptiontoggle"><input type="checkbox" id="eeShowOptions" onchange="toggleEeOptions()"> Show as option</label>
@@ -858,6 +854,7 @@ function showEstimateModal(ticker, stratKey) {
       </div>
     </div>`;
   document.getElementById("modalBackdrop").style.display = "flex";
+  calcEstimateEntry(ticker, stratKey);
 }
 
 function toggleEeOptions() {
@@ -871,15 +868,12 @@ function toggleEeOptions() {
 let eeLastEstimate = null;
 
 async function calcEstimateEntry(ticker, stratKey) {
-  const supportVal = parseFloat(document.getElementById("eeSupport").value);
-  const support_levels = Number.isFinite(supportVal) ? [supportVal] : [];
-
   let est;
   try {
     const res = await fetch("/api/estimate_entry", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticker, strategy: stratKey, support_levels }),
+      body: JSON.stringify({ ticker, strategy: stratKey }),
     });
     if (!res.ok) {
       document.getElementById("eeResults").innerHTML = `<div class="modalnote">Failed: ${(await res.json()).detail || res.status}</div>`;
@@ -892,8 +886,13 @@ async function calcEstimateEntry(ticker, stratKey) {
   }
   eeLastEstimate = est;
 
+  // Only the single nearest support feeds the recommendation now (see app.py's
+  // /api/estimate_entry) -- at most one value, not a list.
+  const nearestSupport = (est.sr_levels_considered || [])[0];
+
   document.getElementById("eeResults").innerHTML = `
     <div class="modalsep"></div>
+    ${modalRow("Nearest support", nearestSupport != null ? "$" + nearestSupport.toFixed(2) : "&mdash; (none found)")}
     ${modalRow("MAE floor", "$" + est.mae_floor.toFixed(2))}
     ${modalRow("Support used", "$" + est.support_used.toFixed(2))}
     <div class="eerecommend">
