@@ -138,10 +138,13 @@ def summarize(trades: list[dict]) -> dict:
 
 
 def build_open_position(df: pd.DataFrame, entry_bar: int, entry_price: float, target: float,
-                         mae_pct: float) -> dict:
+                         mae_pct: float, stop: float | None = None) -> dict:
     """The open_position shape, shared by all three strategies. target is the one genuinely
     different input per strategy: VEXH's is the live Bollinger midline, VCP/VCPO's is a fixed
-    entry_price * (1 + tp_target_pct) level -- each strategy's run() computes it and hands it in."""
+    entry_price * (1 + tp_target_pct) level -- each strategy's run() computes it and hands it in.
+    stop is VCP/VCPO's live trailing stop as of the last bar (breakeven/ATR-trail adjusted, not
+    just the entry-time value) -- None for VEXH, which has no price-based stop at all (time-stop
+    only)."""
     last_close = float(df.Close.iloc[-1])
     days_held = (len(df) - 1) - entry_bar
     return {
@@ -152,6 +155,7 @@ def build_open_position(df: pd.DataFrame, entry_bar: int, entry_price: float, ta
         "days_held": days_held,
         "unrealized_pct": round((last_close / entry_price - 1) * 100, 2),
         "mae_pct": round(float(mae_pct), 2),
+        "stop": round(float(stop), 4) if stop is not None else None,
     }
 
 

@@ -129,7 +129,8 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
         entry_price = position["entry_price"]
         target = float(entry_price) * (1 + tp_target_pct / 100)
         mae_pct = (entry_price - position["low_since"]) / entry_price * 100
-        open_position = common.build_open_position(df, position["entry_i"], entry_price, target, mae_pct)
+        open_position = common.build_open_position(df, position["entry_i"], entry_price, target, mae_pct,
+                                                     stop=position["stop"])
     return trades, signal_today, in_position, tp_hit, open_position
 
 

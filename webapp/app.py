@@ -44,7 +44,7 @@ _compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
 # Bump whenever _compute_one()'s payload SHAPE changes (new/renamed/moved fields, not just new tickers/data) -- forces
 # compute_all() to recompute every ticker once instead of reusing an old-shaped cached payload forever just because
 # that ticker's bars happened not to change since the shape changed.
-PAYLOAD_SCHEMA_VERSION = 5
+PAYLOAD_SCHEMA_VERSION = 6
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles

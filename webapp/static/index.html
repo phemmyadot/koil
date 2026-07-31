@@ -898,7 +898,7 @@ function showTradeModal(ticker, stratKey) {
         <div class="formrow"><label>Entry Date</label><input type="date" id="tradeEntryDate" value="${today}"></div>
         <div class="formrow"><label>Entry Price</label><input type="number" id="tradeEntryPrice" step="0.01" value="${entryPriceDefault.toFixed(2)}"></div>
         <div class="formrow"><label>Take Profit</label><input type="number" id="tradeTpPrice" step="0.01" value="${op ? op.target : ""}"></div>
-        <div class="formrow"><label>Stop</label><input type="number" id="tradeStopPrice" step="0.01"></div>
+        <div class="formrow"><label>Stop</label><input type="number" id="tradeStopPrice" step="0.01" value="${op && op.stop != null ? op.stop : ""}"></div>
       </div>
       <div id="tradeOptionFields" class="optfields" style="display:none">
         <div class="formrow"><label>Side</label>
@@ -945,9 +945,10 @@ async function calcTradeEstimate(ticker, stratKey) {
     ${modalRow("Support used", "$" + est.support_used.toFixed(2) + (est.support_touches != null ? ` (${est.support_touches}x)` : ""))}
     ${modalRow("Recommended limit", `$${est.recommended_limit.toFixed(2)} (${est.pct_below_current}% vs current)`)}`;
 
-  // Prefill the trade form from the estimate: entry at the recommended limit, stop at the
-  // MAE floor (the same worst-case-winning-trade level the estimate is built from) -- both
-  // remain editable, this is a starting point, not a lock.
+  // Prefill entry at the recommended limit. Stop is already prefilled synchronously from the
+  // strategy's own computed op.stop where one exists (VCP/VCPO's live trailing stop) -- only
+  // fall back to the MAE floor here when the field is still empty (VEXH, which has no
+  // price-based stop at all). Both fields remain editable either way.
   const entryEl = document.getElementById("tradeEntryPrice");
   const stopEl = document.getElementById("tradeStopPrice");
   if (entryEl) entryEl.value = est.recommended_limit.toFixed(2);
