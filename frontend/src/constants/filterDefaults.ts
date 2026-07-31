@@ -1,5 +1,5 @@
 // Filter step tables and defaults. Ported verbatim from index.html's Advance Filter /
-// Pre-Breakout filter constants -- see webapp/FILTER_ARCHITECTURE.md for the filter-combination
+// Pre-Breakout filter constants -- see backend/FILTER_ARCHITECTURE.md for the filter-combination
 // rules these feed (all filters AND together; WR/PF are a dual-slider minimum-threshold pair).
 
 export const WR_STEPS = [0, 50, 70, 75] as const;

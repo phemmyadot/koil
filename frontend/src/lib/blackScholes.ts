@@ -1,5 +1,5 @@
 // Black-Scholes option pricing. Ported verbatim from index.html's embedded P/L calculator --
-// same Abramowitz-Stegun normal-CDF approximation as webapp/options_pricing.py (the backend's
+// same Abramowitz-Stegun normal-CDF approximation as backend/options_pricing.py (the backend's
 // Python port), kept numerically identical on purpose so client-side P/L calc estimates match
 // what the backend computes for stored option_value marks.
 

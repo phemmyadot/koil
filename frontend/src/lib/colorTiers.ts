@@ -1,7 +1,7 @@
 // Win-rate / profit-factor / trade-count color tiers. Ported verbatim from index.html
 // (wrColorClass/pfColorClass/tradeCountColorClass) and watchlist.html's identical copy --
 // watchlist.html's own comment said "Keep in sync with index.html's copy" (see
-// webapp/color-code.md), which is exactly the drift this rewrite removes by having one impl.
+// backend/color-code.md), which is exactly the drift this rewrite removes by having one impl.
 
 export type ColorTier = "ok" | "mid" | "neutral" | "no";
 

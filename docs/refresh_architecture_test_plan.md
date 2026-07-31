@@ -1,14 +1,14 @@
 # Refresh Architecture — Test Plan
 
-Validates `webapp/refresh_architecture.md` against the actual running code. Each test names the file/function under test, the exact steps, and the pass condition. Several of these map directly to real bugs found and fixed earlier in this project's history (noted inline) — this plan exists so those don't silently regress.
+Validates `backend/refresh_architecture.md` against the actual running code. Each test names the file/function under test, the exact steps, and the pass condition. Several of these map directly to real bugs found and fixed earlier in this project's history (noted inline) — this plan exists so those don't silently regress.
 
 ## 1. Build — nothing happens
 
 **Claim**: no fetch, no compute at image-build time.
 
 **Test**: `docker build` (or just import the modules) with no `app_data.db` present.
-- **Steps**: `rm -f webapp/app_data.db*`; `python -c "import webapp.data, webapp.app"` (import only, don't call `_on_startup`).
-- **Pass**: no network calls occur; `webapp/db.py`'s `_init_schema()` creates empty tables; `data._raw_cache`/`app._computed` are empty dicts/lists after import.
+- **Steps**: `rm -f backend/app_data.db*`; `python -c "import backend.data, backend.app"` (import only, don't call `_on_startup`).
+- **Pass**: no network calls occur; `backend/db.py`'s `_init_schema()` creates empty tables; `data._raw_cache`/`app._computed` are empty dicts/lists after import.
 
 ## 2. App load — pure read, no fetch, no staleness check
 
@@ -20,7 +20,7 @@ Validates `webapp/refresh_architecture.md` against the actual running code. Each
 
 **Test B — cold DB**:
 - **Steps**: with `app_data.db` deleted, start the server, immediately call `GET /api/tickers`.
-- **Pass**: response returns instantly with `"asof": null` and an empty `tickers` array — it must NOT block waiting for the background fetch to complete. (This is what the frontend's loading overlay covers — see `webapp/static/index.html`'s `asof === null` check.)
+- **Pass**: response returns instantly with `"asof": null` and an empty `tickers` array — it must NOT block waiting for the background fetch to complete. (This is what the frontend's loading overlay covers — see `backend/static/index.html`'s `asof === null` check.)
 
 ## 3. Background loop — three independent gates, each all-or-nothing per its own rule
 
@@ -80,6 +80,6 @@ Validates `webapp/refresh_architecture.md` against the actual running code. Each
 
 ## Running this plan
 
-Given the number of real bugs this session found by direct reproduction rather than code reading, prefer executing each test against the real local `webapp/app_data.db` (or a disposable copy) with real `sqlite3`/`pandas` objects, not mocks of `db.py` itself — the actual bugs found here (the `UPDATE`-vs-`INSERT` gap, the nested-exception fault isolation, the restart-staleness gate) were all things that only surfaced under real execution, not from reading the code or from over-mocked unit tests.
+Given the number of real bugs this session found by direct reproduction rather than code reading, prefer executing each test against the real local `backend/app_data.db` (or a disposable copy) with real `sqlite3`/`pandas` objects, not mocks of `db.py` itself — the actual bugs found here (the `UPDATE`-vs-`INSERT` gap, the nested-exception fault isolation, the restart-staleness gate) were all things that only surfaced under real execution, not from reading the code or from over-mocked unit tests.
 
 Yahoo network calls should still be mocked/monkeypatched (`yf.download`, `fetch_earnings_dates`) to keep the suite fast and independent of rate-limiting — but the SQLite layer, the in-memory cache dicts, and the actual `compute_all`/`warm_cache`/`_on_startup` logic should run for real against a real (throwaway) DB file.

@@ -15,7 +15,7 @@ from backtesting import Backtest
 
 sys.path.insert(0, "c:/Users/phemm/Desktop/pine-trend-strategy")
 from p import PortfolioSizedEngine, RSI, ATR  # noqa: E402
-from webapp import db  # noqa: E402
+from backend import db  # noqa: E402
 
 warnings.filterwarnings("ignore")
 E = PortfolioSizedEngine

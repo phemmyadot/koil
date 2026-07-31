@@ -2,9 +2,9 @@
 # Post-deploy visibility check, not a gate -- run detached from the CI job
 # (see .github/workflows/deploy.yml) so a slow cold-cache load never blocks
 # or fails the pipeline. Checks in at fixed checkpoints and appends results
-# to webapp/health_check.log; never exits non-zero on its own.
+# to backend/health_check.log; never exits non-zero on its own.
 URL="http://localhost:3006"
-LOG="$(dirname "$0")/webapp/health_check.log"
+LOG="$(dirname "$0")/backend/health_check.log"
 
 check() {
   resp=$(curl -s -m 10 "$URL/api/tickers" || echo "")

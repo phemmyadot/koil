@@ -13,7 +13,7 @@ shared implementation, used by all three.
 If two strategy files ever contain the same logic written twice, that's a bug in this
 architecture, not an acceptable difference.
 
-## Shared: `webapp/strategy_common.py`
+## Shared: `backend/strategy_common.py`
 
 - `with_earnings_flags(bars, ticker)` / `cached_earnings_dates(ticker)` — attaches
   `EarningsWithinAvoidWindow`/`EarningsImminent` columns to a copy of the raw bars. Called for
@@ -63,7 +63,7 @@ Each file contains only:
 `run()`, in the same shape as VCP/VCPO's `run()` (same return tuple, same use of
 `record_trade()`).
 
-## `webapp/app.py`'s integration
+## `backend/app.py`'s integration
 
 All three strategies are called the same way, with no special-casing for VEXH:
 

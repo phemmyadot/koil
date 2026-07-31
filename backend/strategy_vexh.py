@@ -22,7 +22,7 @@ Backtest.run() output across the full cached ticker universe.
 import pandas as pd
 
 from p import SMA, RSI, ATR, PortfolioSizedEngine as E
-import webapp.strategy_common as common
+import backend.strategy_common as common
 
 E_COMMISSION_RATE = 0.001
 

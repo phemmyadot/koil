@@ -2,7 +2,7 @@
 price bars, computed strategy results, earnings dates, and the universe
 screening marker. Replaces price_cache.pkl / computed_cache.pkl /
 earnings_cache.pkl / universe_last_screened.txt (see
-webapp/db_implementation.md for the full design rationale).
+backend/db_implementation.md for the full design rationale).
 
 One file, one connection, five tables. SQLite over Postgres/MySQL: this is a
 single-process app on one box, no concurrent writers from other hosts, no
@@ -637,7 +637,7 @@ def set_last_screened_at(epoch: float) -> None:
 # ─────────────────────────── positions ───────────────────────────
 # See docs/superpowers/specs/2026-07-31-position-fills-design.md. A position is one row per
 # ticker "campaign" -- status/avg-cost/P&L are all derived by replaying its position_fills
-# (see webapp/app.py's replay_fills()), never stored directly except status/closed_at, which
+# (see backend/app.py's replay_fills()), never stored directly except status/closed_at, which
 # are kept as a fast-lookup cache of that same replay (see the design doc's "Status derivation"
 # section for why: _active_tickers()/the alert engine need "all open positions" as an indexed
 # query, not a full fills-replay per ticker on every request).

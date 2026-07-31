@@ -4,7 +4,7 @@ Not a trading strategy -- a per-ticker structural/regime classifier (state +
 score) that applies across all three dashboard strategies (VEXH, VCP, VCPO),
 the same way the Pine indicator overlays on a chart regardless of which
 strategy you're trading. Computed once per ticker from the shared raw-data
-cache (webapp/data.py).
+cache (backend/data.py).
 """
 import pandas as pd
 

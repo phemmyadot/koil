@@ -167,7 +167,7 @@ Binary check for binary event risk. Any earnings release within a 21-calendar-da
 
 ### Score Computation
 
-Runs server-side, in `_compute_one()` alongside the existing `payload["prebreak"] = prebreak.evaluate(...)` call, once per strategy (`vexh`, `strategy_vcp`, `strategy_vcpo`), stored as `payload["setup_score"][strategy_key]`. `r` is the in-progress `payload` dict; `r[strategy]` is the same flat stats shape for all three strategies (see `webapp/strategy_common.py`).
+Runs server-side, in `_compute_one()` alongside the existing `payload["prebreak"] = prebreak.evaluate(...)` call, once per strategy (`vexh`, `strategy_vcp`, `strategy_vcpo`), stored as `payload["setup_score"][strategy_key]`. `r` is the in-progress `payload` dict; `r[strategy]` is the same flat stats shape for all three strategies (see `backend/strategy_common.py`).
 
 ```python
 def compute_score(r: dict, strategy: str = "strategy_vcpo") -> int:

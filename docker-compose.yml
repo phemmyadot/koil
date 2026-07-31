@@ -9,10 +9,10 @@ services:
     volumes:
       # app_data.db (+ its WAL sidecar files) is the single SQLite database
       # backing everything -- price bars, computed strategy results,
-      # candidate tickers, and earnings dates (see webapp/db.py) --
+      # candidate tickers, and earnings dates (see backend/db.py) --
       # persisted here so a rebuild doesn't force a full re-screen/re-fetch/
       # recompute of ~2000 tickers against Yahoo (and several minutes of
       # pure CPU work) on every deploy.
-      - ./webapp/app_data.db:/app/webapp/app_data.db
-      - ./webapp/app_data.db-wal:/app/webapp/app_data.db-wal
-      - ./webapp/app_data.db-shm:/app/webapp/app_data.db-shm
+      - ./backend/app_data.db:/app/backend/app_data.db
+      - ./backend/app_data.db-wal:/app/backend/app_data.db-wal
+      - ./backend/app_data.db-shm:/app/backend/app_data.db-shm

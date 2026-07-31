@@ -1,7 +1,7 @@
 """Black-Scholes option pricing, stdlib-only (no scipy dependency, matching the project's
 existing constraint -- see docs/superpowers/specs/2026-07-29-estimate-entry-design.md).
 Python port of the same Abramowitz-Stegun normal-CDF approximation already used client-side in
-webapp/static/index.html's blackScholes()/normCdf() -- kept numerically identical so a trade's
+backend/static/index.html's blackScholes()/normCdf() -- kept numerically identical so a trade's
 option value computed here matches what the P/L Calculator would show for the same inputs.
 """
 import math

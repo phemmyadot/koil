@@ -4,7 +4,7 @@ the strategy's own historical max-adverse-excursion (MAE) on winning trades with
 chart-anchored support level the user supplies. See
 docs/superpowers/specs/2026-07-29-estimate-entry-design.md for the full design.
 
-Pure computation, no I/O -- webapp/app.py's /api/estimate_entry endpoint supplies every
+Pure computation, no I/O -- backend/app.py's /api/estimate_entry endpoint supplies every
 input from already-computed in-memory state plus the user's support_levels input.
 """
 

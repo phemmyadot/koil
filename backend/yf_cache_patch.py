@@ -8,8 +8,8 @@ used when the cache directory isn't writable) unconditionally -- tz/cookie/ISIN 
 just go over the network each time instead of being cached across restarts, which is fine
 for this app's daily-bar, already-rate-limit-tolerant fetches.
 
-Call apply() once, before importing/using yfinance anywhere -- p.py, webapp/data.py, and
-webapp/build_universe.py each call this first thing.
+Call apply() once, before importing/using yfinance anywhere -- p.py, backend/data.py, and
+backend/build_universe.py each call this first thing.
 """
 
 

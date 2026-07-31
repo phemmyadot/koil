@@ -19,16 +19,18 @@ fi
 # the host, Docker creates it as a directory instead of a file, which breaks
 # the db.py schema init. Ensure it exists as a real file before compose ever
 # touches it.
-if [ ! -f webapp/app_data.db ]; then
-  touch webapp/app_data.db  # db.py creates the schema fresh in an empty file
+if [ ! -f backend/app_data.db ]; then
+  touch backend/app_data.db  # db.py creates the schema fresh in an empty file
 fi
-if [ ! -f webapp/app_data.db-wal ]; then
-  touch webapp/app_data.db-wal  # SQLite WAL sidecar -- must exist as a file, not get
+if [ ! -f backend/app_data.db-wal ]; then
+  touch backend/app_data.db-wal  # SQLite WAL sidecar -- must exist as a file, not get
 fi
-if [ ! -f webapp/app_data.db-shm ]; then
-  touch webapp/app_data.db-shm  # auto-vivified as a directory by the bind mount
+if [ ! -f backend/app_data.db-shm ]; then
+  touch backend/app_data.db-shm  # auto-vivified as a directory by the bind mount
 fi
 
+# Frontend build happens inside the Docker image (see Dockerfile's
+# frontend-build stage) -- no separate npm step needed here.
 docker compose up -d --build
 
 # Cloudflare Tunnel can hold a stale connection to the old container after a

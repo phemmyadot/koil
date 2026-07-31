@@ -16,7 +16,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from p import fetch_earnings_dates, earnings_flags_from_dates  # noqa: E402
-import webapp.db as db  # noqa: E402
+import backend.db as db  # noqa: E402
 
 # Bounds yf.Ticker.get_earnings_dates(), which has no built-in timeout and can hang the whole batch.
 _EARNINGS_FETCH_TIMEOUT = 8

@@ -20,7 +20,7 @@ describe("blackScholes", () => {
     expect(delta).toBe(-1);
   });
 
-  // Matches the value independently verified against webapp/options_pricing.py's Python port
+  // Matches the value independently verified against backend/options_pricing.py's Python port
   // during the trade-tracking feature's implementation (same Abramowitz-Stegun approximation).
   it("prices an ATM call ~30 days out at 30% IV in the expected ballpark", () => {
     const { price } = blackScholes("call", 100, 100, 30 / 365, 0.3);

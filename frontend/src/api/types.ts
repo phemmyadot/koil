@@ -1,4 +1,4 @@
-// Response/request shapes for webapp/app.py's /api/* routes. Hand-written from the backend
+// Response/request shapes for backend/app.py's /api/* routes. Hand-written from the backend
 // source (no OpenAPI codegen in this project) -- keep in sync manually if routes change.
 
 export interface MetaResponse {

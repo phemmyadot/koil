@@ -1,12 +1,12 @@
 # Price Data Storage: Incremental Fetch + Real DB
 
-**STATUS: IMPLEMENTED.** This doc was the design proposal; the migration described below has been carried out. `webapp/db.py` exists with all five tables, `webapp/data.py`/`webapp/app.py`/`webapp/scoring.py` all read/write through it, and `webapp/migrate_pickle_to_db.py` handles the one-time pickle→DB migration for any server that already had data in the old `price_cache.pkl`/`computed_cache.pkl`/`earnings_cache.pkl`/`universe_last_screened.txt` files. See `webapp/caching_and_data_retrieval.md` for the current, as-built description -- the rest of this document is kept as the original design rationale for why each decision was made.
+**STATUS: IMPLEMENTED.** This doc was the design proposal; the migration described below has been carried out. `backend/db.py` exists with all five tables, `backend/data.py`/`backend/app.py`/`backend/scoring.py` all read/write through it, and `backend/migrate_pickle_to_db.py` handles the one-time pickle→DB migration for any server that already had data in the old `price_cache.pkl`/`computed_cache.pkl`/`earnings_cache.pkl`/`universe_last_screened.txt` files. See `backend/caching_and_data_retrieval.md` for the current, as-built description -- the rest of this document is kept as the original design rationale for why each decision was made.
 
-**Scope note:** this doc originally covered price bars only. Since it was written, two more pieces of state went from "doesn't exist" to "real, shipped, in-memory-only code" that has the exact same problem price bars had: `webapp/app.py`'s `_computed`/`_computed_source_fetch` (per-ticker strategy results, briefly persisted to `computed_cache.pkl` before this migration) and `webapp/scoring.py`'s `_earnings_cache` (per-ticker earnings dates, 24h TTL, briefly unpersisted before this migration). All three are covered below as one schema, since a real DB migration was done for them together rather than as three separate piecemeal changes.
+**Scope note:** this doc originally covered price bars only. Since it was written, two more pieces of state went from "doesn't exist" to "real, shipped, in-memory-only code" that has the exact same problem price bars had: `backend/app.py`'s `_computed`/`_computed_source_fetch` (per-ticker strategy results, briefly persisted to `computed_cache.pkl` before this migration) and `backend/scoring.py`'s `_earnings_cache` (per-ticker earnings dates, 24h TTL, briefly unpersisted before this migration). All three are covered below as one schema, since a real DB migration was done for them together rather than as three separate piecemeal changes.
 
 ## Problem, precisely
 
-`webapp/data.py`'s `_fetch_one()` always does:
+`backend/data.py`'s `_fetch_one()` always does:
 
 ```python
 yf.download(ticker, start=HISTORY_START, interval="1d", ...)
@@ -20,7 +20,7 @@ A DB becomes valuable *because* it makes incremental storage (per-row upsert, no
 
 ## Current architecture (for contrast)
 
-- `webapp/price_cache.pkl` — one pickle file, one Python dict: `{"bars": {ticker: DataFrame}, "fetched_at": {ticker: epoch}}`.
+- `backend/price_cache.pkl` — one pickle file, one Python dict: `{"bars": {ticker: DataFrame}, "fetched_at": {ticker: epoch}}`.
 - Whole-file read on process start (`_load_price_cache()`), whole-file rewrite on every `warm_cache()` batch (`_save_price_cache()`).
 - Per-ticker TTL (`_cache_is_fresh()`): same-day (ET), plus a 2-hour re-check while market is open.
 - `warm_cache(tickers, force=False)`: skips tickers whose cache entry is fresh; force=True (manual Refresh) ignores TTL and refetches everyone's **full history**.
@@ -32,10 +32,10 @@ This works. It is not broken. The two real weaknesses are: (1) full-history refe
 
 ### Storage: SQLite, one DB file, five tables
 
-SQLite, not Postgres/MySQL: this is a single-process app on one box, no concurrent writers from multiple hosts, no need for a network round-trip to the DB. SQLite is a file (`webapp/app_data.db`) — same bind-mount deployment story as `tickers.py`/`price_cache.pkl` today, zero new infrastructure (no separate DB container, no connection string, no new failure mode of "DB is down"). Python's `sqlite3` is stdlib — no new dependency. One file, one connection, covers price bars + computed results + earnings dates — no reason to split these across separate DB files when they're all small, all owned by this one process, and some queries (e.g. "is this ticker's computed result still valid") need to reason about both `bars`/`fetch_meta` and `computed_results` together.
+SQLite, not Postgres/MySQL: this is a single-process app on one box, no concurrent writers from multiple hosts, no need for a network round-trip to the DB. SQLite is a file (`backend/app_data.db`) — same bind-mount deployment story as `tickers.py`/`price_cache.pkl` today, zero new infrastructure (no separate DB container, no connection string, no new failure mode of "DB is down"). Python's `sqlite3` is stdlib — no new dependency. One file, one connection, covers price bars + computed results + earnings dates — no reason to split these across separate DB files when they're all small, all owned by this one process, and some queries (e.g. "is this ticker's computed result still valid") need to reason about both `bars`/`fetch_meta` and `computed_results` together.
 
 ```sql
--- ── Price bars (webapp/data.py's _raw_cache) ──────────────────────────────
+-- ── Price bars (backend/data.py's _raw_cache) ──────────────────────────────
 CREATE TABLE bars (
     ticker TEXT NOT NULL,
     date   TEXT NOT NULL,   -- ISO date, e.g. '2026-07-24'
@@ -51,12 +51,12 @@ CREATE TABLE fetch_meta (
     last_error TEXT                  -- mirrors today's _raw_errors; NULL if last fetch succeeded
 );
 
--- ── Computed strategy results (webapp/app.py's _computed) ─────────────────
+-- ── Computed strategy results (backend/app.py's _computed) ─────────────────
 -- One row per ticker -- the full per-ticker payload (VEXH/VCP/VCPO/prebreak/
 -- setup_score) stored as JSON, not normalized into columns. This blob is
 -- deeply nested, per-strategy-shaped, and evolves often (new strategies,
 -- new scoring dimensions) -- normalizing it into relational columns would
--- mean a schema migration every time webapp/scoring.py or webapp/score.py
+-- mean a schema migration every time backend/scoring.py or backend/score.py
 -- gains a new field. SQLite's JSON1 extension (compiled in by default since
 -- 3.38, bundled with Python's sqlite3 on any remotely current Python) lets
 -- SQL still query into it (json_extract(payload, '$.score')) if ever needed
@@ -73,7 +73,7 @@ CREATE TABLE computed_results (
     error TEXT                       -- mirrors today's _computed_errors; NULL if compute succeeded
 );
 
--- ── Earnings dates (webapp/scoring.py's _earnings_cache) ───────────────────
+-- ── Earnings dates (backend/scoring.py's _earnings_cache) ───────────────────
 -- Currently NOT persisted at all -- every restart re-fetches every ticker's
 -- earnings calendar from Yahoo before its 24h in-memory TTL would have
 -- required it, purely because the process restarted. Same class of bug
@@ -87,7 +87,7 @@ CREATE TABLE earnings_dates (
 );
 CREATE INDEX idx_earnings_ticker ON earnings_dates(ticker);
 
--- ── Universe screening marker (webapp/app.py's universe_last_screened.txt) ─
+-- ── Universe screening marker (backend/app.py's universe_last_screened.txt) ─
 -- Folded in for completeness -- currently a one-line text file, not a real
 -- table's worth of data, but no reason to keep a 6th small file around once
 -- the other three caches move into one DB. Single row, ticker/id irrelevant.
@@ -129,18 +129,18 @@ Weekend/holiday re-checks naturally no-op (`df.empty`) instead of needing the TT
 
 ### "Keep permanently, even if unused"
 
-This is a real, distinct feature request beyond incremental fetch — currently there's no concept of "a ticker used to be in the universe, now isn't, but we still have its data." Today, if a ticker drops out of `webapp/tickers.py` (fails the daily re-screen), its entry in `price_cache.pkl` just sits there unused until the pickle is regenerated from scratch (which never happens automatically) — so in practice it's already accidentally "kept forever," just not deliberately.
+This is a real, distinct feature request beyond incremental fetch — currently there's no concept of "a ticker used to be in the universe, now isn't, but we still have its data." Today, if a ticker drops out of `backend/tickers.py` (fails the daily re-screen), its entry in `price_cache.pkl` just sits there unused until the pickle is regenerated from scratch (which never happens automatically) — so in practice it's already accidentally "kept forever," just not deliberately.
 
 With a DB this becomes explicit and correct: `bars` table rows are never deleted just because a ticker drops out of the current universe. If a ticker re-enters the universe later (re-screened back in), `_fetch_one` finds its `last_bar_date` still there and only fetches the gap since — even if that gap is weeks or months, not years. This is a genuine, meaningful win specifically because of the DB's per-row structure; a whole-blob pickle *could* technically do the same (never prune the dict), but has no efficient way to fetch only the gap for a ticker that's been stale for months without also holding stale entries for thousands of other tickers in the same in-memory dict/file the whole time.
 
-### API surface changes (`webapp/data.py`)
+### API surface changes (`backend/data.py`)
 
 Mostly additive, minimal disruption to `app.py`'s callers:
 
 ```python
 def get_bars(ticker: str) -> pd.DataFrame | None:
     # Same signature/behavior as today -- reads from DB instead of the
-    # in-memory dict, but every existing caller (webapp/app.py's
+    # in-memory dict, but every existing caller (backend/app.py's
     # _compute_one, strategy_vcp.py, etc.) is unaffected.
     ...
 
@@ -153,19 +153,19 @@ def warm_cache(tickers=None, force=False) -> None:
     ...
 ```
 
-`get_bars()` could either (a) query SQLite fresh on every call, reconstructing a DataFrame, or (b) keep an in-memory DataFrame cache populated from SQLite on startup and updated incrementally, with SQLite as the durable backing store rather than the hot path. **(b) is the right choice** — `_compute_one()` is called once per ticker per `compute_all()` pass, up to every 30 minutes; going to SQLite on every read adds real per-call overhead (query + reconstruct DataFrame) for no benefit, since the whole point of `webapp/data.py`'s existing design ("a page request never triggers a network call") is that reads are from RAM. SQLite becomes the persistence layer underneath the same in-memory dict that exists today, not a replacement for it.
+`get_bars()` could either (a) query SQLite fresh on every call, reconstructing a DataFrame, or (b) keep an in-memory DataFrame cache populated from SQLite on startup and updated incrementally, with SQLite as the durable backing store rather than the hot path. **(b) is the right choice** — `_compute_one()` is called once per ticker per `compute_all()` pass, up to every 30 minutes; going to SQLite on every read adds real per-call overhead (query + reconstruct DataFrame) for no benefit, since the whole point of `backend/data.py`'s existing design ("a page request never triggers a network call") is that reads are from RAM. SQLite becomes the persistence layer underneath the same in-memory dict that exists today, not a replacement for it.
 
 ## What this does NOT fix
 
 Worth being explicit, since it's tempting to read "move to a DB" as a bigger win than it is:
 
-- **Compute time** (`compute_all()`, the VEXH backtest cost) — unrelated. This doc is entirely about the *fetch* side. See the separate VEXH duplicate-backtest-run fix already implemented in `webapp/scoring.py`.
+- **Compute time** (`compute_all()`, the VEXH backtest cost) — unrelated. This doc is entirely about the *fetch* side. See the separate VEXH duplicate-backtest-run fix already implemented in `backend/scoring.py`.
 - **Yahoo rate limiting** — incremental fetch reduces the *size* of each request (1 day vs 4.5 years of data transferred), which may reduce how often Yahoo throttles, but doesn't change the *request count* (still one `yf.download()` call per ticker per refresh) or add real backoff/retry logic. Worth a separate look if rate-limiting remains a recurring problem after this lands.
 - **The daily universe re-screen** (`build_universe.py`) — separate subsystem, separate data (candidate screening via `yf.screen()`, not price history), out of scope here.
 
 ## Migration path
 
-1. Add `webapp/db.py`: schema creation (idempotent `CREATE TABLE IF NOT EXISTS` for all five tables), plus the access functions each cache needs:
+1. Add `backend/db.py`: schema creation (idempotent `CREATE TABLE IF NOT EXISTS` for all five tables), plus the access functions each cache needs:
    - Price bars: `get_last_bar_date(ticker)`, `upsert_bars(ticker, df)`, `load_all_bars() -> dict[str, DataFrame]` (startup bulk-load into RAM, replaces `data.py`'s `_load_price_cache()`).
    - Computed results: `get_computed(ticker) -> dict | None`, `upsert_computed(ticker, payload, source_fetched_at, error)`, `load_all_computed() -> dict[str, dict]` (replaces `app.py`'s `_load_computed_cache()`).
    - Earnings dates: `get_earnings_dates(ticker) -> DatetimeIndex | None` (checks `fetched_at` against the TTL itself, returns `None` on miss/stale), `upsert_earnings_dates(ticker, dates)` (replaces `scoring.py`'s in-memory-only `_earnings_cache`).

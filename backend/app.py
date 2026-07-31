@@ -1,20 +1,20 @@
 """Exhaustion dashboard backend.
 
 Run from the project root:
-    .\\.venv\\Scripts\\python.exe -m uvicorn webapp.app:app --port 8123
+    .\\.venv\\Scripts\\python.exe -m uvicorn backend.app:app --port 8123
 
 Architecture: fetch and compute are decoupled from the request path entirely
--- see webapp/refresh_architecture.md for the full rules. A page request is
+-- see backend/refresh_architecture.md for the full rules. A page request is
 always just a fast in-memory read -- no network call, no per-request
 backtest run, regardless of how stale or fresh the data happens to be.
 
-The refresh cycle (see webapp/SCREENING_FETCH_REFACTOR.md), run by
+The refresh cycle (see backend/SCREENING_FETCH_REFACTOR.md), run by
 refresh_and_compute():
   1. Fetch candidate tickers (Yahoo screener) -> save to DB (candidate_tickers).
-  2. Pull each candidate's price data -> save to DB (webapp/data.py, incremental
+  2. Pull each candidate's price data -> save to DB (backend/data.py, incremental
      gap-fetch if already stored, full history if new).
   3. Run the technical entry-condition filter once, over all candidates
-     (webapp/build_universe.py's passes_technical_filters). For each ticker
+     (backend/build_universe.py's passes_technical_filters). For each ticker
      that passes: compute only if its bars checksum changed since last
      compute -> save results to DB.
 
@@ -38,7 +38,7 @@ COMPUTE_WORKERS = os.cpu_count() or 4
 # data.py's _fetch_executor: yfinance's cookie-cache DB (peewee, thread-local connections) leaks
 # one open FD per new OS thread that ever touches it, and a fresh ThreadPoolExecutor every call
 # (every CHECK_INTERVAL, forever, via strategy_common's earnings-date lookups on a cache miss)
-# meant a fresh batch of worker threads leaking FDs on every pass -- see webapp/data.py.
+# meant a fresh batch of worker threads leaking FDs on every pass -- see backend/data.py.
 _compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
 
 # Bump whenever _compute_one()'s payload SHAPE changes (new/renamed/moved fields, not just new tickers/data) -- forces
@@ -50,20 +50,20 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from yfinance.exceptions import YFRateLimitError
 
-import webapp.build_universe as build_universe
-import webapp.csv_export as csv_export
-import webapp.data as data
-import webapp.db as db
-import webapp.entry_estimate as entry_estimate
-import webapp.options_pricing as options_pricing
-import webapp.pdf_export as pdf_export
-import webapp.support_resistance as support_resistance
-import webapp.prebreak as prebreak
-import webapp.score as score
-import webapp.strategy_common as strategy_common
-import webapp.strategy_vcp as strategy_vcp
-import webapp.strategy_vcpo as strategy_vcpo
-import webapp.strategy_vexh as strategy_vexh
+import backend.build_universe as build_universe
+import backend.csv_export as csv_export
+import backend.data as data
+import backend.db as db
+import backend.entry_estimate as entry_estimate
+import backend.options_pricing as options_pricing
+import backend.pdf_export as pdf_export
+import backend.support_resistance as support_resistance
+import backend.prebreak as prebreak
+import backend.score as score
+import backend.strategy_common as strategy_common
+import backend.strategy_vcp as strategy_vcp
+import backend.strategy_vcpo as strategy_vcpo
+import backend.strategy_vexh as strategy_vexh
 
 
 @asynccontextmanager
@@ -204,7 +204,7 @@ def _active_tickers() -> list[str]:
 def compute_all(force: bool = False) -> None:
     """Runs the technical filter once, up front, over every active ticker's stored bars --
     membership in the universe is decided here, a single time, not per ticker on each reuse
-    check (see webapp/SCREENING_FETCH_REFACTOR.md). Tickers that pass are then recomputed
+    check (see backend/SCREENING_FETCH_REFACTOR.md). Tickers that pass are then recomputed
     only if their bars checksum (db.get_bars_checksum(), a hash of every stored bar) changed
     since the last pass; force=True (manual Refresh) skips the reuse check entirely and
     recomputes every filtered ticker. Never runs two passes concurrently -- see
@@ -453,7 +453,7 @@ def _fire_threshold_alerts(position: dict, kind: str, pct: float, last_alert_pct
 
 
 def refresh_and_compute(force: bool = False) -> None:
-    """The 3-step cycle (see webapp/SCREENING_FETCH_REFACTOR.md): fetch candidate tickers and
+    """The 3-step cycle (see backend/SCREENING_FETCH_REFACTOR.md): fetch candidate tickers and
     persist them, gap-fetch/full-fetch each one's price data, then run compute_all() (which
     itself runs the technical filter once up front and recomputes only checksum-changed
     tickers). force=True (manual Refresh) always runs the full cycle -- no fetch-time or

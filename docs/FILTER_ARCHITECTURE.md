@@ -1,6 +1,6 @@
 # Dashboard filter architecture
 
-Settled design for the toolbar filters in `webapp/static/index.html`, replacing
+Settled design for the toolbar filters in `backend/static/index.html`, replacing
 the old checkbox/dropdown-based filters. All sliders/radios/switches are
 **minimum-threshold** controls: the selected position matches that value and
 everything above it, and the leftmost/off position is always the default (no

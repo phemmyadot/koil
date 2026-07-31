@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 from backtesting import Strategy, Backtest
 
-# See webapp/yf_cache_patch.py. Covers p.py run standalone, outside the webapp package.
+# See backend/yf_cache_patch.py. Covers p.py run standalone, outside the backend package.
 try:
-    from webapp.yf_cache_patch import apply as _apply_yf_cache_patch
+    from backend.yf_cache_patch import apply as _apply_yf_cache_patch
     _apply_yf_cache_patch()
 except ImportError:
     pass

@@ -2,12 +2,12 @@
 VCP Master (pines/vcp.pine, fixed + volume-confirmed) ported for the dashboard.
 Mirrors test_vcp.py's validated logic: ATR compression + 20-bar breakout +
 volume confirmation, multi-tier stop/breakeven/trail, partial TP, time stop.
-Reads from the shared raw-data cache (webapp/data.py) and extends it with a
+Reads from the shared raw-data cache (backend/data.py) and extends it with a
 "signal today" / TAKE-SKIP verdict evaluator.
 """
 import pandas as pd
 
-import webapp.strategy_common as common
+import backend.strategy_common as common
 
 ATR_LEN = 22
 ATR_MULT = 3.0

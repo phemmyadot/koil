@@ -56,7 +56,7 @@ flowchart TD
 
 ## What goes away
 
-- `webapp/tickers.py` (the file). Candidates live in a DB table instead.
+- `backend/tickers.py` (the file). Candidates live in a DB table instead.
 - The separate screening download (`screen_technicals()`'s own
   `yf.download(chunk, period="2y")`). Screening becomes: get candidate
   symbols, then reuse the normal per-ticker fetch for their bars.

@@ -21,11 +21,11 @@ jobs:
         # built/started/cloudflared restarted) is what "pass" means now.
         # This just launches the checker detached (nohup + disown) and
         # returns immediately -- the job finishes in seconds. Checkpoint
-        # results land in webapp/health_check.log on rog-server, not in the
+        # results land in backend/health_check.log on rog-server, not in the
         # Actions log, since the runner process is gone by the time later
         # checkpoints fire.
         run: |
           cd ~/pine-trend-strategy
           nohup bash health_check.sh > /dev/null 2>&1 &
           disown
-          echo "Health check running in background -- see ~/pine-trend-strategy/webapp/health_check.log"
+          echo "Health check running in background -- see ~/pine-trend-strategy/backend/health_check.log"

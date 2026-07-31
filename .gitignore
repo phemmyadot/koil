@@ -2,7 +2,9 @@ venv/
 .venv/
 __pycache__/
 .env
-webapp/app_data.db
-webapp/app_data.db-wal
-webapp/app_data.db-shm
-webapp/health_check.log
+backend/app_data.db
+backend/app_data.db-wal
+backend/app_data.db-shm
+backend/health_check.log
+frontend/node_modules/
+frontend/dist/

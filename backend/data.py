@@ -4,7 +4,7 @@ all tickers' price history in bulk; every strategy evaluator reads from this
 cache instead of hitting yfinance itself, so a page request never triggers a
 network call.
 
-Refresh rule (see webapp/refresh_architecture.md): the background loop wakes
+Refresh rule (see backend/refresh_architecture.md): the background loop wakes
 every CHECK_INTERVAL and gap-fetches every ticker unconditionally -- no
 same-day/market-hours staleness check. This is safe and cheap because a
 gap-fetch of an already-current ticker just asks Yahoo for "anything after
@@ -13,13 +13,13 @@ there's no meaningful cost saved by skipping it. App load itself never
 fetches anything -- it's a pure read of whatever's already in the DB/memory;
 only the background loop (and the manual Refresh button) ever hit Yahoo.
 
-Persistence: webapp/db.py (SQLite) is the durable backing store. _raw_cache
+Persistence: backend/db.py (SQLite) is the durable backing store. _raw_cache
 stays the hot-path in-memory dict a page request actually reads from (no
 per-request DB query) -- loaded from the DB once on import, kept in sync on
 every fetch. Fetches are incremental: each ticker only requests bars newer
 than its last stored date (db.get_last_bar_date), not the full history every
 time, so a normal refresh asks Yahoo for ~1 new row per ticker instead of
-~4.5 years of unchanged history. See webapp/db_implementation.md.
+~4.5 years of unchanged history. See backend/db_implementation.md.
 """
 import threading
 import time
@@ -30,7 +30,7 @@ import pandas as pd
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 
-import webapp.db as db
+import backend.db as db
 
 # How often the background loop wakes to gap-fetch prices, re-check the
 # ticker universe, and re-check earnings dates. One shared interval for all
