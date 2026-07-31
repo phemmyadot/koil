@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Position</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1a2333; --muted: #67718a;
+    --line: #e3e7ee; --green: #157f3d; --green-bg: #e5f4ea; --red: #b3261e;
+    --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb; --gold-bg: #fdf3d8; --gold: #8a6d1a;
+    --blue: #0d6efd; --blue-bg: #e3f0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
+      --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
+      --red-bg: #391513; --accent: #0b3191; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
+      --blue: #4d9dff; --blue-bg: #0f2c52;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 14px 10px 24px; }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 21px; margin: 0; }
+  h2 { font-size: 14px; margin: 20px 0 10px; }
+  a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a.back:hover { text-decoration: underline; }
+  .strattag { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 5px;
+           padding: 2px 8px; }
+  .badge.open { background: var(--green-bg); color: var(--green); }
+  .badge.closed { background: var(--line); color: var(--muted); }
+
+  .infogrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+              gap: 10px; margin-bottom: 18px; }
+  .statbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .statbox .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 4px; }
+  .statbox .val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
+  .statbox .val .sub { font-size: 14px; font-weight: 600; display: block; }
+  .val.pos { color: var(--green); } .val.neg { color: var(--red); }
+
+  .bigchart { width: 100%; height: 260px; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 12px; padding: 10px; margin-bottom: 18px; }
+  .bigchart .axislabel { font-size: 10px; fill: var(--muted); }
+
+  table.markstable, table.fillstable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.markstable th, table.markstable td, table.fillstable th, table.fillstable td {
+    text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  table.markstable th, table.fillstable th { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  table.fillstable td.actionscell { white-space: nowrap; text-align: right; }
+  .kindtag { display: inline-block; font-size: 10px; font-weight: 700; border-radius: 5px;
+             padding: 2px 6px; text-transform: uppercase; }
+  .kindtag.entry { background: var(--blue-bg); color: var(--blue); }
+  .kindtag.exit { background: var(--gold-bg); color: var(--gold); }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+
+  .actions { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+  .smallbtn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px;
+              padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
+  .smallbtn:hover { color: var(--accent); border-color: var(--accent); }
+  .smallbtn.danger:hover { color: var(--red); border-color: var(--red); }
+  .smallbtn.tiny { padding: 3px 8px; font-size: 11px; }
+
+  .fillform, .editform { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+              padding: 14px; margin: 16px 0; }
+  .fillform .fillgrid, .editform .editgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .fillform .formrow label, .editform .formrow label { display: block; color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.04em; margin-bottom: 3px; }
+  .fillform .formrow input, .fillform .formrow select, .editform .formrow input, .editform .formrow select {
+    width: 100%; background: var(--bg); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  .fillform .formactions, .editform .editactions { display: flex; gap: 8px; margin-top: 12px; }
+  .editform .editnote { color: var(--muted); font-size: 11px; margin-top: 8px; }
+  .togglegrp { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; margin-bottom: 10px; }
+  .togglegrp button { flex: 1; padding: 6px 0; border: none; border-radius: 6px; background: transparent;
+                       color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+  .togglegrp button.active { background: var(--accent-bg); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="pageTitle">Loading&hellip;</h1>
+    <a class="back" href="trades.html">&larr; Back to Trades</a>
+  </header>
+  <div id="content"></div>
+</div>
+<script>
+const STRATEGY_LABELS = { vexh: "VEXH", strategy_vcp: "VCP", strategy_vcpo: "VCPO" };
+function stratLabel(key) { return STRATEGY_LABELS[key] || key; }
+function fmtMoney(v) { return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2); }
+function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }
+function plClass(v) { return v >= 0 ? "pos" : "neg"; }
+function todayIsoDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const positionId = new URLSearchParams(location.search).get("id");
+let currentPosition = null;
+let currentFills = [];
+
+function bigChartHtml(marks, valueKey) {
+  const w = 860, h = 240, pad = { l: 46, r: 14, t: 14, b: 24 };
+  if (marks.length === 0) return `<svg class="bigchart" viewBox="0 0 ${w} ${h}"><text x="14" y="20" fill="var(--muted)" font-size="12">No daily marks recorded yet.</text></svg>`;
+  const values = marks.map(m => m[valueKey]);
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const yPad = (hi - lo) * 0.1 || Math.max(Math.abs(values[0]) * 0.1, 1);
+  const yMin = lo - yPad, yMax = hi + yPad;
+  const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+  const xOf = i => pad.l + (i / Math.max(marks.length - 1, 1)) * iw;
+  const yOf = v => pad.t + (1 - (v - yMin) / (yMax - yMin)) * ih;
+  const path = marks.map((m, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(m[valueKey]).toFixed(1)}`).join(" ");
+  const singlePointDot = marks.length === 1
+    ? `<circle cx="${xOf(0).toFixed(1)}" cy="${yOf(values[0]).toFixed(1)}" r="4" fill="var(--accent)"/>` : "";
+
+  const yTicks = [];
+  for (let i = 0; i <= 4; i++) yTicks.push(yMin + (yMax - yMin) * i / 4);
+  const gridHtml = yTicks.map(v => `
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${yOf(v).toFixed(1)}" y2="${yOf(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+    <text class="axislabel" x="${pad.l - 6}" y="${(yOf(v) + 3).toFixed(1)}" text-anchor="end">$${v.toFixed(2)}</text>`).join("");
+  const xTickEvery = Math.max(Math.ceil(marks.length / 6), 1);
+  const xTicksHtml = marks.map((m, i) => i % xTickEvery === 0
+    ? `<text class="axislabel" x="${xOf(i).toFixed(1)}" y="${h - 6}" text-anchor="middle">${m.mark_date.slice(5)}</text>` : "").join("");
+
+  return `<svg class="bigchart" viewBox="0 0 ${w} ${h}">
+    ${gridHtml}
+    ${xTicksHtml}
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    ${singlePointDot}
+  </svg>`;
+}
+
+// ---------------- Add fill (entry or exit) ----------------
+let addFillKind = "entry";
+function toggleFillForm() {
+  const el = document.getElementById("fillform");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+function setFillKind(v) {
+  addFillKind = v;
+  document.querySelectorAll("#fillKindToggle button").forEach(b => b.classList.toggle("active", b.classList.contains(v)));
+  document.getElementById("fillExitReasonRow").style.display = v === "exit" ? "" : "none";
+}
+
+function fillFormHtml(position) {
+  const isOption = position.instrument === "option";
+  return `<div class="fillform" id="fillform" style="display:none">
+    <div class="togglegrp" id="fillKindToggle">
+      <button type="button" class="entry active" onclick="setFillKind('entry')">Add Entry</button>
+      <button type="button" class="exit" onclick="setFillKind('exit')">Partial/Full Exit</button>
+    </div>
+    <div class="fillgrid">
+      <div class="formrow"><label>Fill Date</label><input type="date" id="fillDate" value="${todayIsoDate()}"></div>
+      <div class="formrow"><label>Price</label><input type="number" id="fillPrice" step="0.01"></div>
+      <div class="formrow"><label>Units</label><input type="number" id="fillUnits" step="1"></div>
+      <div class="formrow"><label>Strategy</label>
+        <select id="fillStrategyKey">
+          <option value="vexh">VEXH</option>
+          <option value="strategy_vcp">VCP</option>
+          <option value="strategy_vcpo">VCPO</option>
+        </select>
+      </div>
+      <div class="formrow"><label>Signal Date</label><input type="date" id="fillSignalDate" value="${todayIsoDate()}"></div>
+      <div class="formrow" id="fillExitReasonRow" style="display:none"><label>Exit Reason</label>
+        <select id="fillExitReason">
+          <option value="tp">TP</option>
+          <option value="stop">Stop</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+      ${isOption ? `
+      <div class="formrow"><label>Side</label>
+        <select id="fillOptSide"><option value="buy">Buy</option><option value="sell">Sell</option></select>
+      </div>
+      <div class="formrow"><label>Type</label>
+        <select id="fillOptType"><option value="call">Call</option><option value="put">Put</option></select>
+      </div>
+      <div class="formrow"><label>Strike</label><input type="number" id="fillStrike" step="0.5"></div>
+      <div class="formrow"><label>Premium ($/sh)</label><input type="number" id="fillPremium" step="0.05"></div>
+      <div class="formrow"><label>Expiration Date</label><input type="date" id="fillExpiryDate"></div>
+      <div class="formrow"><label>IV (%)</label><input type="number" id="fillIv" step="0.5"></div>` : ""}
+    </div>
+    <div class="formactions">
+      <button type="button" class="smallbtn" onclick="submitFill()">Add Fill</button>
+      <button type="button" class="smallbtn" onclick="toggleFillForm()">Cancel</button>
+    </div>
+    <div id="fillFormError" class="empty"></div>
+  </div>`;
+}
+
+async function submitFill() {
+  const isOption = currentPosition.instrument === "option";
+  const body = {
+    kind: addFillKind, instrument: currentPosition.instrument,
+    strategy_key: document.getElementById("fillStrategyKey").value,
+    signal_date: document.getElementById("fillSignalDate").value,
+    fill_date: document.getElementById("fillDate").value,
+    price: parseFloat(document.getElementById("fillPrice").value),
+    units: parseFloat(document.getElementById("fillUnits").value),
+  };
+  if (addFillKind === "exit") body.exit_reason = document.getElementById("fillExitReason").value;
+  if (isOption) {
+    body.opt_side = document.getElementById("fillOptSide").value;
+    body.opt_type = document.getElementById("fillOptType").value;
+    body.strike = parseFloat(document.getElementById("fillStrike").value);
+    body.premium = parseFloat(document.getElementById("fillPremium").value);
+    body.expiry_date = document.getElementById("fillExpiryDate").value;
+    const ivPct = parseFloat(document.getElementById("fillIv").value);
+    body.iv_at_entry = Number.isFinite(ivPct) ? ivPct / 100 : null;
+  }
+  const errEl = document.getElementById("fillFormError");
+  errEl.textContent = "";
+  try {
+    const res = await fetch(`/api/positions/${positionId}/fills`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { errEl.textContent = "Failed: " + ((await res.json()).detail || res.status); return; }
+    load();
+  } catch (e) {
+    errEl.textContent = "Failed: " + e;
+  }
+}
+
+async function cancelPosition() {
+  if (!confirm("Cancel this position? This permanently deletes it and all its fills, and cannot be undone.")) return;
+  try {
+    const res = await fetch(`/api/positions/${positionId}`, { method: "DELETE" });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    location.href = "trades.html";
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+async function deleteFill(fillId) {
+  if (!confirm("Delete this fill? This cannot be undone and will recompute the position's status/avg cost.")) return;
+  try {
+    const res = await fetch(`/api/positions/${positionId}/fills/${fillId}`, { method: "DELETE" });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    const result = await res.json();
+    if (result.position_deleted) { location.href = "trades.html"; return; }
+    load();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+// ---------------- Edit position (tp/stop/notes) ----------------
+function toggleEditForm() {
+  const el = document.getElementById("editform");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+function editFormHtml(position) {
+  return `<div class="editform" id="editform" style="display:none">
+    <div class="editgrid">
+      <div class="formrow"><label>Take Profit</label><input type="number" id="editTpPrice" step="0.01" value="${position.tp_price ?? ""}"></div>
+      <div class="formrow"><label>Stop</label><input type="number" id="editStopPrice" step="0.01" value="${position.stop_price ?? ""}"></div>
+      <div class="formrow" style="grid-column:1/-1"><label>Notes</label><input type="text" id="editNotes" value="${position.notes || ""}"></div>
+    </div>
+    <div class="editactions">
+      <button type="button" class="smallbtn" onclick="submitEdit()">Save changes</button>
+      <button type="button" class="smallbtn" onclick="toggleEditForm()">Cancel</button>
+    </div>
+    <div class="editnote">Position-level TP/stop/notes. To correct an individual fill's price/units, use the edit action on that fill's row below.</div>
+  </div>`;
+}
+async function submitEdit() {
+  const body = {
+    tp_price: parseFloat(document.getElementById("editTpPrice").value),
+    stop_price: parseFloat(document.getElementById("editStopPrice").value),
+    notes: document.getElementById("editNotes").value || null,
+  };
+  try {
+    const res = await fetch(`/api/positions/${positionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    load();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+// ---------------- Edit a single fill ----------------
+function toggleFillEditForm(fillId) {
+  const el = document.getElementById(`filleditform_${fillId}`);
+  el.style.display = el.style.display === "none" ? "table-row" : "none";
+}
+async function submitFillEdit(fillId) {
+  const body = {
+    fill_date: document.getElementById(`feDate_${fillId}`).value,
+    price: parseFloat(document.getElementById(`fePrice_${fillId}`).value),
+    units: parseFloat(document.getElementById(`feUnits_${fillId}`).value),
+  };
+  const exitReasonEl = document.getElementById(`feExitReason_${fillId}`);
+  if (exitReasonEl) body.exit_reason = exitReasonEl.value;
+  try {
+    const res = await fetch(`/api/positions/${positionId}/fills/${fillId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    load();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+function fillsTableHtml(fills) {
+  if (!fills.length) return '<p class="empty">No fills recorded.</p>';
+  const rows = fills.map(f => `<tr>
+    <td>${f.fill_date}</td>
+    <td><span class="kindtag ${f.kind}">${f.kind}</span></td>
+    <td><span class="strattag">${stratLabel(f.strategy_key)}</span></td>
+    <td>${fmtMoney(f.price)}</td>
+    <td>${f.units}</td>
+    <td>${f.exit_reason || "&mdash;"}</td>
+    <td class="actionscell">
+      <button type="button" class="smallbtn tiny" onclick="toggleFillEditForm(${f.id})">Edit</button>
+      <button type="button" class="smallbtn tiny danger" onclick="deleteFill(${f.id})">Delete</button>
+    </td>
+  </tr>
+  <tr id="filleditform_${f.id}" style="display:none">
+    <td colspan="7">
+      <div class="fillform" style="margin:6px 0">
+        <div class="fillgrid">
+          <div class="formrow"><label>Fill Date</label><input type="date" id="feDate_${f.id}" value="${f.fill_date}"></div>
+          <div class="formrow"><label>Price</label><input type="number" id="fePrice_${f.id}" step="0.01" value="${f.price}"></div>
+          <div class="formrow"><label>Units</label><input type="number" id="feUnits_${f.id}" step="1" value="${f.units}"></div>
+          ${f.kind === "exit" ? `<div class="formrow"><label>Exit Reason</label>
+            <select id="feExitReason_${f.id}">
+              <option value="tp" ${f.exit_reason === "tp" ? "selected" : ""}>TP</option>
+              <option value="stop" ${f.exit_reason === "stop" ? "selected" : ""}>Stop</option>
+              <option value="manual" ${f.exit_reason === "manual" ? "selected" : ""}>Manual</option>
+              <option value="expired" ${f.exit_reason === "expired" ? "selected" : ""}>Expired</option>
+            </select></div>` : ""}
+        </div>
+        <div class="formactions">
+          <button type="button" class="smallbtn" onclick="submitFillEdit(${f.id})">Save</button>
+          <button type="button" class="smallbtn" onclick="toggleFillEditForm(${f.id})">Cancel</button>
+        </div>
+      </div>
+    </td>
+  </tr>`).join("");
+  return `<table class="fillstable">
+    <thead><tr><th>Date</th><th>Kind</th><th>Strategy</th><th>Price</th><th>Units</th><th>Exit Reason</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function load() {
+  if (!positionId) {
+    document.getElementById("pageTitle").textContent = "No position specified";
+    return;
+  }
+  let position, marks, fills;
+  try {
+    [position, marks, fills] = await Promise.all([
+      fetch(`/api/positions/${positionId}`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(`/api/positions/${positionId}/marks`).then(r => r.json()),
+      fetch(`/api/positions/${positionId}/fills`).then(r => r.json()),
+    ]);
+  } catch (e) {
+    document.getElementById("pageTitle").textContent = "Position not found";
+    document.getElementById("content").innerHTML = `<p class="empty">Failed to load position ${positionId}: ${e}</p>`;
+    return;
+  }
+  currentPosition = position;
+  currentFills = fills;
+
+  const isOption = position.instrument === "option";
+  const hasOptionValues = isOption && marks.length && marks[0].option_value != null;
+  const valueKey = hasOptionValues ? "option_value" : "close_price";
+  const last = marks.length ? marks[marks.length - 1][valueKey] : position.avg_cost;
+  const pctLive = position.avg_cost ? ((last - position.avg_cost) / position.avg_cost * 100) : 0;
+  const lastLabel = hasOptionValues ? "Option value" : "Last price";
+
+  document.getElementById("pageTitle").innerHTML =
+    `${position.ticker} <span class="badge ${position.status}">${position.status.toUpperCase()}</span>`;
+
+  const statBoxes = [
+    ["Units remaining", position.units_remaining],
+    ["Avg cost", position.avg_cost != null ? fmtMoney(position.avg_cost) : "&mdash;"],
+    ["Take Profit", fmtMoney(position.tp_price)],
+    ["Stop", fmtMoney(position.stop_price)],
+    ["Realized P&L", `<span class="${plClass(position.realized_pnl)}">${fmtMoney(position.realized_pnl)}</span>`],
+  ];
+  if (position.status === "open" && position.avg_cost != null) {
+    if (isOption) {
+      const stockPrice = marks.length ? marks[marks.length - 1].close_price : null;
+      if (stockPrice != null) statBoxes.push(["Current price", fmtMoney(stockPrice)]);
+      statBoxes.push(["Current option price", `<span class="${plClass(pctLive)}">${fmtMoney(last)}<span class="sub">${fmtPct(pctLive)}</span></span>`]);
+    } else {
+      statBoxes.push([lastLabel, `<span class="${plClass(pctLive)}">${fmtMoney(last)}<span class="sub">${fmtPct(pctLive)}</span></span>`]);
+    }
+  }
+  if (position.status === "closed") {
+    statBoxes.push(["Closed", position.closed_at ? position.closed_at.slice(0, 10) : "&mdash;"]);
+  }
+
+  const actionsHtml = `
+    <div class="actions">
+      ${position.status === "open" ? `<button type="button" class="smallbtn" onclick="toggleFillForm()">Add Fill</button>` : ""}
+      <button type="button" class="smallbtn" onclick="toggleEditForm()">Edit Position</button>
+      <button type="button" class="smallbtn danger" onclick="cancelPosition()">Cancel Position</button>
+    </div>
+    ${position.status === "open" ? fillFormHtml(position) : ""}
+    ${editFormHtml(position)}`;
+
+  const marksRows = marks.slice().reverse().map(m => `<tr>
+    <td>${m.mark_date}</td>
+    <td>${fmtMoney(m.close_price)}</td>
+    ${hasOptionValues ? `<td>${fmtMoney(m.option_value)}</td>` : ""}
+  </tr>`).join("");
+
+  document.getElementById("content").innerHTML = `
+    <div class="infogrid">
+      ${statBoxes.map(([lbl, val]) => `<div class="statbox"><span class="lbl">${lbl}</span><span class="val">${val}</span></div>`).join("")}
+    </div>
+    ${bigChartHtml(marks, valueKey)}
+    ${actionsHtml}
+    <h2>Fills</h2>
+    ${fillsTableHtml(fills)}
+    <h2>Daily marks</h2>
+    ${marks.length ? `<table class="markstable">
+      <thead><tr><th>Date</th><th>Stock close</th>${hasOptionValues ? "<th>Option value</th>" : ""}</tr></thead>
+      <tbody>${marksRows}</tbody>
+    </table>` : '<p class="empty">No daily marks recorded yet.</p>'}
+    ${position.notes ? `<h2>Notes</h2><p>${position.notes}</p>` : ""}
+  `;
+}
+load();
+</script>
+</body>
+</html>

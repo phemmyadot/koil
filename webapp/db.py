@@ -87,49 +87,72 @@ def _init_schema() -> None:
                 fetched_at REAL NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS taken_trades (
+            CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker TEXT NOT NULL,
-                strategy_key TEXT NOT NULL,
-                signal_date TEXT NOT NULL,
-                instrument TEXT NOT NULL,
-                entry_date TEXT NOT NULL,
-                entry_price REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
                 tp_price REAL NOT NULL,
                 stop_price REAL NOT NULL,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT,
+                last_alert_tp_pct REAL,
+                last_alert_stop_pct REAL,
+                notes TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
+            -- Only one OPEN position per ticker at a time -- a later entry after a position
+            -- fully closes starts a NEW position row (see 2026-07-31-position-fills-design.md),
+            -- never reopens the old one. SQLite supports partial indexes since 3.8 (2013),
+            -- long before any version this project would run on.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_one_open_per_ticker
+                ON positions(ticker) WHERE status = 'open';
+
+            CREATE TABLE IF NOT EXISTS position_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id INTEGER NOT NULL,
+                strategy_key TEXT NOT NULL,
+                signal_date TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                fill_date TEXT NOT NULL,
+                price REAL NOT NULL,
+                units REAL NOT NULL,
+                instrument TEXT NOT NULL,
+                exit_reason TEXT,
                 opt_side TEXT,
                 opt_type TEXT,
                 strike REAL,
                 premium REAL,
-                contracts INTEGER,
                 expiry_date TEXT,
                 iv_at_entry REAL,
-                confirmed_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                exit_price REAL,
-                exit_reason TEXT,
-                closed_at TEXT,
-                last_alert_tp_pct REAL,
-                last_alert_stop_pct REAL,
                 notes TEXT,
-                units REAL,
-                UNIQUE (ticker, strategy_key, signal_date)
+                created_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_taken_trades_status ON taken_trades(status);
-
+            CREATE INDEX IF NOT EXISTS idx_position_fills_position ON position_fills(position_id);
+        """)
+    _migrate_universe_meta_date_to_epoch()
+    _migrate_computed_results_fetch_epoch_to_bar_date()
+    _migrate_taken_trades_to_positions_and_fills()
+    # trade_daily_marks/notifications table+index creation lives here, AFTER the migration
+    # above, not in the main executescript -- a pre-migration DB still has these tables with
+    # the old trade_id column at that point, and CREATE INDEX ... ON table(position_id) would
+    # fail immediately against a column that doesn't exist yet. The migration function renames
+    # trade_id -> position_id in place for an existing table; CREATE TABLE IF NOT EXISTS here
+    # is then a no-op for it and only actually creates the table fresh for a brand-new DB.
+    with _lock, _conn:
+        _conn.executescript("""
             CREATE TABLE IF NOT EXISTS trade_daily_marks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                trade_id INTEGER NOT NULL,
+                position_id INTEGER NOT NULL,
                 mark_date TEXT NOT NULL,
                 close_price REAL NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE (trade_id, mark_date)
+                UNIQUE (position_id, mark_date)
             );
-            CREATE INDEX IF NOT EXISTS idx_trade_daily_marks_trade ON trade_daily_marks(trade_id);
+            CREATE INDEX IF NOT EXISTS idx_trade_daily_marks_position ON trade_daily_marks(position_id);
 
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                trade_id INTEGER NOT NULL,
+                position_id INTEGER NOT NULL,
                 kind TEXT NOT NULL,
                 pct REAL NOT NULL,
                 message TEXT NOT NULL,
@@ -138,9 +161,6 @@ def _init_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read_at);
         """)
-    _migrate_universe_meta_date_to_epoch()
-    _migrate_computed_results_fetch_epoch_to_bar_date()
-    _migrate_taken_trades_add_units()
 
 
 def _migrate_universe_meta_date_to_epoch() -> None:
@@ -202,16 +222,68 @@ def _migrate_computed_results_fetch_epoch_to_bar_date() -> None:
             _conn.execute("ALTER TABLE computed_results ADD COLUMN source_bar_date TEXT")
 
 
-def _migrate_taken_trades_add_units() -> None:
-    """One-time migration: taken_trades gained a `units` column (spot position size, the
-    share-count analog of options' `contracts`) after the table already existed in some DBs --
-    CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so add it explicitly if
-    missing. Needed for dollar P&L on spot trades (units * price), which has no other source
-    of position size."""
+def _migrate_taken_trades_to_positions_and_fills() -> None:
+    """One-time migration: the old single-entry/single-exit taken_trades table is replaced by
+    positions (one row per ticker campaign) + position_fills (flat entry/exit events) -- see
+    docs/superpowers/specs/2026-07-31-position-fills-design.md. Each taken_trades row converts
+    1:1 into one positions row (preserving its original id, so trade_daily_marks/notifications
+    FK values keep pointing at the right thing after their own column rename below) plus one
+    'entry' fill from entry_price/entry_date, and one 'exit' fill too if the trade was already
+    closed. No-ops entirely once taken_trades no longer exists (already migrated, or a fresh DB
+    that was never on the old schema)."""
     with _lock, _conn:
-        cols = [row[1] for row in _conn.execute("PRAGMA table_info(taken_trades)").fetchall()]
-        if "units" not in cols:
-            _conn.execute("ALTER TABLE taken_trades ADD COLUMN units REAL")
+        tables = {row[0] for row in _conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "taken_trades" not in tables:
+            return
+
+        rows = _conn.execute("SELECT * FROM taken_trades").fetchall()
+        cols = [d[0] for d in _conn.execute("SELECT * FROM taken_trades LIMIT 1").description]
+        old_trades = [dict(zip(cols, r)) for r in rows]
+
+        for t in old_trades:
+            _conn.execute("""
+                INSERT INTO positions (id, ticker, status, tp_price, stop_price, opened_at,
+                                        closed_at, last_alert_tp_pct, last_alert_stop_pct, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (t["id"], t["ticker"], t["status"], t["tp_price"], t["stop_price"],
+                  t["confirmed_at"], t["closed_at"], t["last_alert_tp_pct"], t["last_alert_stop_pct"],
+                  t["notes"]))
+
+            entry_created_at = t["confirmed_at"]
+            _conn.execute("""
+                INSERT INTO position_fills (position_id, strategy_key, signal_date, kind, fill_date,
+                    price, units, instrument, exit_reason, opt_side, opt_type, strike, premium,
+                    expiry_date, iv_at_entry, notes, created_at)
+                VALUES (?, ?, ?, 'entry', ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """, (t["id"], t["strategy_key"], t["signal_date"], t["entry_date"],
+                  t["entry_price"], t["units"] if t["instrument"] == "spot" else t["contracts"],
+                  t["instrument"], t["opt_side"], t["opt_type"], t["strike"], t["premium"],
+                  t["expiry_date"], t["iv_at_entry"], entry_created_at))
+
+            if t["status"] == "closed" and t["exit_price"] is not None:
+                exit_units = t["units"] if t["instrument"] == "spot" else t["contracts"]
+                _conn.execute("""
+                    INSERT INTO position_fills (position_id, strategy_key, signal_date, kind, fill_date,
+                        price, units, instrument, exit_reason, opt_side, opt_type, strike, premium,
+                        expiry_date, iv_at_entry, notes, created_at)
+                    VALUES (?, ?, ?, 'exit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                """, (t["id"], t["strategy_key"], t["signal_date"],
+                      (t["closed_at"] or entry_created_at)[:10], t["exit_price"], exit_units,
+                      t["instrument"], t["exit_reason"], t["opt_side"], t["opt_type"], t["strike"],
+                      t["premium"], t["expiry_date"], t["iv_at_entry"], t["closed_at"] or entry_created_at))
+
+        # Repoint trade_daily_marks/notifications at the new column name -- the FK VALUES are
+        # unchanged (positions.id == the old taken_trades.id, preserved above), only the column
+        # is renamed from trade_id to position_id.
+        mark_cols = [row[1] for row in _conn.execute("PRAGMA table_info(trade_daily_marks)").fetchall()]
+        if "trade_id" in mark_cols:
+            _conn.execute("ALTER TABLE trade_daily_marks RENAME COLUMN trade_id TO position_id")
+        notif_cols = [row[1] for row in _conn.execute("PRAGMA table_info(notifications)").fetchall()]
+        if "trade_id" in notif_cols:
+            _conn.execute("ALTER TABLE notifications RENAME COLUMN trade_id TO position_id")
+
+        _conn.execute("DROP TABLE taken_trades")
 
 
 _init_schema()
@@ -562,149 +634,223 @@ def set_last_screened_at(epoch: float) -> None:
         """, (epoch,))
 
 
-# ─────────────────────────── taken trades ───────────────────────────
+# ─────────────────────────── positions ───────────────────────────
+# See docs/superpowers/specs/2026-07-31-position-fills-design.md. A position is one row per
+# ticker "campaign" -- status/avg-cost/P&L are all derived by replaying its position_fills
+# (see webapp/app.py's replay_fills()), never stored directly except status/closed_at, which
+# are kept as a fast-lookup cache of that same replay (see the design doc's "Status derivation"
+# section for why: _active_tickers()/the alert engine need "all open positions" as an indexed
+# query, not a full fills-replay per ticker on every request).
 
-_TAKEN_TRADE_COLUMNS = [
-    "id", "ticker", "strategy_key", "signal_date", "instrument", "entry_date",
-    "entry_price", "tp_price", "stop_price", "opt_side", "opt_type", "strike",
-    "premium", "contracts", "expiry_date", "iv_at_entry", "confirmed_at",
-    "status", "exit_price", "exit_reason", "closed_at",
-    "last_alert_tp_pct", "last_alert_stop_pct", "notes", "units",
+_POSITION_COLUMNS = [
+    "id", "ticker", "status", "tp_price", "stop_price", "opened_at", "closed_at",
+    "last_alert_tp_pct", "last_alert_stop_pct", "notes",
+]
+
+_FILL_COLUMNS = [
+    "id", "position_id", "strategy_key", "signal_date", "kind", "fill_date", "price", "units",
+    "instrument", "exit_reason", "opt_side", "opt_type", "strike", "premium", "expiry_date",
+    "iv_at_entry", "notes", "created_at",
 ]
 
 
-def _row_to_trade(row) -> dict:
-    return dict(zip(_TAKEN_TRADE_COLUMNS, row))
+def _row_to_position(row) -> dict:
+    return dict(zip(_POSITION_COLUMNS, row))
 
 
-def insert_trade(trade: dict) -> int:
-    """Insert a confirmed trade. `trade` must supply every column in
-    _TAKEN_TRADE_COLUMNS except id (option-only fields may be None for a
-    spot trade). Raises sqlite3.IntegrityError on a (ticker, strategy_key,
-    signal_date) dup -- callers decide whether that means "update instead."""
-    cols = [c for c in _TAKEN_TRADE_COLUMNS if c != "id"]
+def _row_to_fill(row) -> dict:
+    return dict(zip(_FILL_COLUMNS, row))
+
+
+def insert_position(ticker: str, tp_price: float, stop_price: float, opened_at: str,
+                     notes: str | None = None) -> int:
+    """Creates a new open position. Raises sqlite3.IntegrityError if this ticker already has
+    an open position (idx_positions_one_open_per_ticker) -- callers should add a fill to the
+    existing open position instead (see find_open_position_by_ticker)."""
     with _lock, _conn:
-        cur = _conn.execute(
-            f"INSERT INTO taken_trades ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
-            [trade[c] for c in cols],
-        )
+        cur = _conn.execute("""
+            INSERT INTO positions (ticker, status, tp_price, stop_price, opened_at, notes)
+            VALUES (?, 'open', ?, ?, ?, ?)
+        """, (ticker, tp_price, stop_price, opened_at, notes))
         return cur.lastrowid
 
 
-def get_trade(trade_id: int) -> dict | None:
+def get_position(position_id: int) -> dict | None:
     with _lock:
-        row = _conn.execute("SELECT * FROM taken_trades WHERE id = ?", (trade_id,)).fetchone()
-    return _row_to_trade(row) if row else None
+        row = _conn.execute("SELECT * FROM positions WHERE id = ?", (position_id,)).fetchone()
+    return _row_to_position(row) if row else None
 
 
-def find_trade_by_signal(ticker: str, strategy_key: str, signal_date: str) -> dict | None:
+def find_open_position_by_ticker(ticker: str) -> dict | None:
     with _lock:
         row = _conn.execute(
-            "SELECT * FROM taken_trades WHERE ticker = ? AND strategy_key = ? AND signal_date = ?",
-            (ticker, strategy_key, signal_date),
+            "SELECT * FROM positions WHERE ticker = ? AND status = 'open'", (ticker,)
         ).fetchone()
-    return _row_to_trade(row) if row else None
+    return _row_to_position(row) if row else None
 
 
-def list_trades(status: str | None = None) -> list[dict]:
+def list_positions(status: str | None = None) -> list[dict]:
     with _lock:
         if status:
             rows = _conn.execute(
-                "SELECT * FROM taken_trades WHERE status = ? ORDER BY entry_date DESC, id DESC", (status,)
+                "SELECT * FROM positions WHERE status = ? ORDER BY opened_at DESC, id DESC", (status,)
             ).fetchall()
         else:
-            rows = _conn.execute("SELECT * FROM taken_trades ORDER BY entry_date DESC, id DESC").fetchall()
-    return [_row_to_trade(r) for r in rows]
+            rows = _conn.execute("SELECT * FROM positions ORDER BY opened_at DESC, id DESC").fetchall()
+    return [_row_to_position(r) for r in rows]
 
 
-def update_trade_fields(trade_id: int, fields: dict) -> None:
-    """Generic partial update -- fields is a dict of column -> new value."""
+def update_position_fields(position_id: int, fields: dict) -> None:
+    """Generic partial update -- fields is a dict of column -> new value. For position-level
+    fields only (tp_price, stop_price, notes); fills are corrected via update_fill_fields."""
     if not fields:
         return
     set_clause = ", ".join(f"{c} = ?" for c in fields)
     with _lock, _conn:
-        _conn.execute(f"UPDATE taken_trades SET {set_clause} WHERE id = ?",
-                       [*fields.values(), trade_id])
+        _conn.execute(f"UPDATE positions SET {set_clause} WHERE id = ?",
+                       [*fields.values(), position_id])
 
 
-def close_trade(trade_id: int, exit_price: float, exit_reason: str, closed_at: str) -> None:
+def set_position_status(position_id: int, status: str, closed_at: str | None) -> None:
+    """Flips status/closed_at -- called after every fill insert/delete, recomputed from a fresh
+    replay of that position's fills (see app.py), never a value the caller invents directly."""
     with _lock, _conn:
-        _conn.execute("""
-            UPDATE taken_trades
-            SET status = 'closed', exit_price = ?, exit_reason = ?, closed_at = ?
-            WHERE id = ?
-        """, (exit_price, exit_reason, closed_at, trade_id))
+        _conn.execute("UPDATE positions SET status = ?, closed_at = ? WHERE id = ?",
+                       (status, closed_at, position_id))
 
 
-def delete_trade(trade_id: int) -> None:
-    """Hard delete -- used for 'cancel trade' (the trade was confirmed in error, or the entry
-    never actually happened), not for a normal exit. Cascades to the trade's daily marks and
-    notifications so nothing orphaned lingers referencing a since-deleted trade_id."""
+def delete_position(position_id: int) -> None:
+    """Hard delete -- cancels the whole position and every one of its fills. Cascades to daily
+    marks and notifications so nothing orphaned lingers referencing a since-deleted position_id."""
     with _lock, _conn:
-        _conn.execute("DELETE FROM taken_trades WHERE id = ?", (trade_id,))
-        _conn.execute("DELETE FROM trade_daily_marks WHERE trade_id = ?", (trade_id,))
-        _conn.execute("DELETE FROM notifications WHERE trade_id = ?", (trade_id,))
+        _conn.execute("DELETE FROM positions WHERE id = ?", (position_id,))
+        _conn.execute("DELETE FROM position_fills WHERE position_id = ?", (position_id,))
+        _conn.execute("DELETE FROM trade_daily_marks WHERE position_id = ?", (position_id,))
+        _conn.execute("DELETE FROM notifications WHERE position_id = ?", (position_id,))
 
 
-def update_trade_alert_pct(trade_id: int, *, tp_pct: float | None = None, stop_pct: float | None = None) -> None:
+def update_position_alert_pct(position_id: int, *, tp_pct: float | None = None,
+                               stop_pct: float | None = None) -> None:
     """Bumps last_alert_tp_pct/last_alert_stop_pct -- only the side(s) passed are touched,
     so the alert engine can update one side without clobbering the other."""
     if tp_pct is None and stop_pct is None:
         return
     with _lock, _conn:
         if tp_pct is not None:
-            _conn.execute("UPDATE taken_trades SET last_alert_tp_pct = ? WHERE id = ?", (tp_pct, trade_id))
+            _conn.execute("UPDATE positions SET last_alert_tp_pct = ? WHERE id = ?", (tp_pct, position_id))
         if stop_pct is not None:
-            _conn.execute("UPDATE taken_trades SET last_alert_stop_pct = ? WHERE id = ?", (stop_pct, trade_id))
+            _conn.execute("UPDATE positions SET last_alert_stop_pct = ? WHERE id = ?", (stop_pct, position_id))
+
+
+# ─────────────────────────── position fills ───────────────────────────
+
+def insert_fill(fill: dict) -> int:
+    """Insert one entry/exit event. `fill` must supply every column in _FILL_COLUMNS except id
+    (option-only fields may be None for instrument='spot'; exit_reason is None for kind='entry')."""
+    cols = [c for c in _FILL_COLUMNS if c != "id"]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"INSERT INTO position_fills ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+            [fill[c] for c in cols],
+        )
+        return cur.lastrowid
+
+
+def get_fill(fill_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM position_fills WHERE id = ?", (fill_id,)).fetchone()
+    return _row_to_fill(row) if row else None
+
+
+def list_fills(position_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM position_fills WHERE position_id = ? ORDER BY fill_date, id",
+            (position_id,)
+        ).fetchall()
+    return [_row_to_fill(r) for r in rows]
+
+
+def list_fills_bulk(position_ids: list[int]) -> dict[int, list[dict]]:
+    """Fills for many positions in one query -- for list/analytics views that would otherwise
+    need one list_fills() call per position."""
+    if not position_ids:
+        return {}
+    placeholders = ", ".join("?" * len(position_ids))
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT * FROM position_fills WHERE position_id IN ({placeholders}) ORDER BY position_id, fill_date, id",
+            position_ids,
+        ).fetchall()
+    out: dict[int, list[dict]] = {pid: [] for pid in position_ids}
+    for r in rows:
+        fill = _row_to_fill(r)
+        out[fill["position_id"]].append(fill)
+    return out
+
+
+def update_fill_fields(fill_id: int, fields: dict) -> None:
+    """Generic partial update for one fill -- e.g. correcting a wrong exit price."""
+    if not fields:
+        return
+    set_clause = ", ".join(f"{c} = ?" for c in fields)
+    with _lock, _conn:
+        _conn.execute(f"UPDATE position_fills SET {set_clause} WHERE id = ?",
+                       [*fields.values(), fill_id])
+
+
+def delete_fill(fill_id: int) -> None:
+    with _lock, _conn:
+        _conn.execute("DELETE FROM position_fills WHERE id = ?", (fill_id,))
 
 
 # ─────────────────────────── trade daily marks ───────────────────────────
 
-def upsert_trade_daily_mark(trade_id: int, mark_date: str, close_price: float, updated_at: str) -> None:
+def upsert_trade_daily_mark(position_id: int, mark_date: str, close_price: float, updated_at: str) -> None:
     with _lock, _conn:
         _conn.execute("""
-            INSERT INTO trade_daily_marks (trade_id, mark_date, close_price, updated_at)
+            INSERT INTO trade_daily_marks (position_id, mark_date, close_price, updated_at)
             VALUES (?, ?, ?, ?)
-            ON CONFLICT(trade_id, mark_date) DO UPDATE SET
+            ON CONFLICT(position_id, mark_date) DO UPDATE SET
                 close_price=excluded.close_price, updated_at=excluded.updated_at
-        """, (trade_id, mark_date, close_price, updated_at))
+        """, (position_id, mark_date, close_price, updated_at))
 
 
-def get_trade_daily_marks(trade_id: int) -> list[dict]:
+def get_trade_daily_marks(position_id: int) -> list[dict]:
     with _lock:
         rows = _conn.execute(
-            "SELECT mark_date, close_price FROM trade_daily_marks WHERE trade_id = ? ORDER BY mark_date",
-            (trade_id,)
+            "SELECT mark_date, close_price FROM trade_daily_marks WHERE position_id = ? ORDER BY mark_date",
+            (position_id,)
         ).fetchall()
     return [{"mark_date": d, "close_price": c} for d, c in rows]
 
 
-def get_trade_daily_marks_bulk(trade_ids: list[int]) -> dict[int, list[dict]]:
-    """Marks for many trades in one query -- for the analytics/cohort view, which would
-    otherwise need one get_trade_daily_marks() call per filtered trade."""
-    if not trade_ids:
+def get_trade_daily_marks_bulk(position_ids: list[int]) -> dict[int, list[dict]]:
+    """Marks for many positions in one query -- for the analytics/cohort view, which would
+    otherwise need one get_trade_daily_marks() call per filtered position."""
+    if not position_ids:
         return {}
-    placeholders = ", ".join("?" * len(trade_ids))
+    placeholders = ", ".join("?" * len(position_ids))
     with _lock:
         rows = _conn.execute(
-            f"SELECT trade_id, mark_date, close_price FROM trade_daily_marks "
-            f"WHERE trade_id IN ({placeholders}) ORDER BY trade_id, mark_date",
-            trade_ids,
+            f"SELECT position_id, mark_date, close_price FROM trade_daily_marks "
+            f"WHERE position_id IN ({placeholders}) ORDER BY position_id, mark_date",
+            position_ids,
         ).fetchall()
-    out: dict[int, list[dict]] = {tid: [] for tid in trade_ids}
-    for tid, mark_date, close_price in rows:
-        out[tid].append({"mark_date": mark_date, "close_price": close_price})
+    out: dict[int, list[dict]] = {pid: [] for pid in position_ids}
+    for pid, mark_date, close_price in rows:
+        out[pid].append({"mark_date": mark_date, "close_price": close_price})
     return out
 
 
 # ─────────────────────────── notifications ───────────────────────────
 
-def insert_notification(trade_id: int, kind: str, pct: float, message: str, created_at: str) -> int:
+def insert_notification(position_id: int, kind: str, pct: float, message: str, created_at: str) -> int:
     with _lock, _conn:
         cur = _conn.execute("""
-            INSERT INTO notifications (trade_id, kind, pct, message, created_at)
+            INSERT INTO notifications (position_id, kind, pct, message, created_at)
             VALUES (?, ?, ?, ?, ?)
-        """, (trade_id, kind, pct, message, created_at))
+        """, (position_id, kind, pct, message, created_at))
         return cur.lastrowid
 
 
@@ -712,15 +858,15 @@ def list_notifications(unread_only: bool = False) -> list[dict]:
     with _lock:
         if unread_only:
             rows = _conn.execute(
-                "SELECT id, trade_id, kind, pct, message, created_at, read_at "
+                "SELECT id, position_id, kind, pct, message, created_at, read_at "
                 "FROM notifications WHERE read_at IS NULL ORDER BY created_at DESC"
             ).fetchall()
         else:
             rows = _conn.execute(
-                "SELECT id, trade_id, kind, pct, message, created_at, read_at "
+                "SELECT id, position_id, kind, pct, message, created_at, read_at "
                 "FROM notifications ORDER BY created_at DESC"
             ).fetchall()
-    cols = ["id", "trade_id", "kind", "pct", "message", "created_at", "read_at"]
+    cols = ["id", "position_id", "kind", "pct", "message", "created_at", "read_at"]
     return [dict(zip(cols, r)) for r in rows]
 
 

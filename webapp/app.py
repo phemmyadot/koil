@@ -185,13 +185,13 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
 def _active_tickers() -> list[str]:
     """Candidate tickers (from the DB table -- see step 1 of the cycle in this module's
     docstring, NOT a live Yahoo screener call) plus any ticker a client has ever reported as
-    watchlisted, plus any ticker with an open taken_trades row -- both a watchlisted ticker
-    and an actively-traded one must keep being fetched/computed even if they later fail the
-    technical filter, or they silently go stale forever (an open trade's daily marks and
-    TP/stop alerts depend on this)."""
+    watchlisted, plus any ticker with an open position -- both a watchlisted ticker and an
+    actively-traded one must keep being fetched/computed even if they later fail the technical
+    filter, or they silently go stale forever (an open position's daily marks and TP/stop
+    alerts depend on this)."""
     candidates = db.get_candidate_tickers()
     watchlisted = db.get_watchlist_tickers()
-    traded = [t["ticker"] for t in db.list_trades("open")]
+    traded = [p["ticker"] for p in db.list_positions("open")]
     seen = set(candidates)
     extra = []
     for tk in watchlisted + traded:
@@ -297,62 +297,159 @@ def compute_all(force: bool = False) -> None:
 TP_STOP_ALERT_THRESHOLDS = [30, 50, 70, 80, 90, 95]
 
 
+def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
+    """Weighted-average-cost replay of a position's fills -- see
+    docs/superpowers/specs/2026-07-31-position-fills-design.md for the full derivation and a
+    worked example. Fills are processed in fill_date order; if as_of_date is given, only fills
+    on or before that date are replayed (for the daily-mark / historical-as-of-day case),
+    otherwise all fills are used (for "current state").
+
+    Returns: {units_remaining, avg_cost, realized_pnl, instrument, contracts_per_unit (100 for
+    options, 1 for spot -- the multiplier realized/unrealized $ P&L needs), open_option_fills
+    (entry fills still holding remaining units, oldest-instrument-detail first, needed by the
+    expiry auto-close check since each entry fill carries its own strike/expiry/iv)}.
+
+    price on every fill is ALWAYS the underlying stock price (see trade-tracking-design.md's
+    stock-price convention) -- for options, the $ cost/proceeds use each fill's OWN premium
+    field, not the stock price, since premium is what was actually paid/received."""
+    ordered = sorted(fills, key=lambda f: (f["fill_date"], f["id"]))
+    if as_of_date is not None:
+        ordered = [f for f in ordered if f["fill_date"] <= as_of_date]
+
+    running_units = 0.0
+    running_cost = 0.0
+    realized_pnl = 0.0
+    instrument = ordered[0]["instrument"] if ordered else "spot"
+    multiplier = 100 if instrument == "option" else 1
+    # FIFO consumption of entry units purely to track which entry fills (and thus which
+    # strike/expiry/iv) still have units outstanding -- NOT used for cost basis (that's
+    # weighted-average, see above), only for the expiry auto-close check, which needs to know
+    # a specific option fill's own expiry_date, not a position-wide blended one.
+    open_lots: list[dict] = []  # [{fill, units_remaining}], oldest entry first
+
+    for f in ordered:
+        fill_value = f["premium"] if instrument == "option" else f["price"]
+        if f["kind"] == "entry":
+            running_cost += fill_value * f["units"] * multiplier
+            running_units += f["units"]
+            open_lots.append({"fill": f, "units_remaining": f["units"]})
+        elif f["kind"] == "exit":
+            if running_units <= 0:
+                continue  # malformed data guard -- an exit with nothing open, ignore rather than divide by zero
+            avg_cost = running_cost / running_units
+            exit_value = f["premium"] if instrument == "option" else f["price"]
+            realized_pnl += (exit_value - avg_cost) * f["units"] * multiplier
+            running_cost -= avg_cost * f["units"] * multiplier
+            running_units -= f["units"]
+            remaining_to_consume = f["units"]
+            for lot in open_lots:
+                if remaining_to_consume <= 0:
+                    break
+                consumed = min(lot["units_remaining"], remaining_to_consume)
+                lot["units_remaining"] -= consumed
+                remaining_to_consume -= consumed
+
+    avg_cost = (running_cost / running_units) if running_units > 0 else None
+    open_lots = [lot for lot in open_lots if lot["units_remaining"] > 0]
+    return {
+        "units_remaining": running_units,
+        "avg_cost": avg_cost,
+        "realized_pnl": realized_pnl,
+        "instrument": instrument,
+        "multiplier": multiplier,
+        # {fill, units_remaining} per still-open entry fill -- lets the expiry auto-close check
+        # know exactly how many units of THAT SPECIFIC fill's strike/expiry/iv remain, since
+        # cost basis is blended (weighted-average) but expiry is necessarily per-fill.
+        "open_lots": open_lots,
+    }
+
+
 def _update_trade_marks_and_alerts() -> None:
     """Runs after every compute_all() pass (scheduled 2h wake or manual refresh, same code
-    path -- see refresh_and_compute()). For every open taken trade: upsert today's daily mark
-    from the ticker's already-computed price/date (no new Yahoo call), then check progress
-    toward TP/stop and fire an in-app notification the first time each threshold band is
-    crossed. Alerting is always based on the underlying stock price, never a modeled option
-    price, even for option trades -- see docs/superpowers/specs/2026-07-31-trade-tracking-design.md."""
-    open_trades = db.list_trades("open")
-    if not open_trades:
+    path -- see refresh_and_compute()). For every open position: upsert today's daily mark
+    from the ticker's already-computed price/date (no new Yahoo call), auto-close any option
+    fills that have hit expiry, then check progress toward TP/stop and fire an in-app
+    notification the first time each threshold band is crossed. Alerting is always based on
+    the underlying stock price, never a modeled option price, even for option positions -- see
+    docs/superpowers/specs/2026-07-31-trade-tracking-design.md."""
+    open_positions = db.list_positions("open")
+    if not open_positions:
         return
 
     with _compute_lock:
         price_by_ticker = {p["ticker"]: (p["price"], p["date"]) for p in _computed}
 
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    for trade in open_trades:
-        current = price_by_ticker.get(trade["ticker"])
+    for position in open_positions:
+        current = price_by_ticker.get(position["ticker"])
         if current is None:
             continue
         current_price, bar_date = current
 
-        db.upsert_trade_daily_mark(trade["id"], bar_date, current_price, now_iso)
+        db.upsert_trade_daily_mark(position["id"], bar_date, current_price, now_iso)
 
-        # Option trades auto-close once the market has closed on/after expiry -- bar_date is
-        # only ever a real, settled close (the background loop only marks confirmed post-close
-        # data, never an intraday quote), so this is never a same-day "still trading" false
-        # positive. exit_price is the stock's actual confirmed close that day, not a modeled
-        # option value -- matches how the position is genuinely worth whatever it settles at.
-        if trade["instrument"] == "option" and trade["expiry_date"] and bar_date >= trade["expiry_date"]:
-            db.close_trade(trade["id"], current_price, "expired", now_iso)
+        fills = db.list_fills(position["id"])
+
+        # Any option entry fill whose expiry has passed auto-exits ITS remaining units at the
+        # stock's current confirmed close -- bar_date is only ever a real, settled close (the
+        # background loop never marks an intraday quote), so this is never a same-day "still
+        # trading" false positive. exit price is the stock price, per the fill-price convention
+        # -- the option's actual value at that point is derived (Black-Scholes) on read, same
+        # as the rest of this app's option pricing, never stored here. Recomputes the replay
+        # after each insert (not just once up front) since an earlier lot's auto-exit in this
+        # same pass changes what "remaining units" means for lots processed after it.
+        while True:
+            state = replay_fills(fills)
+            expired_lot = next(
+                (lot for lot in state["open_lots"]
+                 if lot["fill"]["expiry_date"] and bar_date >= lot["fill"]["expiry_date"]),
+                None,
+            )
+            if expired_lot is None:
+                break
+            lot_fill = expired_lot["fill"]
+            db.insert_fill({
+                "position_id": position["id"], "strategy_key": lot_fill["strategy_key"],
+                "signal_date": lot_fill["signal_date"], "kind": "exit", "fill_date": bar_date,
+                "price": current_price, "units": expired_lot["units_remaining"], "instrument": "option",
+                "exit_reason": "expired", "opt_side": lot_fill["opt_side"], "opt_type": lot_fill["opt_type"],
+                "strike": lot_fill["strike"], "premium": lot_fill["premium"],
+                "expiry_date": lot_fill["expiry_date"], "iv_at_entry": lot_fill["iv_at_entry"],
+                "notes": None, "created_at": now_iso,
+            })
+            fills = db.list_fills(position["id"])
+
+        state = replay_fills(fills)
+        if state["units_remaining"] <= 0:
+            db.set_position_status(position["id"], "closed", now_iso)
             continue
+        db.set_position_status(position["id"], "open", None)
 
-        entry, tp, stop = trade["entry_price"], trade["tp_price"], trade["stop_price"]
-        # Sign-aware: a short/put-style trade has tp below entry and stop above -- these
+        avg_cost = state["avg_cost"]
+        tp, stop = position["tp_price"], position["stop_price"]
+        # Sign-aware: a short/put-style position has tp below avg_cost and stop above -- these
         # denominators are negative in that case, keeping pct_to_* positive as price moves
         # favorably either direction.
-        pct_to_tp = (current_price - entry) / (tp - entry) * 100 if tp != entry else 0
-        pct_to_stop = (entry - current_price) / (entry - stop) * 100 if stop != entry else 0
+        pct_to_tp = (current_price - avg_cost) / (tp - avg_cost) * 100 if tp != avg_cost else 0
+        pct_to_stop = (avg_cost - current_price) / (avg_cost - stop) * 100 if stop != avg_cost else 0
 
-        _fire_threshold_alerts(trade, "tp_progress", pct_to_tp, trade["last_alert_tp_pct"])
-        _fire_threshold_alerts(trade, "stop_progress", pct_to_stop, trade["last_alert_stop_pct"])
+        _fire_threshold_alerts(position, "tp_progress", pct_to_tp, position["last_alert_tp_pct"])
+        _fire_threshold_alerts(position, "stop_progress", pct_to_stop, position["last_alert_stop_pct"])
 
 
-def _fire_threshold_alerts(trade: dict, kind: str, pct: float, last_alert_pct: float | None) -> None:
+def _fire_threshold_alerts(position: dict, kind: str, pct: float, last_alert_pct: float | None) -> None:
     crossed = [t for t in TP_STOP_ALERT_THRESHOLDS if pct >= t and (last_alert_pct is None or t > last_alert_pct)]
     if not crossed:
         return
     highest = max(crossed)
     side = "TP" if kind == "tp_progress" else "stop"
-    message = f"{trade['ticker']} ({trade['strategy_key']}) is {highest}% of the way to {side}"
+    message = f"{position['ticker']} is {highest}% of the way to {side}"
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db.insert_notification(trade["id"], kind, highest, message, now_iso)
+    db.insert_notification(position["id"], kind, highest, message, now_iso)
     if kind == "tp_progress":
-        db.update_trade_alert_pct(trade["id"], tp_pct=highest)
+        db.update_position_alert_pct(position["id"], tp_pct=highest)
     else:
-        db.update_trade_alert_pct(trade["id"], stop_pct=highest)
+        db.update_position_alert_pct(position["id"], stop_pct=highest)
 
 
 def refresh_and_compute(force: bool = False) -> None:
@@ -610,80 +707,102 @@ def export_csv(body: dict):
                      headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
-def _with_option_values(trade: dict, marks: list[dict]) -> list[dict]:
-    """Annotates each daily stock-price mark with the option's modeled value that day
-    (Black-Scholes, using strike/iv_at_entry/expiry_date/opt_type captured at trade
-    confirmation) -- spot trades and option trades missing iv_at_entry pass through
-    unchanged, since there's nothing to price. mark_date -> days-to-expiry is computed
-    per mark rather than assumed linear, so it stays correct even with weekend/holiday
-    gaps in the trading-day mark series."""
-    if trade["instrument"] != "option" or trade.get("iv_at_entry") is None:
+def _fill_exit_value(fill: dict) -> float:
+    """The $-per-unit value a fill's units are worth -- premium for options (what was actually
+    paid/received), the recorded stock price for spot. Mirrors replay_fills()'s own fill_value
+    logic; kept as a standalone helper since routes need it outside a full replay too (e.g. to
+    show an individual fill's own realized P&L contribution)."""
+    return fill["premium"] if fill["instrument"] == "option" else fill["price"]
+
+
+def _with_option_values(position: dict, fills: list[dict], marks: list[dict]) -> list[dict]:
+    """Annotates each daily stock-price mark with the position's modeled option value that day
+    (Black-Scholes, blended across whichever option entry fills are still open as of that mark
+    date -- weighted by each fill's own remaining units, strike, and IV, since a position can
+    hold fills from different entries with different strikes/IVs). Spot positions, or option
+    positions with no fills carrying iv_at_entry, pass marks through unchanged."""
+    if not fills or fills[0]["instrument"] != "option":
         return marks
-    expiry = datetime.strptime(trade["expiry_date"], "%Y-%m-%d").date()
     out = []
     for m in marks:
+        state = replay_fills(fills, as_of_date=m["mark_date"])
+        priced_lots = [lot for lot in state["open_lots"] if lot["fill"].get("iv_at_entry") is not None]
+        if not priced_lots:
+            out.append(m)
+            continue
         mark_date = datetime.strptime(m["mark_date"], "%Y-%m-%d").date()
-        T = max((expiry - mark_date).days, 0) / 365
-        value = options_pricing.option_price(
-            trade["opt_type"], m["close_price"], trade["strike"], T, trade["iv_at_entry"],
-        )
-        out.append({**m, "option_value": round(value, 4)})
+        total_units = sum(lot["units_remaining"] for lot in priced_lots)
+        blended_value = 0.0
+        for lot in priced_lots:
+            f = lot["fill"]
+            expiry = datetime.strptime(f["expiry_date"], "%Y-%m-%d").date()
+            T = max((expiry - mark_date).days, 0) / 365
+            value = options_pricing.option_price(f["opt_type"], m["close_price"], f["strike"], T, f["iv_at_entry"])
+            blended_value += value * (lot["units_remaining"] / total_units)
+        out.append({**m, "option_value": round(blended_value, 4)})
     return out
 
 
-def _with_exit_option_value(trade: dict) -> dict:
-    """exit_price is ALWAYS the underlying stock's price, same convention as entry_price/
-    tp_price/stop_price for both instrument types -- there's no separate 'option fill price'
-    field, so a manually-recorded exit never mismatches the stock-price convention every other
-    price field already uses (see docs/superpowers/specs/2026-07-31-trade-tracking-design.md).
-    For a closed option trade with IV captured, adds exit_option_value: the option's modeled
-    value (Black-Scholes) at that stock price and the DTE remaining on the close date -- the
-    number actually comparable against premium paid."""
-    if (trade["instrument"] != "option" or trade["status"] != "closed"
-            or trade.get("iv_at_entry") is None or trade.get("exit_price") is None or not trade.get("closed_at")):
-        return trade
-    expiry = datetime.strptime(trade["expiry_date"], "%Y-%m-%d").date()
-    close_date = datetime.fromisoformat(trade["closed_at"]).date()
-    T = max((expiry - close_date).days, 0) / 365
-    value = options_pricing.option_price(trade["opt_type"], trade["exit_price"], trade["strike"], T, trade["iv_at_entry"])
-    return {**trade, "exit_option_value": round(value, 4)}
+_FILL_SPOT_REQUIRED = ["price", "units", "strategy_key", "signal_date", "fill_date"]
+_FILL_OPTION_REQUIRED = _FILL_SPOT_REQUIRED + ["opt_side", "opt_type", "strike", "premium", "expiry_date"]
+_FILL_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "expiry_date", "iv_at_entry"]
 
 
-_TRADE_SPOT_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price", "units"]
-_TRADE_OPTION_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price",
-                          "opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date"]
-_TRADE_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry"]
-
-
-def _validate_trade_body(body: dict) -> dict:
+def _validate_fill_body(body: dict, *, require_kind: bool) -> dict:
     instrument = body.get("instrument")
     if instrument not in ("spot", "option"):
         raise HTTPException(status_code=400, detail=f"invalid instrument: {instrument!r}")
-    required = _TRADE_OPTION_REQUIRED if instrument == "option" else _TRADE_SPOT_REQUIRED
+    if require_kind and body.get("kind") not in ("entry", "exit"):
+        raise HTTPException(status_code=400, detail="kind must be 'entry' or 'exit'")
+    required = list(_FILL_OPTION_REQUIRED if instrument == "option" else _FILL_SPOT_REQUIRED)
+    if body.get("kind") == "exit":
+        required.append("exit_reason")
     missing = [f for f in required if body.get(f) in (None, "")]
     if missing:
         raise HTTPException(status_code=400, detail=f"missing required field(s): {', '.join(missing)}")
+    if body.get("exit_reason") is not None and body["exit_reason"] not in ("tp", "stop", "manual", "expired"):
+        raise HTTPException(status_code=400, detail="exit_reason must be 'tp'|'stop'|'manual'|'expired'")
     return body
 
 
-def _backfill_trade_marks(trade_id: int, ticker: str, entry_date: str) -> None:
-    """A late-logged trade (entry_date in the past) has no daily marks for the gap between
-    entry_date and now, since the background loop only marks trades that already exist in
-    taken_trades. Fill that gap once, from the ticker's already-cached bars -- no new fetch."""
+def _build_fill(position_id: int, body: dict, kind: str, now_iso: str) -> dict:
+    instrument = body["instrument"]
+    fill = {
+        "position_id": position_id,
+        "strategy_key": body["strategy_key"],
+        "signal_date": body["signal_date"],
+        "kind": kind,
+        "fill_date": body["fill_date"],
+        "price": body["price"],
+        "units": body["units"],
+        "instrument": instrument,
+        "exit_reason": body.get("exit_reason") if kind == "exit" else None,
+        "notes": body.get("notes"),
+        "created_at": now_iso,
+    }
+    for f in _FILL_OPTION_ONLY_FIELDS:
+        fill[f] = body.get(f) if instrument == "option" else None
+    return fill
+
+
+def _backfill_position_marks(position_id: int, ticker: str, from_date: str) -> None:
+    """A late-logged fill (fill_date in the past) has no daily marks for the gap between
+    from_date and now, since the background loop only marks positions that already exist.
+    Fill that gap once, from the ticker's already-cached bars -- no new fetch."""
     bars = data.get_bars(ticker)
     if bars is None or bars.empty:
         return
     today = datetime.now(timezone.utc).date().isoformat()
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    for idx, row in bars.loc[entry_date:].iterrows():
+    for idx, row in bars.loc[from_date:].iterrows():
         mark_date = idx.strftime("%Y-%m-%d")
         if mark_date >= today:
             continue  # today (and beyond) is seeded from _computed by _seed_todays_mark, not here
-        db.upsert_trade_daily_mark(trade_id, mark_date, float(row["Close"]), now_iso)
+        db.upsert_trade_daily_mark(position_id, mark_date, float(row["Close"]), now_iso)
 
 
-def _seed_todays_mark(trade_id: int, ticker: str) -> None:
-    """A trade confirmed today has no mark for today yet -- the background loop (or the next
+def _seed_todays_mark(position_id: int, ticker: str) -> None:
+    """A position touched today has no mark for today yet -- the background loop (or the next
     manual refresh) is what normally writes it, but that could be up to CHECK_INTERVAL away.
     Seed it immediately from the ticker's already-computed price/date (same source
     _update_trade_marks_and_alerts() uses), so the Trades page has data to show right away
@@ -693,178 +812,273 @@ def _seed_todays_mark(trade_id: int, ticker: str) -> None:
     if payload is None:
         return
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db.upsert_trade_daily_mark(trade_id, payload["date"], payload["price"], now_iso)
+    db.upsert_trade_daily_mark(position_id, payload["date"], payload["price"], now_iso)
 
 
-@app.post("/api/trades")
-def create_trade(body: dict):
-    _validate_trade_body(body)
-    instrument = body["instrument"]
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    trade = {
-        "ticker": body["ticker"],
-        "strategy_key": body["strategy_key"],
-        "signal_date": body["signal_date"],
-        "instrument": instrument,
-        "entry_date": body["entry_date"],
-        "entry_price": body["entry_price"],
-        "tp_price": body["tp_price"],
-        "stop_price": body["stop_price"],
-        "confirmed_at": now_iso,
-        "status": "open",
-        "exit_price": None, "exit_reason": None, "closed_at": None,
-        "last_alert_tp_pct": None, "last_alert_stop_pct": None,
-        "notes": body.get("notes"),
-        "units": body.get("units") if instrument == "spot" else None,
+def _position_with_state(position: dict) -> dict:
+    """Annotates a position with its derived replay state (avg_cost, units_remaining,
+    realized_pnl, instrument) -- computed fresh from position_fills every time, never cached
+    beyond the stored status/closed_at (see db.py's positions docstring)."""
+    fills = db.list_fills(position["id"])
+    state = replay_fills(fills)
+    return {
+        **position,
+        "instrument": state["instrument"],
+        "units_remaining": state["units_remaining"],
+        "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
+        "realized_pnl": round(state["realized_pnl"], 2),
+        "fill_count": len(fills),
     }
-    for f in _TRADE_OPTION_ONLY_FIELDS:
-        trade[f] = body.get(f) if instrument == "option" else None
 
+
+@app.post("/api/positions")
+def create_position(body: dict):
+    """Opens a NEW position from a first entry fill. 409 if this ticker already has an open
+    position -- use POST /api/positions/{id}/fills to add to it instead (see
+    docs/superpowers/specs/2026-07-31-position-fills-design.md)."""
+    ticker = body.get("ticker")
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    _validate_fill_body(body, require_kind=False)
+    if body.get("tp_price") is None or body.get("stop_price") is None:
+        raise HTTPException(status_code=400, detail="tp_price and stop_price are required")
+    if db.find_open_position_by_ticker(ticker) is not None:
+        raise HTTPException(status_code=409, detail=f"{ticker} already has an open position -- add a fill to it instead")
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
-        trade_id = db.insert_trade(trade)
+        position_id = db.insert_position(ticker, body["tp_price"], body["stop_price"], now_iso, body.get("notes"))
     except sqlite3.IntegrityError:
-        raise HTTPException(
-            status_code=409,
-            detail=f"a trade already exists for {trade['ticker']}/{trade['strategy_key']}/{trade['signal_date']}",
-        )
+        raise HTTPException(status_code=409, detail=f"{ticker} already has an open position -- add a fill to it instead")
 
-    if trade["entry_date"] < datetime.now(timezone.utc).date().isoformat():
-        _backfill_trade_marks(trade_id, trade["ticker"], trade["entry_date"])
-    _seed_todays_mark(trade_id, trade["ticker"])
+    fill = _build_fill(position_id, body, "entry", now_iso)
+    db.insert_fill(fill)
 
-    return db.get_trade(trade_id)
+    if fill["fill_date"] < datetime.now(timezone.utc).date().isoformat():
+        _backfill_position_marks(position_id, ticker, fill["fill_date"])
+    _seed_todays_mark(position_id, ticker)
+
+    return _position_with_state(db.get_position(position_id))
 
 
-@app.get("/api/trades")
-def list_trades(status: str | None = None):
+@app.post("/api/positions/{position_id}/fills")
+def add_fill(position_id: int, body: dict):
+    """Adds an entry (scale-in) or exit (full or partial) fill to an existing open position.
+    An exit's units may be less than units_remaining (partial) or equal to it (full -- closes
+    the position); exiting more than units_remaining is rejected."""
+    position = db.get_position(position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail=f"no position with id {position_id}")
+    if position["status"] != "open":
+        raise HTTPException(status_code=400, detail="position is closed -- a new entry starts a new position")
+    _validate_fill_body(body, require_kind=True)
+
+    fills = db.list_fills(position_id)
+    state = replay_fills(fills)
+    if body["kind"] == "exit" and body["units"] > state["units_remaining"] + 1e-9:
+        raise HTTPException(status_code=400,
+                             detail=f"cannot exit {body['units']} units -- only {state['units_remaining']} remaining")
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    fill = _build_fill(position_id, body, body["kind"], now_iso)
+    db.insert_fill(fill)
+
+    new_state = replay_fills(db.list_fills(position_id))
+    if new_state["units_remaining"] <= 1e-9:
+        db.set_position_status(position_id, "closed", now_iso)
+    else:
+        db.set_position_status(position_id, "open", None)
+
+    if fill["fill_date"] < datetime.now(timezone.utc).date().isoformat():
+        _backfill_position_marks(position_id, position["ticker"], fill["fill_date"])
+    _seed_todays_mark(position_id, position["ticker"])
+
+    return _position_with_state(db.get_position(position_id))
+
+
+@app.get("/api/positions")
+def list_positions(status: str | None = None):
     if status not in (None, "open", "closed"):
         raise HTTPException(status_code=400, detail=f"invalid status: {status!r}")
-    return db.list_trades(status)
+    return [_position_with_state(p) for p in db.list_positions(status)]
 
 
-@app.get("/api/trades/summary")
-def trades_summary():
-    closed = db.list_trades("closed")
-    open_trades = db.list_trades("open")
-    wins = [t for t in closed if (t["exit_price"] or 0) >= t["entry_price"]]
-    returns = [(t["exit_price"] - t["entry_price"]) / t["entry_price"] * 100
-               for t in closed if t["exit_price"] is not None and t["entry_price"]]
+@app.get("/api/positions/summary")
+def positions_summary():
+    """Win rate / avg return -- ticker-position-level only, not filterable by strategy, since a
+    position can span fills from multiple strategies (see the design doc's grouping decision).
+    'Simple math' per the design brief: pnl / cost basis, no Black-Scholes needed for the %
+    itself, only for pricing an option's exit VALUE (handled inside replay_fills)."""
+    closed = [_position_with_state(p) for p in db.list_positions("closed")]
+    returns = []
+    for p in closed:
+        fills = db.list_fills(p["id"])
+        entry_fills = [f for f in fills if f["kind"] == "entry"]
+        if not entry_fills:
+            continue
+        multiplier = 100 if p["instrument"] == "option" else 1
+        cost_basis = sum(_fill_exit_value(f) * f["units"] * multiplier for f in entry_fills)
+        if cost_basis:
+            returns.append(p["realized_pnl"] / cost_basis * 100)
+    wins = [r for r in returns if r >= 0]
     return {
-        "open_count": len(open_trades),
+        "open_count": len(db.list_positions("open")),
         "closed_count": len(closed),
         "win_count": len(wins),
-        "win_rate_pct": round(len(wins) / len(closed) * 100, 1) if closed else None,
+        "win_rate_pct": round(len(wins) / len(returns) * 100, 1) if returns else None,
         "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else None,
     }
 
 
-@app.get("/api/trades/analytics")
-def trades_analytics(strategy: str | None = None, ticker: str | None = None,
-                      status: str | None = None,
-                      date_from: str | None = None, date_to: str | None = None):
+@app.get("/api/positions/analytics")
+def positions_analytics(ticker: str | None = None, status: str | None = None,
+                         date_from: str | None = None, date_to: str | None = None):
+    """No strategy filter -- a position isn't strategy-scoped (see grouping decision in the
+    design doc); strategy_key still lives on each individual fill for display/history."""
     if status not in (None, "open", "closed"):
         raise HTTPException(status_code=400, detail=f"invalid status: {status!r}")
-    trades = db.list_trades(status)
-    if strategy:
-        trades = [t for t in trades if t["strategy_key"] == strategy]
+    positions = db.list_positions(status)
     if ticker:
-        trades = [t for t in trades if t["ticker"] == ticker]
+        positions = [p for p in positions if p["ticker"] == ticker]
     if date_from:
-        trades = [t for t in trades if t["entry_date"] >= date_from]
+        positions = [p for p in positions if p["opened_at"][:10] >= date_from]
     if date_to:
-        trades = [t for t in trades if t["entry_date"] <= date_to]
+        positions = [p for p in positions if p["opened_at"][:10] <= date_to]
 
-    marks_by_trade = db.get_trade_daily_marks_bulk([t["id"] for t in trades])
+    fills_by_position = db.list_fills_bulk([p["id"] for p in positions])
+    marks_by_position = db.get_trade_daily_marks_bulk([p["id"] for p in positions])
     series = []
-    for t in trades:
-        marks = _with_option_values(t, marks_by_trade.get(t["id"], []))
-        t_with_exit = _with_exit_option_value(t)
+    for p in positions:
+        fills = fills_by_position.get(p["id"], [])
+        marks = _with_option_values(p, fills, marks_by_position.get(p["id"], []))
+        state = replay_fills(fills)
+        entry_fills = [f for f in fills if f["kind"] == "entry"]
+        multiplier = state["multiplier"]
+        cost_basis = sum(_fill_exit_value(f) * f["units"] * multiplier for f in entry_fills)
         series.append({
-            "trade_id": t["id"],
-            "ticker": t["ticker"],
-            "strategy_key": t["strategy_key"],
-            "entry_date": t["entry_date"],
-            "entry_price": t["entry_price"],
-            "instrument": t["instrument"],
-            "premium": t["premium"],
-            "units": t["units"],
-            "contracts": t["contracts"],
-            "status": t["status"],
-            "exit_price": t["exit_price"],
-            "exit_option_value": t_with_exit.get("exit_option_value"),
-            "closed_at": t["closed_at"],
+            "position_id": p["id"],
+            "ticker": p["ticker"],
+            "status": p["status"],
+            "instrument": state["instrument"],
+            "opened_at": p["opened_at"],
+            "closed_at": p["closed_at"],
+            "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
+            "units_remaining": state["units_remaining"],
+            "realized_pnl": round(state["realized_pnl"], 2),
+            "cost_basis": round(cost_basis, 2),
+            "multiplier": multiplier,
             "marks": marks,
         })
-    return {"trades": series}
+    return {"positions": series}
 
 
-@app.get("/api/trades/{trade_id}")
-def get_trade(trade_id: int):
-    trade = db.get_trade(trade_id)
-    if trade is None:
-        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    return _with_exit_option_value(trade)
+@app.get("/api/positions/{position_id}")
+def get_position(position_id: int):
+    position = db.get_position(position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail=f"no position with id {position_id}")
+    return _position_with_state(position)
 
 
-_TRADE_EDITABLE_FIELDS = [
-    "entry_date", "entry_price", "tp_price", "stop_price", "units",
-    "opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry",
-    "exit_price", "exit_reason", "closed_at", "notes",
+_POSITION_EDITABLE_FIELDS = ["tp_price", "stop_price", "notes"]
+_FILL_EDITABLE_FIELDS = [
+    "fill_date", "price", "units", "exit_reason",
+    "opt_side", "opt_type", "strike", "premium", "expiry_date", "iv_at_entry", "notes",
 ]
 
 
-@app.patch("/api/trades/{trade_id}")
-def update_trade(trade_id: int, body: dict):
-    """Corrects any field recorded at entry or exit -- e.g. a wrong exit_price after a manual
-    or auto (expired) close. Deliberately excludes identity fields (ticker, strategy_key,
-    signal_date, instrument) -- those define the trade's dedup key and switching them after
-    the fact would silently rewrite what trade this even is, plus status/confirmed_at/
-    last_alert_*_pct, which are managed by the close/alert-engine code paths, not user edits."""
-    if db.get_trade(trade_id) is None:
-        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    editable = {k: v for k, v in body.items() if k in _TRADE_EDITABLE_FIELDS}
+@app.patch("/api/positions/{position_id}")
+def update_position(position_id: int, body: dict):
+    """Position-level fields only (tp_price/stop_price/notes) -- individual fills are corrected
+    via PATCH /api/positions/{id}/fills/{fill_id}, not through the position."""
+    if db.get_position(position_id) is None:
+        raise HTTPException(status_code=404, detail=f"no position with id {position_id}")
+    editable = {k: v for k, v in body.items() if k in _POSITION_EDITABLE_FIELDS}
     if not editable:
         raise HTTPException(status_code=400,
-                             detail=f"no editable fields in body ({', '.join(_TRADE_EDITABLE_FIELDS)})")
-    if "exit_reason" in editable and editable["exit_reason"] not in ("tp", "stop", "manual", "expired"):
-        raise HTTPException(status_code=400, detail="exit_reason must be 'tp'|'stop'|'manual'|'expired'")
-    db.update_trade_fields(trade_id, editable)
-    return _with_exit_option_value(db.get_trade(trade_id))
+                             detail=f"no editable fields in body ({', '.join(_POSITION_EDITABLE_FIELDS)})")
+    db.update_position_fields(position_id, editable)
+    return _position_with_state(db.get_position(position_id))
 
 
-@app.delete("/api/trades/{trade_id}")
-def cancel_trade(trade_id: int):
-    """Hard delete -- for a trade confirmed in error, distinct from /close (a real exit).
-    Cascades to the trade's marks/notifications in db.delete_trade()."""
-    if db.get_trade(trade_id) is None:
-        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    db.delete_trade(trade_id)
+@app.delete("/api/positions/{position_id}")
+def cancel_position(position_id: int):
+    """Hard delete -- cancels the whole position and every fill on it, for a position confirmed
+    in error. Cascades to marks/notifications in db.delete_position()."""
+    if db.get_position(position_id) is None:
+        raise HTTPException(status_code=404, detail=f"no position with id {position_id}")
+    db.delete_position(position_id)
     return {"ok": True}
 
 
-@app.post("/api/trades/{trade_id}/close")
-def close_trade(trade_id: int, body: dict):
-    trade = db.get_trade(trade_id)
-    if trade is None:
-        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    if trade["status"] == "closed":
-        raise HTTPException(status_code=400, detail="trade is already closed")
-    exit_price = body.get("exit_price")
-    exit_reason = body.get("exit_reason")
-    if exit_price is None or exit_reason not in ("tp", "stop", "manual"):
-        raise HTTPException(status_code=400, detail="exit_price and exit_reason ('tp'|'stop'|'manual') are required")
-    closed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db.close_trade(trade_id, exit_price, exit_reason, closed_at)
-    return _with_exit_option_value(db.get_trade(trade_id))
+@app.patch("/api/positions/{position_id}/fills/{fill_id}")
+def update_fill(position_id: int, fill_id: int, body: dict):
+    """Corrects a single fill's recorded values -- e.g. a wrong exit price. Deliberately
+    excludes kind/instrument/strategy_key/signal_date (those define what the fill IS, not a
+    correctable detail) and position_id (which fill belongs to which position isn't editable
+    here -- delete + re-add if a fill was logged against the wrong position)."""
+    fill = db.get_fill(fill_id)
+    if fill is None or fill["position_id"] != position_id:
+        raise HTTPException(status_code=404, detail=f"no fill {fill_id} on position {position_id}")
+    editable = {k: v for k, v in body.items() if k in _FILL_EDITABLE_FIELDS}
+    if not editable:
+        raise HTTPException(status_code=400,
+                             detail=f"no editable fields in body ({', '.join(_FILL_EDITABLE_FIELDS)})")
+    if "exit_reason" in editable and editable["exit_reason"] not in ("tp", "stop", "manual", "expired"):
+        raise HTTPException(status_code=400, detail="exit_reason must be 'tp'|'stop'|'manual'|'expired'")
+    db.update_fill_fields(fill_id, editable)
+
+    # A corrected price/units can change units_remaining -- recheck status the same way
+    # add_fill() does, rather than leaving a stale open/closed flag.
+    new_state = replay_fills(db.list_fills(position_id))
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if new_state["units_remaining"] <= 1e-9:
+        db.set_position_status(position_id, "closed", now_iso)
+    else:
+        db.set_position_status(position_id, "open", None)
+
+    return _position_with_state(db.get_position(position_id))
 
 
-@app.get("/api/trades/{trade_id}/marks")
-def trade_marks(trade_id: int):
-    trade = db.get_trade(trade_id)
-    if trade is None:
-        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    marks = db.get_trade_daily_marks(trade_id)
-    return _with_option_values(trade, marks)
+@app.delete("/api/positions/{position_id}/fills/{fill_id}")
+def delete_fill(position_id: int, fill_id: int):
+    """Removes one erroneous fill (e.g. logged against the wrong position). If that was the
+    position's only fill, the position itself is deleted too -- a position with zero fills
+    isn't a meaningful state to leave behind."""
+    fill = db.get_fill(fill_id)
+    if fill is None or fill["position_id"] != position_id:
+        raise HTTPException(status_code=404, detail=f"no fill {fill_id} on position {position_id}")
+    db.delete_fill(fill_id)
+
+    remaining_fills = db.list_fills(position_id)
+    if not remaining_fills:
+        db.delete_position(position_id)
+        return {"ok": True, "position_deleted": True}
+
+    new_state = replay_fills(remaining_fills)
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if new_state["units_remaining"] <= 1e-9:
+        db.set_position_status(position_id, "closed", now_iso)
+    else:
+        db.set_position_status(position_id, "open", None)
+    return {"ok": True, "position_deleted": False}
+
+
+@app.get("/api/positions/{position_id}/fills")
+def get_fills(position_id: int):
+    if db.get_position(position_id) is None:
+        raise HTTPException(status_code=404, detail=f"no position with id {position_id}")
+    return db.list_fills(position_id)
+
+
+@app.get("/api/positions/{position_id}/marks")
+def position_marks(position_id: int):
+    position = db.get_position(position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail=f"no position with id {position_id}")
+    fills = db.list_fills(position_id)
+    marks = db.get_trade_daily_marks(position_id)
+    return _with_option_values(position, fills, marks)
 
 
 @app.get("/api/notifications")

@@ -861,8 +861,13 @@ function showPlCalculator() {
 }
 
 // ---------------- Trade confirm (with Estimate Entry folded in at top) ----------------
+// Positions are grouped by ticker only (not ticker+strategy) -- see
+// docs/superpowers/specs/2026-07-31-position-fills-design.md. If this ticker already has an
+// open position, the modal becomes "Add to position" (append a fill) instead of "Confirm
+// Trade" (open a new one).
 let tradeInstrument = "spot";
 let tradeLastEstimate = null; // most recent /api/estimate_entry response for this modal instance
+let tradeExistingPosition = null; // set when this ticker already has an open position
 
 function setTradeInstrument(v) {
   tradeInstrument = v;
@@ -871,7 +876,7 @@ function setTradeInstrument(v) {
   document.getElementById("tradeSpotFields").style.display = v === "spot" ? "" : "none";
 }
 
-function showTradeModal(ticker, stratKey) {
+async function showTradeModal(ticker, stratKey) {
   const r = (lastData?.tickers || []).find(t => t.ticker === ticker);
   const s = r?.[stratKey];
   if (!r || !s) return; // stale modal id after a re-render
@@ -881,6 +886,20 @@ function showTradeModal(ticker, stratKey) {
   const entryPriceDefault = op ? op.entry_price : r.price;
   tradeInstrument = "spot";
   tradeLastEstimate = null;
+  tradeExistingPosition = null;
+
+  try {
+    const res = await fetch(`/api/positions?status=open`);
+    if (res.ok) {
+      const openPositions = await res.json();
+      tradeExistingPosition = openPositions.find(p => p.ticker === ticker) || null;
+    }
+  } catch (e) { /* best-effort -- falls back to "new position" form on failure */ }
+
+  if (tradeExistingPosition) {
+    showAddFillModal(ticker, stratKey, signalDate, r.price, tradeExistingPosition);
+    return;
+  }
 
   const estimateSectionHtml = op && s.avg_mae_wins_pct != null ? `
     <div class="modalbody eecalc" id="tradeEstimateSection">
@@ -965,8 +984,8 @@ async function submitTrade(ticker, stratKey, signalDate) {
   const instrument = tradeInstrument;
   const body = {
     ticker, strategy_key: stratKey, signal_date: signalDate, instrument,
-    entry_date: document.getElementById("tradeEntryDate").value,
-    entry_price: parseFloat(document.getElementById("tradeEntryPrice").value),
+    fill_date: document.getElementById("tradeEntryDate").value,
+    price: parseFloat(document.getElementById("tradeEntryPrice").value),
     tp_price: parseFloat(document.getElementById("tradeTpPrice").value),
     stop_price: parseFloat(document.getElementById("tradeStopPrice").value),
   };
@@ -975,7 +994,7 @@ async function submitTrade(ticker, stratKey, signalDate) {
     body.opt_type = document.getElementById("tradeOptType").value;
     body.strike = parseFloat(document.getElementById("tradeStrike").value);
     body.premium = parseFloat(document.getElementById("tradePremium").value);
-    body.contracts = parseInt(document.getElementById("tradeContracts").value, 10);
+    body.units = parseInt(document.getElementById("tradeContracts").value, 10);
     body.expiry_date = document.getElementById("tradeExpiryDate").value;
     const ivPct = parseFloat(document.getElementById("tradeIv").value);
     body.iv_at_entry = Number.isFinite(ivPct) ? ivPct / 100 : null;
@@ -986,7 +1005,96 @@ async function submitTrade(ticker, stratKey, signalDate) {
   const errEl = document.getElementById("tradeFormError");
   errEl.textContent = "";
   try {
-    const res = await fetch("/api/trades", {
+    const res = await fetch("/api/positions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      errEl.textContent = "Failed: " + ((await res.json()).detail || res.status);
+      return;
+    }
+    hideModal();
+    if (typeof refreshActiveTradesBadges === "function") refreshActiveTradesBadges();
+  } catch (e) {
+    errEl.textContent = "Failed: " + e;
+  }
+}
+
+// ---------------- Add fill (existing open position) ----------------
+function showAddFillModal(ticker, stratKey, signalDate, currentPrice, position) {
+  const isOption = position.instrument === "option";
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modaltitle">Add to Position &mdash; ${ticker}</div>
+    <div class="modalbody plcalc" id="addFillModalBody">
+      ${modalRow("Current avg cost", position.avg_cost != null ? "$" + position.avg_cost.toFixed(2) : "&mdash;")}
+      ${modalRow("Units remaining", position.units_remaining)}
+      <div class="modalsep"></div>
+      ${toggleGrpHtml("addFillKindToggle", [["entry","Add Entry"],["exit","Partial/Full Exit"]], "entry", "setAddFillKind")}
+      <div class="optfields">
+        <div class="formrow"><label>Fill Date</label><input type="date" id="fillDate" value="${todayIsoDate()}"></div>
+        <div class="formrow"><label>Price</label><input type="number" id="fillPrice" step="0.01" value="${currentPrice.toFixed(2)}"></div>
+        <div class="formrow"><label>Units</label><input type="number" id="fillUnits" step="${isOption ? 1 : 1}" value="${isOption ? 1 : position.units_remaining}"></div>
+      </div>
+      <div id="fillExitReasonRow" class="optfields" style="display:none">
+        <div class="formrow"><label>Exit Reason</label>
+          <select id="fillExitReason">
+            <option value="tp">TP</option>
+            <option value="stop">Stop</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+      </div>
+      ${isOption ? `
+      <div id="fillOptionFields" class="optfields">
+        <div class="formrow"><label>Side</label>
+          <select id="fillOptSide"><option value="buy">Buy</option><option value="sell">Sell</option></select>
+        </div>
+        <div class="formrow"><label>Type</label>
+          <select id="fillOptType"><option value="call">Call</option><option value="put">Put</option></select>
+        </div>
+        <div class="formrow"><label>Strike</label><input type="number" id="fillStrike" step="0.5"></div>
+        <div class="formrow"><label>Premium ($/sh)</label><input type="number" id="fillPremium" step="0.05"></div>
+        <div class="formrow"><label>Expiration Date</label><input type="date" id="fillExpiryDate"></div>
+        <div class="formrow"><label>IV (%)</label><input type="number" id="fillIv" step="0.5"></div>
+      </div>` : ""}
+      <div id="fillFormError" class="modalnote"></div>
+      <button type="button" class="tradebtn" onclick="submitFill(${position.id}, '${ticker}', '${stratKey}', '${signalDate}', ${isOption})">Add Fill</button>
+    </div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+}
+
+function setAddFillKind(v) {
+  document.querySelectorAll("#addFillKindToggle button").forEach(b => b.classList.toggle("active", b.classList.contains(v)));
+  document.getElementById("fillExitReasonRow").style.display = v === "exit" ? "" : "none";
+  addFillKind = v;
+}
+let addFillKind = "entry";
+
+async function submitFill(positionId, ticker, stratKey, signalDate, isOption) {
+  addFillKind = document.querySelector("#addFillKindToggle button.active")?.classList.contains("exit") ? "exit" : "entry";
+  const body = {
+    kind: addFillKind, instrument: isOption ? "option" : "spot",
+    strategy_key: stratKey, signal_date: signalDate,
+    fill_date: document.getElementById("fillDate").value,
+    price: parseFloat(document.getElementById("fillPrice").value),
+    units: parseFloat(document.getElementById("fillUnits").value),
+  };
+  if (addFillKind === "exit") body.exit_reason = document.getElementById("fillExitReason").value;
+  if (isOption) {
+    body.opt_side = document.getElementById("fillOptSide").value;
+    body.opt_type = document.getElementById("fillOptType").value;
+    body.strike = parseFloat(document.getElementById("fillStrike").value);
+    body.premium = parseFloat(document.getElementById("fillPremium").value);
+    body.expiry_date = document.getElementById("fillExpiryDate").value;
+    const ivPct = parseFloat(document.getElementById("fillIv").value);
+    body.iv_at_entry = Number.isFinite(ivPct) ? ivPct / 100 : null;
+  }
+
+  const errEl = document.getElementById("fillFormError");
+  errEl.textContent = "";
+  try {
+    const res = await fetch(`/api/positions/${positionId}/fills`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
