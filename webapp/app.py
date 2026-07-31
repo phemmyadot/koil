@@ -776,13 +776,28 @@ def get_trade(trade_id: int):
     return trade
 
 
+_TRADE_EDITABLE_FIELDS = [
+    "entry_date", "entry_price", "tp_price", "stop_price",
+    "opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry",
+    "exit_price", "exit_reason", "closed_at", "notes",
+]
+
+
 @app.patch("/api/trades/{trade_id}")
 def update_trade(trade_id: int, body: dict):
+    """Corrects any field recorded at entry or exit -- e.g. a wrong exit_price after a manual
+    or auto (expired) close. Deliberately excludes identity fields (ticker, strategy_key,
+    signal_date, instrument) -- those define the trade's dedup key and switching them after
+    the fact would silently rewrite what trade this even is, plus status/confirmed_at/
+    last_alert_*_pct, which are managed by the close/alert-engine code paths, not user edits."""
     if db.get_trade(trade_id) is None:
         raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    editable = {k: v for k, v in body.items() if k in ("tp_price", "stop_price", "notes")}
+    editable = {k: v for k, v in body.items() if k in _TRADE_EDITABLE_FIELDS}
     if not editable:
-        raise HTTPException(status_code=400, detail="no editable fields in body (tp_price, stop_price, notes)")
+        raise HTTPException(status_code=400,
+                             detail=f"no editable fields in body ({', '.join(_TRADE_EDITABLE_FIELDS)})")
+    if "exit_reason" in editable and editable["exit_reason"] not in ("tp", "stop", "manual", "expired"):
+        raise HTTPException(status_code=400, detail="exit_reason must be 'tp'|'stop'|'manual'|'expired'")
     db.update_trade_fields(trade_id, editable)
     return db.get_trade(trade_id)
 

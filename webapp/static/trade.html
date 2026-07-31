@@ -60,6 +60,16 @@
     color: var(--text); border-radius: 6px; padding: 5px 8px; }
   .exitform select { background: var(--panel); border: 1px solid var(--line); color: var(--text);
     border-radius: 6px; padding: 5px 8px; }
+
+  .editform { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+              padding: 14px; margin: 16px 0; }
+  .editform .editgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .editform .formrow label { display: block; color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.04em; margin-bottom: 3px; }
+  .editform .formrow input, .editform .formrow select { width: 100%; background: var(--bg); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  .editform .editactions { display: flex; gap: 8px; margin-top: 12px; }
+  .editform .editnote { color: var(--muted); font-size: 11px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -143,6 +153,91 @@ async function cancelTrade() {
   }
 }
 
+function toggleEditForm() {
+  const el = document.getElementById("editform");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+function editFormHtml(trade) {
+  const isOption = trade.instrument === "option";
+  const isClosed = trade.status === "closed";
+  const optFieldsHtml = isOption ? `
+    <div class="formrow"><label>Strike</label><input type="number" id="editStrike" step="0.5" value="${trade.strike ?? ""}"></div>
+    <div class="formrow"><label>Premium ($/sh)</label><input type="number" id="editPremium" step="0.05" value="${trade.premium ?? ""}"></div>
+    <div class="formrow"><label>Contracts</label><input type="number" id="editContracts" step="1" value="${trade.contracts ?? ""}"></div>
+    <div class="formrow"><label>Expiration Date</label><input type="date" id="editExpiryDate" value="${trade.expiry_date || ""}"></div>
+    <div class="formrow"><label>IV (%)</label><input type="number" id="editIv" step="0.5" value="${trade.iv_at_entry != null ? (trade.iv_at_entry * 100).toFixed(1) : ""}"></div>
+    <div class="formrow"><label>Side</label>
+      <select id="editOptSide"><option value="buy" ${trade.opt_side === "buy" ? "selected" : ""}>Buy</option><option value="sell" ${trade.opt_side === "sell" ? "selected" : ""}>Sell</option></select>
+    </div>
+    <div class="formrow"><label>Type</label>
+      <select id="editOptType"><option value="call" ${trade.opt_type === "call" ? "selected" : ""}>Call</option><option value="put" ${trade.opt_type === "put" ? "selected" : ""}>Put</option></select>
+    </div>` : "";
+  const exitFieldsHtml = isClosed ? `
+    <div class="formrow"><label>Exit Price</label><input type="number" id="editExitPrice" step="0.01" value="${trade.exit_price ?? ""}"></div>
+    <div class="formrow"><label>Exit Reason</label>
+      <select id="editExitReason">
+        <option value="tp" ${trade.exit_reason === "tp" ? "selected" : ""}>TP</option>
+        <option value="stop" ${trade.exit_reason === "stop" ? "selected" : ""}>Stop</option>
+        <option value="manual" ${trade.exit_reason === "manual" ? "selected" : ""}>Manual</option>
+        <option value="expired" ${trade.exit_reason === "expired" ? "selected" : ""}>Expired</option>
+      </select>
+    </div>` : "";
+  return `<div class="editform" id="editform" style="display:none">
+    <div class="editgrid">
+      <div class="formrow"><label>Entry Date</label><input type="date" id="editEntryDate" value="${trade.entry_date || ""}"></div>
+      <div class="formrow"><label>Entry Price</label><input type="number" id="editEntryPrice" step="0.01" value="${trade.entry_price ?? ""}"></div>
+      <div class="formrow"><label>Take Profit</label><input type="number" id="editTpPrice" step="0.01" value="${trade.tp_price ?? ""}"></div>
+      <div class="formrow"><label>Stop</label><input type="number" id="editStopPrice" step="0.01" value="${trade.stop_price ?? ""}"></div>
+      ${optFieldsHtml}
+      ${exitFieldsHtml}
+      <div class="formrow" style="grid-column:1/-1"><label>Notes</label><input type="text" id="editNotes" value="${trade.notes || ""}"></div>
+    </div>
+    <div class="editactions">
+      <button type="button" class="smallbtn" onclick="submitEdit()">Save changes</button>
+      <button type="button" class="smallbtn" onclick="toggleEditForm()">Cancel</button>
+    </div>
+    <div class="editnote">Corrects any recorded value -- e.g. a wrong exit price -- without affecting ticker, strategy, or signal date.</div>
+  </div>`;
+}
+
+async function submitEdit() {
+  const isOption = document.getElementById("editStrike") != null;
+  const isClosed = document.getElementById("editExitPrice") != null;
+  const body = {
+    entry_date: document.getElementById("editEntryDate").value,
+    entry_price: parseFloat(document.getElementById("editEntryPrice").value),
+    tp_price: parseFloat(document.getElementById("editTpPrice").value),
+    stop_price: parseFloat(document.getElementById("editStopPrice").value),
+    notes: document.getElementById("editNotes").value || null,
+  };
+  if (isOption) {
+    body.strike = parseFloat(document.getElementById("editStrike").value);
+    body.premium = parseFloat(document.getElementById("editPremium").value);
+    body.contracts = parseInt(document.getElementById("editContracts").value, 10);
+    body.expiry_date = document.getElementById("editExpiryDate").value;
+    const ivPct = parseFloat(document.getElementById("editIv").value);
+    body.iv_at_entry = Number.isFinite(ivPct) ? ivPct / 100 : null;
+    body.opt_side = document.getElementById("editOptSide").value;
+    body.opt_type = document.getElementById("editOptType").value;
+  }
+  if (isClosed) {
+    body.exit_price = parseFloat(document.getElementById("editExitPrice").value);
+    body.exit_reason = document.getElementById("editExitReason").value;
+  }
+  try {
+    const res = await fetch(`/api/trades/${tradeId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    load();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
 async function load() {
   if (!tradeId) {
     document.getElementById("pageTitle").textContent = "No trade specified";
@@ -189,6 +284,7 @@ async function load() {
   const actionsHtml = trade.status === "open" ? `
     <div class="actions">
       <button type="button" class="smallbtn" onclick="toggleExitForm()">Close trade</button>
+      <button type="button" class="smallbtn" onclick="toggleEditForm()">Edit trade</button>
       <button type="button" class="smallbtn danger" onclick="cancelTrade()">Cancel trade</button>
     </div>
     <div class="exitform" id="exitform" style="display:none">
@@ -199,7 +295,12 @@ async function load() {
         <option value="manual">Manual</option>
       </select>
       <button type="button" class="smallbtn danger" onclick="submitClose()">Confirm close</button>
-    </div>` : "";
+    </div>
+    ${editFormHtml(trade)}` : `
+    <div class="actions">
+      <button type="button" class="smallbtn" onclick="toggleEditForm()">Edit trade</button>
+    </div>
+    ${editFormHtml(trade)}`;
 
   const marksRows = marks.slice().reverse().map(m => `<tr>
     <td>${m.mark_date}</td>
