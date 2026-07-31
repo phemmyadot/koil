@@ -1,0 +1,33 @@
+.statbox {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.statbox-lbl {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: block;
+  margin-bottom: 4px;
+}
+.statbox-val {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  display: block;
+}
+.statbox-val.pos {
+  color: var(--green);
+}
+.statbox-val.neg {
+  color: var(--red);
+}
+.statbox-sub {
+  font-size: 14px;
+  font-weight: 600;
+  display: block;
+  color: inherit;
+}

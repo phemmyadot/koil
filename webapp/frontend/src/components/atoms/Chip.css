@@ -1,0 +1,37 @@
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 2px 6px;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.chip-ok {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.chip-no {
+  background: var(--red-bg);
+  color: var(--red);
+}
+.chip-mid {
+  background: var(--gold-bg);
+  color: var(--gold);
+}
+.chip-neutral {
+  background: var(--line);
+  color: var(--muted);
+}
+.chip-active {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+.chip-pending {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.chip-clickable {
+  cursor: pointer;
+}

@@ -1,0 +1,29 @@
+.notif-bell {
+  position: relative;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 15px;
+  cursor: pointer;
+  color: var(--text);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.notif-bell:hover {
+  border-color: var(--accent);
+}
+.notif-bell-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 1px 5px;
+  min-width: 14px;
+  text-align: center;
+  line-height: 1.4;
+}

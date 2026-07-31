@@ -1,0 +1,25 @@
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.badge-open {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.badge-closed {
+  background: var(--line);
+  color: var(--muted);
+}
+.badge-entry {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+.badge-exit {
+  background: var(--gold-bg);
+  color: var(--gold);
+}

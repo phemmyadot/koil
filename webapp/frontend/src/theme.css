@@ -1,0 +1,99 @@
+/* KOIL design tokens. Ported verbatim from the current app's copy-pasted :root blocks
+   (index.html, trades.html, position.html, watchlist.html all defined the same 15 tokens x 2
+   modes independently) -- this is now the single source of truth, imported once in main.tsx. */
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1a2333;
+  --muted: #67718a;
+  --line: #e3e7ee;
+  --green: #157f3d;
+  --green-bg: #e5f4ea;
+  --red: #b3261e;
+  --red-bg: #fbeae9;
+  --accent: #2554c7;
+  --accent-bg: #e8eefb;
+  --gold-bg: #fdf3d8;
+  --gold: #8a6d1a;
+  --blue: #0d6efd;
+  --blue-bg: #e3f0ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10141c;
+    --panel: #171d29;
+    --text: #e6eaf2;
+    --muted: #8b94a8;
+    --line: #262e3f;
+    --green: #4ecb7d;
+    --green-bg: #12301e;
+    --red: #f2726b;
+    --red-bg: #391513;
+    --accent: #0b3191;
+    --accent-bg: #1a2540;
+    --gold-bg: #33290f;
+    --gold: #e8c96a;
+    --blue: #4d9dff;
+    --blue-bg: #0f2c52;
+  }
+}
+
+/* Explicit overrides win in both directions over the OS-preference media query above, for a
+   manual in-app theme toggle (not implemented yet, tokens are ready for one). */
+:root[data-theme="dark"] {
+  --bg: #10141c;
+  --panel: #171d29;
+  --text: #e6eaf2;
+  --muted: #8b94a8;
+  --line: #262e3f;
+  --green: #4ecb7d;
+  --green-bg: #12301e;
+  --red: #f2726b;
+  --red-bg: #391513;
+  --accent: #0b3191;
+  --accent-bg: #1a2540;
+  --gold-bg: #33290f;
+  --gold: #e8c96a;
+  --blue: #4d9dff;
+  --blue-bg: #0f2c52;
+}
+
+:root[data-theme="light"] {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1a2333;
+  --muted: #67718a;
+  --line: #e3e7ee;
+  --green: #157f3d;
+  --green-bg: #e5f4ea;
+  --red: #b3261e;
+  --red-bg: #fbeae9;
+  --accent: #2554c7;
+  --accent-bg: #e8eefb;
+  --gold-bg: #fdf3d8;
+  --gold: #8a6d1a;
+  --blue: #0d6efd;
+  --blue-bg: #e3f0ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+}
+
+a {
+  color: inherit;
+}
