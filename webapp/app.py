@@ -320,6 +320,15 @@ def _update_trade_marks_and_alerts() -> None:
 
         db.upsert_trade_daily_mark(trade["id"], bar_date, current_price, now_iso)
 
+        # Option trades auto-close once the market has closed on/after expiry -- bar_date is
+        # only ever a real, settled close (the background loop only marks confirmed post-close
+        # data, never an intraday quote), so this is never a same-day "still trading" false
+        # positive. exit_price is the stock's actual confirmed close that day, not a modeled
+        # option value -- matches how the position is genuinely worth whatever it settles at.
+        if trade["instrument"] == "option" and trade["expiry_date"] and bar_date >= trade["expiry_date"]:
+            db.close_trade(trade["id"], current_price, "expired", now_iso)
+            continue
+
         entry, tp, stop = trade["entry_price"], trade["tp_price"], trade["stop_price"]
         # Sign-aware: a short/put-style trade has tp below entry and stop above -- these
         # denominators are negative in that case, keeping pct_to_* positive as price moves
