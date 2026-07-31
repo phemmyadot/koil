@@ -138,38 +138,48 @@ function renderSummary() {
   ].map(([lbl, val]) => `<div class="statbox"><span class="lbl">${lbl}</span><span class="val">${val}</span></div>`).join("");
 }
 
-function sparklinePath(marks, w, h, pad) {
+function sparklinePath(marks, valueKey, w, h, pad) {
   if (!marks.length) return { path: "", lo: 0, hi: 0 };
-  const prices = marks.map(m => m.close_price);
-  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const values = marks.map(m => m[valueKey]);
+  const lo = Math.min(...values), hi = Math.max(...values);
   const span = (hi - lo) || 1;
   const iw = w - pad * 2, ih = h - pad * 2;
   const pts = marks.map((m, i) => {
     const x = pad + (i / Math.max(marks.length - 1, 1)) * iw;
-    const y = pad + (1 - (m.close_price - lo) / span) * ih;
+    const y = pad + (1 - (m[valueKey] - lo) / span) * ih;
     return [x, y];
   });
   const path = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   return { path, lo, hi };
 }
 
+// Options price against the option's own modeled value (option_value, from Black-Scholes using
+// strike/iv_at_entry/expiry) and premium paid, not the underlying stock -- a stock moving 2%
+// can easily be a 20%+ swing in the option's value, so tracking stock price alone would
+// misrepresent an option position's actual P&L.
 function tradeCardHtml(t, marks) {
-  const { path } = sparklinePath(marks, 600, 90, 8);
-  const last = marks.length ? marks[marks.length - 1].close_price : t.entry_price;
-  const pct = ((last - t.entry_price) / t.entry_price * 100);
-  const instrumentLabel = t.instrument === "option"
-    ? `${t.opt_side} ${t.opt_type} $${t.strike} exp ${t.expiry_date}` : "Spot";
+  const isOption = t.instrument === "option";
+  const hasOptionValues = isOption && marks.length && marks[0].option_value != null;
+  const valueKey = hasOptionValues ? "option_value" : "close_price";
+  const baseline = hasOptionValues ? t.premium : t.entry_price;
+  const { path } = sparklinePath(marks, valueKey, 600, 90, 8);
+  const last = marks.length ? marks[marks.length - 1][valueKey] : baseline;
+  const pct = baseline ? ((last - baseline) / baseline * 100) : 0;
+  const instrumentLabel = isOption
+    ? `${t.opt_side} ${t.opt_type} $${t.strike} exp ${t.expiry_date}${t.iv_at_entry == null ? " (no IV -- tracking stock price)" : ""}`
+    : "Spot";
+  const lastLabel = hasOptionValues ? "Option value" : "Last";
   return `<div class="tradecard">
     <div class="head">
       <span><span class="tk">${t.ticker}</span> <span class="strat">${t.strategy_key}</span></span>
       <span class="badge">OPEN</span>
     </div>
-    <div class="meta">${instrumentLabel} &middot; entered ${t.entry_date} @ ${fmtMoney(t.entry_price)}</div>
+    <div class="meta">${instrumentLabel} &middot; entered ${t.entry_date} @ ${fmtMoney(t.entry_price)}${isOption ? ` &middot; premium ${fmtMoney(t.premium)}` : ""}</div>
     <div class="rowline">
       <span>Entry <b>${fmtMoney(t.entry_price)}</b></span>
       <span>TP <b>${fmtMoney(t.tp_price)}</b></span>
       <span>Stop <b>${fmtMoney(t.stop_price)}</b></span>
-      <span>Last <b class="${plClass(pct)}">${fmtMoney(last)} (${fmtPct(pct)})</b></span>
+      <span>${lastLabel} <b class="${plClass(pct)}">${fmtMoney(last)} (${fmtPct(pct)})</b></span>
     </div>
     <svg class="tradechart" viewBox="0 0 600 90">
       <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
@@ -254,10 +264,15 @@ async function renderAnalytics() {
   const series = (data.trades || []).filter(t => t.marks.length > 1);
   if (!series.length) { svg.innerHTML = `<text x="10" y="20" fill="var(--muted)" font-size="12">No data for this filter.</text>`; return; }
 
-  // Index each trade's series to % return from entry, aligned by day offset from entry.
-  const indexed = series.map(t => t.marks.map((m, i) => ({
-    x: i, y: (m.close_price - t.entry_price) / t.entry_price * 100,
-  })));
+  // Index each trade's series to % return, aligned by day offset from entry. Option trades
+  // with a captured IV index off the modeled option value vs. premium paid; everything else
+  // (spot, or an option missing IV) indexes off the underlying stock price vs. entry price.
+  const indexed = series.map(t => {
+    const hasOptionValues = t.instrument === "option" && t.marks.length && t.marks[0].option_value != null;
+    const valueKey = hasOptionValues ? "option_value" : "close_price";
+    const baseline = hasOptionValues ? t.premium : t.entry_price;
+    return t.marks.map((m, i) => ({ x: i, y: baseline ? (m[valueKey] - baseline) / baseline * 100 : 0 }));
+  });
   const maxLen = Math.max(...indexed.map(s => s.length));
   const avgByX = [];
   for (let x = 0; x < maxLen; x++) {

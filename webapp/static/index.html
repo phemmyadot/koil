@@ -233,6 +233,7 @@
                                font-weight: 600; cursor: pointer; }
   .plcalc .togglegrp button.active.buy, .plcalc .togglegrp button.active.call { background: var(--green-bg); color: var(--green); }
   .plcalc .togglegrp button.active.sell, .plcalc .togglegrp button.active.put { background: var(--red-bg); color: var(--red); }
+  .plcalc .togglegrp button.active.spot, .plcalc .togglegrp button.active.option { background: var(--accent-bg); color: var(--accent); }
   .plcalc .optfields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 8px; }
   .plcalc .optfields .formrow { justify-content: space-between; }
   .plcalc .optfields .formrow label { flex: 0 0 auto; }
@@ -911,6 +912,7 @@ function showTradeModal(ticker, stratKey) {
         <div class="formrow"><label>Premium ($/sh)</label><input type="number" id="tradePremium" step="0.05"></div>
         <div class="formrow"><label>Contracts</label><input type="number" id="tradeContracts" step="1" value="1"></div>
         <div class="formrow"><label>Expiration Date</label><input type="date" id="tradeExpiryDate"></div>
+        <div class="formrow"><label>IV (%)</label><input type="number" id="tradeIv" step="0.5"></div>
       </div>
       <div id="tradeFormError" class="modalnote"></div>
       <button type="button" class="tradebtn" onclick="submitTrade('${ticker}','${stratKey}','${signalDate}')">Confirm Trade</button>
@@ -971,6 +973,8 @@ async function submitTrade(ticker, stratKey, signalDate) {
     body.premium = parseFloat(document.getElementById("tradePremium").value);
     body.contracts = parseInt(document.getElementById("tradeContracts").value, 10);
     body.expiry_date = document.getElementById("tradeExpiryDate").value;
+    const ivPct = parseFloat(document.getElementById("tradeIv").value);
+    body.iv_at_entry = Number.isFinite(ivPct) ? ivPct / 100 : null;
   }
 
   const errEl = document.getElementById("tradeFormError");

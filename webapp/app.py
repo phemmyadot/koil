@@ -55,6 +55,7 @@ import webapp.csv_export as csv_export
 import webapp.data as data
 import webapp.db as db
 import webapp.entry_estimate as entry_estimate
+import webapp.options_pricing as options_pricing
 import webapp.pdf_export as pdf_export
 import webapp.support_resistance as support_resistance
 import webapp.prebreak as prebreak
@@ -235,10 +236,10 @@ def compute_all(force: bool = False) -> None:
             if not force and checksum is not None and prior_source_fetch.get(tk) == checksum and shape_current:
                 if tk in prior_by_ticker:
                     reused_payloads[tk] = prior_payload
-                    reused_source_fetch[tk] = fingerprint
+                    reused_source_fetch[tk] = checksum
                 elif tk in prior_errors:
                     reused_errors[tk] = prior_errors[tk]
-                    reused_source_fetch[tk] = fingerprint
+                    reused_source_fetch[tk] = checksum
                 else:
                     to_compute.append(tk)  # stale bookkeeping, e.g. after a cache format change
             else:
@@ -592,6 +593,27 @@ def export_csv(body: dict):
                      headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
+def _with_option_values(trade: dict, marks: list[dict]) -> list[dict]:
+    """Annotates each daily stock-price mark with the option's modeled value that day
+    (Black-Scholes, using strike/iv_at_entry/expiry_date/opt_type captured at trade
+    confirmation) -- spot trades and option trades missing iv_at_entry pass through
+    unchanged, since there's nothing to price. mark_date -> days-to-expiry is computed
+    per mark rather than assumed linear, so it stays correct even with weekend/holiday
+    gaps in the trading-day mark series."""
+    if trade["instrument"] != "option" or trade.get("iv_at_entry") is None:
+        return marks
+    expiry = datetime.strptime(trade["expiry_date"], "%Y-%m-%d").date()
+    out = []
+    for m in marks:
+        mark_date = datetime.strptime(m["mark_date"], "%Y-%m-%d").date()
+        T = max((expiry - mark_date).days, 0) / 365
+        value = options_pricing.option_price(
+            trade["opt_type"], m["close_price"], trade["strike"], T, trade["iv_at_entry"],
+        )
+        out.append({**m, "option_value": round(value, 4)})
+    return out
+
+
 _TRADE_SPOT_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price"]
 _TRADE_OPTION_REQUIRED = _TRADE_SPOT_REQUIRED + ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date"]
 _TRADE_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry"]
@@ -700,13 +722,15 @@ def trades_analytics(strategy: str | None = None, ticker: str | None = None,
     marks_by_trade = db.get_trade_daily_marks_bulk([t["id"] for t in trades])
     series = []
     for t in trades:
-        marks = marks_by_trade.get(t["id"], [])
+        marks = _with_option_values(t, marks_by_trade.get(t["id"], []))
         series.append({
             "trade_id": t["id"],
             "ticker": t["ticker"],
             "strategy_key": t["strategy_key"],
             "entry_date": t["entry_date"],
             "entry_price": t["entry_price"],
+            "instrument": t["instrument"],
+            "premium": t["premium"],
             "marks": marks,
         })
     return {"trades": series}
@@ -749,9 +773,11 @@ def close_trade(trade_id: int, body: dict):
 
 @app.get("/api/trades/{trade_id}/marks")
 def trade_marks(trade_id: int):
-    if db.get_trade(trade_id) is None:
+    trade = db.get_trade(trade_id)
+    if trade is None:
         raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    return db.get_trade_daily_marks(trade_id)
+    marks = db.get_trade_daily_marks(trade_id)
+    return _with_option_values(trade, marks)
 
 
 @app.get("/api/notifications")
