@@ -34,11 +34,12 @@
   .badge.open { background: var(--green-bg); color: var(--green); }
   .badge.closed { background: var(--line); color: var(--muted); }
 
-  .infogrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  .infogrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
               gap: 10px; margin-bottom: 18px; }
-  .statbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
-  .statbox .lbl { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; display: block; }
-  .statbox .val { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .statbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .statbox .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 4px; }
+  .statbox .val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
+  .statbox .val .sub { font-size: 14px; font-weight: 600; display: block; }
   .val.pos { color: var(--green); } .val.neg { color: var(--red); }
 
   .bigchart { width: 100%; height: 260px; background: var(--panel); border: 1px solid var(--line);
@@ -260,8 +261,17 @@ async function load() {
   const valueKey = hasOptionValues ? "option_value" : "close_price";
   const baseline = hasOptionValues ? trade.premium : trade.entry_price;
   const last = marks.length ? marks[marks.length - 1][valueKey] : baseline;
-  const pct = baseline ? ((last - baseline) / baseline * 100) : 0;
+  const pctLive = baseline ? ((last - baseline) / baseline * 100) : 0;
   const lastLabel = hasOptionValues ? "Option value" : "Last price";
+
+  // exit_price is ALWAYS the underlying stock's price, same convention as entry_price/tp_price/
+  // stop_price -- never a manually-entered option fill. exit_option_value (from the API, when
+  // IV was captured) is the modeled option value at that stock price and DTE remaining on the
+  // close date -- the number to actually compare against premium paid.
+  const hasExitOptionValue = hasOptionValues && trade.exit_option_value != null;
+  const displayExit = hasExitOptionValue ? trade.exit_option_value : trade.exit_price;
+  const exitPctBaseline = hasExitOptionValue ? trade.premium : trade.entry_price;
+  const pctClosed = exitPctBaseline && trade.exit_price != null ? ((displayExit - exitPctBaseline) / exitPctBaseline * 100) : 0;
 
   document.getElementById("pageTitle").innerHTML =
     `${trade.ticker} <span class="strattag">${stratLabel(trade.strategy_key)}</span> <span class="badge ${trade.status}">${trade.status.toUpperCase()}</span>`;
@@ -271,14 +281,26 @@ async function load() {
     : "Spot";
 
   const statBoxes = [
-    ["Entry", `${trade.entry_date}<br>${fmtMoney(trade.entry_price)}`],
+    ["Entry", `${fmtMoney(trade.entry_price)}<span class="sub">${trade.entry_date}</span>`],
     ["Take Profit", fmtMoney(trade.tp_price)],
     ["Stop", fmtMoney(trade.stop_price)],
-    [lastLabel, `<span class="${plClass(pct)}">${fmtMoney(last)}<br>${fmtPct(pct)}</span>`],
   ];
+  // Once closed, the position is worth what it actually exited at -- the live modeled option
+  // value (Black-Scholes off the current stock price) is no longer meaningful past that point,
+  // it would keep drifting with the stock even though the trade itself is done.
   if (trade.status === "closed") {
-    statBoxes.push(["Exit", `${trade.closed_at ? trade.closed_at.slice(0, 10) : ""}<br>${fmtMoney(trade.exit_price)}`]);
+    const exitLabel = hasExitOptionValue ? "Option value at exit" : "Exit price";
+    statBoxes.push([exitLabel, `<span class="${plClass(pctClosed)}">${fmtMoney(displayExit)}<span class="sub">${fmtPct(pctClosed)}</span></span>`]);
+    statBoxes.push(["Exit date", trade.closed_at ? trade.closed_at.slice(0, 10) : "&mdash;"]);
     statBoxes.push(["Exit reason", trade.exit_reason || "&mdash;"]);
+  } else {
+    if (hasOptionValues) {
+      const stockPrice = marks[marks.length - 1].close_price;
+      statBoxes.push(["Current price", fmtMoney(stockPrice)]);
+      statBoxes.push(["Current option price", `<span class="${plClass(pctLive)}">${fmtMoney(last)}<span class="sub">${fmtPct(pctLive)}</span></span>`]);
+    } else {
+      statBoxes.push([lastLabel, `<span class="${plClass(pctLive)}">${fmtMoney(last)}<span class="sub">${fmtPct(pctLive)}</span></span>`]);
+    }
   }
 
   const actionsHtml = trade.status === "open" ? `

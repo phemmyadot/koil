@@ -631,6 +631,24 @@ def _with_option_values(trade: dict, marks: list[dict]) -> list[dict]:
     return out
 
 
+def _with_exit_option_value(trade: dict) -> dict:
+    """exit_price is ALWAYS the underlying stock's price, same convention as entry_price/
+    tp_price/stop_price for both instrument types -- there's no separate 'option fill price'
+    field, so a manually-recorded exit never mismatches the stock-price convention every other
+    price field already uses (see docs/superpowers/specs/2026-07-31-trade-tracking-design.md).
+    For a closed option trade with IV captured, adds exit_option_value: the option's modeled
+    value (Black-Scholes) at that stock price and the DTE remaining on the close date -- the
+    number actually comparable against premium paid."""
+    if (trade["instrument"] != "option" or trade["status"] != "closed"
+            or trade.get("iv_at_entry") is None or trade.get("exit_price") is None or not trade.get("closed_at")):
+        return trade
+    expiry = datetime.strptime(trade["expiry_date"], "%Y-%m-%d").date()
+    close_date = datetime.fromisoformat(trade["closed_at"]).date()
+    T = max((expiry - close_date).days, 0) / 365
+    value = options_pricing.option_price(trade["opt_type"], trade["exit_price"], trade["strike"], T, trade["iv_at_entry"])
+    return {**trade, "exit_option_value": round(value, 4)}
+
+
 _TRADE_SPOT_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price"]
 _TRADE_OPTION_REQUIRED = _TRADE_SPOT_REQUIRED + ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date"]
 _TRADE_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry"]
@@ -773,7 +791,7 @@ def get_trade(trade_id: int):
     trade = db.get_trade(trade_id)
     if trade is None:
         raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
-    return trade
+    return _with_exit_option_value(trade)
 
 
 _TRADE_EDITABLE_FIELDS = [
@@ -799,7 +817,7 @@ def update_trade(trade_id: int, body: dict):
     if "exit_reason" in editable and editable["exit_reason"] not in ("tp", "stop", "manual", "expired"):
         raise HTTPException(status_code=400, detail="exit_reason must be 'tp'|'stop'|'manual'|'expired'")
     db.update_trade_fields(trade_id, editable)
-    return db.get_trade(trade_id)
+    return _with_exit_option_value(db.get_trade(trade_id))
 
 
 @app.delete("/api/trades/{trade_id}")
@@ -825,7 +843,7 @@ def close_trade(trade_id: int, body: dict):
         raise HTTPException(status_code=400, detail="exit_price and exit_reason ('tp'|'stop'|'manual') are required")
     closed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     db.close_trade(trade_id, exit_price, exit_reason, closed_at)
-    return db.get_trade(trade_id)
+    return _with_exit_option_value(db.get_trade(trade_id))
 
 
 @app.get("/api/trades/{trade_id}/marks")
