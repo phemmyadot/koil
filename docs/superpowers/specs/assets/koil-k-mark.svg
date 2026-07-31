@@ -1,0 +1,28 @@
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="koilGrad" x1="10%" y1="100%" x2="90%" y2="0%">
+      <stop offset="0%" stop-color="#0B3191"/>
+      <stop offset="100%" stop-color="#4D9DFF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="116" height="116" rx="26" fill="#0A0E17"/>
+
+  <!-- K built from: a coiled spring as the stem's upper half (compression), straightening
+       into a plain vertical for the lower half, with a single breakout diagonal branching off
+       at the midpoint (release) and a plain lower diagonal as the K's other leg. Exactly two
+       limbs branch from the join point, same as a normal K -- no extra spurious strokes. -->
+  <g fill="none" stroke="url(#koilGrad)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Coiled upper stem: 3 compressions, settling onto the join point at (36,58) -->
+    <path d="M 36 20 L 36 30 L 48 36 L 36 42 L 48 48 L 36 54 L 36 58"/>
+    <!-- Straight lower stem, continuing down from the same join point -->
+    <path d="M 36 58 L 36 98"/>
+    <!-- Breakout arm: release, branching from the join point -->
+    <path d="M 36 58 L 92 24"/>
+    <!-- Lower diagonal leg, the K's other arm, also from the join point -->
+    <path d="M 42 62 L 88 98"/>
+  </g>
+
+  <!-- Breakout marker at the arm's tip -->
+  <circle cx="92" cy="24" r="6.5" fill="#4D9DFF"/>
+</svg>
