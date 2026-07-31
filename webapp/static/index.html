@@ -528,6 +528,7 @@ function spotFormHtml() {
 let plOptSide = "buy", plOptType = "call";
 let plEvalPrice = null; // null = use spot; set on first render / whenever spot changes
 let plEvalDays = null; // null = use daysElapsed; set on first render / whenever entry date or DTE changes
+let plTargetPrice = null; // optional target price; when set, overrides plEvalPrice/slider for the eval point
 let plDragging = false;
 const PL_CHART_W = 560, PL_CHART_H = 240;
 const PL_PAD = { l: 50, r: 14, t: 16, b: 26 };
@@ -554,6 +555,7 @@ function optionsFormHtml() {
       <div class="formrow"><label>Implied Vol (%)</label><input type="number" id="plIv" step="0.5" value="35" oninput="updatePlCalc()"></div>
       <div class="formrow"><label>Entry Date</label><input type="date" id="plEntryDate" value="${todayIsoDate()}" oninput="onPlEntryFieldsInput()"></div>
       <div class="formrow"><label>Expiration Date</label><input type="date" id="plExpiryDate" value="${addDaysIso(todayIsoDate(), 30)}" oninput="onPlEntryFieldsInput()"></div>
+      <div class="formrow"><label>Target Price (optional)</label><input type="number" id="plTargetPrice" step="0.5" placeholder="e.g. 40" oninput="onPlTargetPriceInput()"></div>
     </div>
     <svg class="payoffchart" id="plPayoffChart" viewBox="0 0 ${PL_CHART_W} ${PL_CHART_H}"></svg>
     <div class="pllegend">
@@ -661,6 +663,10 @@ function plModelAt(f, S, daysFromEntry) {
   const T = Math.max(f.dte - daysFromEntry, 0) / 365;
   return plSign(f) * (blackScholes(f.type, S, f.K, T, f.iv, RISK_FREE_RATE).price - f.premium) * plMult(f);
 }
+function plOptionPriceAt(f, S, daysFromEntry) {
+  const T = Math.max(f.dte - daysFromEntry, 0) / 365;
+  return blackScholes(f.type, S, f.K, T, f.iv, RISK_FREE_RATE).price;
+}
 function plPriceRange(f) {
   const center = (f.K + f.S) / 2;
   const span = Math.max(f.K * 0.22, Math.abs(f.S - f.K) * 2.2, f.premium * 4, 1);
@@ -677,6 +683,11 @@ function onPlEntryFieldsInput() {
 }
 function onPlEvalDaysInput() {
   plEvalDays = parseInt(document.getElementById("plEvalDaysSlider").value, 10) || 0;
+  updatePlCalc();
+}
+function onPlTargetPriceInput() {
+  const v = parseFloat(document.getElementById("plTargetPrice").value);
+  plTargetPrice = isNaN(v) ? null : v;
   updatePlCalc();
 }
 
@@ -782,13 +793,28 @@ function updateOptionsCalc() {
 
   const evalPL = plModelAt(f, plEvalPrice, plEvalDays);
   const evalPLExp = plAtExpiry(f, plEvalPrice);
+  const evalOptPrice = plOptionPriceAt(f, plEvalPrice, plEvalDays);
   const cost = f.premium * plMult(f);
   const evalRet = cost > 0 ? (evalPL / cost) * 100 : 0;
 
-  out.innerHTML = resultBox(`Stock at ${plEvalDays === 0 ? "today" : "+" + plEvalDays + "d"}`, fmtMoney(plEvalPrice))
-                 + resultBox("P/L (model)", `<span class="${plClass(evalPL)}">${fmtMoney(evalPL)}</span>`)
-                 + resultBox("P/L at expiry", `<span class="${plClass(evalPLExp)}">${fmtMoney(evalPLExp)}</span>`)
-                 + resultBox("Return", `<span class="${plClass(evalRet)}">${fmtPct(evalRet)}</span>`);
+  let resultBoxes = [
+    resultBox(`Stock at ${plEvalDays === 0 ? "today" : "+" + plEvalDays + "d"}`, fmtMoney(plEvalPrice)),
+    resultBox("Option price (model)", fmtMoney(evalOptPrice)),
+    resultBox("P/L (model)", `<span class="${plClass(evalPL)}">${fmtMoney(evalPL)} (${fmtPct(evalRet)})</span>`),
+    resultBox("P/L at expiry", `<span class="${plClass(evalPLExp)}">${fmtMoney(evalPLExp)}</span>`),
+  ];
+
+  if (resultBoxes.length % 2 !== 0) resultBoxes.push("");
+
+  if (plTargetPrice != null) {
+    const tpOptPrice = plOptionPriceAt(f, plTargetPrice, plEvalDays);
+    const tpOptPriceExp = f.type === "call" ? Math.max(plTargetPrice - f.K, 0) : Math.max(f.K - plTargetPrice, 0);
+    resultBoxes.push(
+      resultBox(`Option @ target $${plTargetPrice} (now)`, fmtMoney(tpOptPrice)),
+      resultBox(`Option @ target $${plTargetPrice} (expiry)`, fmtMoney(tpOptPriceExp)),
+    );
+  }
+  out.innerHTML = resultBoxes.join("");
 
   const maxLossLong = cost;
   const maxProfitPut = (f.K - f.premium) * plMult(f);
@@ -823,7 +849,7 @@ function showPlCalculator() {
     </div>`;
   document.getElementById("modalBackdrop").style.display = "flex";
   plMode = "spot";
-  plOptSide = "buy"; plOptType = "call"; plEvalPrice = null; plEvalDays = null;
+  plOptSide = "buy"; plOptType = "call"; plEvalPrice = null; plEvalDays = null; plTargetPrice = null;
   renderPlCalcForm();
 }
 
