@@ -86,6 +86,56 @@ def _init_schema() -> None:
                 ticker TEXT PRIMARY KEY,
                 fetched_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS taken_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                strategy_key TEXT NOT NULL,
+                signal_date TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                entry_date TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                tp_price REAL NOT NULL,
+                stop_price REAL NOT NULL,
+                opt_side TEXT,
+                opt_type TEXT,
+                strike REAL,
+                premium REAL,
+                contracts INTEGER,
+                expiry_date TEXT,
+                iv_at_entry REAL,
+                confirmed_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                exit_price REAL,
+                exit_reason TEXT,
+                closed_at TEXT,
+                last_alert_tp_pct REAL,
+                last_alert_stop_pct REAL,
+                notes TEXT,
+                UNIQUE (ticker, strategy_key, signal_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_taken_trades_status ON taken_trades(status);
+
+            CREATE TABLE IF NOT EXISTS trade_daily_marks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                mark_date TEXT NOT NULL,
+                close_price REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (trade_id, mark_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_trade_daily_marks_trade ON trade_daily_marks(trade_id);
+
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                pct REAL NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                read_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read_at);
         """)
     _migrate_universe_meta_date_to_epoch()
     _migrate_computed_results_fetch_epoch_to_bar_date()
@@ -496,3 +546,160 @@ def set_last_screened_at(epoch: float) -> None:
             INSERT INTO universe_meta (id, last_screened_at) VALUES (1, ?)
             ON CONFLICT(id) DO UPDATE SET last_screened_at=excluded.last_screened_at
         """, (epoch,))
+
+
+# ─────────────────────────── taken trades ───────────────────────────
+
+_TAKEN_TRADE_COLUMNS = [
+    "id", "ticker", "strategy_key", "signal_date", "instrument", "entry_date",
+    "entry_price", "tp_price", "stop_price", "opt_side", "opt_type", "strike",
+    "premium", "contracts", "expiry_date", "iv_at_entry", "confirmed_at",
+    "status", "exit_price", "exit_reason", "closed_at",
+    "last_alert_tp_pct", "last_alert_stop_pct", "notes",
+]
+
+
+def _row_to_trade(row) -> dict:
+    return dict(zip(_TAKEN_TRADE_COLUMNS, row))
+
+
+def insert_trade(trade: dict) -> int:
+    """Insert a confirmed trade. `trade` must supply every column in
+    _TAKEN_TRADE_COLUMNS except id (option-only fields may be None for a
+    spot trade). Raises sqlite3.IntegrityError on a (ticker, strategy_key,
+    signal_date) dup -- callers decide whether that means "update instead."""
+    cols = [c for c in _TAKEN_TRADE_COLUMNS if c != "id"]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"INSERT INTO taken_trades ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+            [trade[c] for c in cols],
+        )
+        return cur.lastrowid
+
+
+def get_trade(trade_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM taken_trades WHERE id = ?", (trade_id,)).fetchone()
+    return _row_to_trade(row) if row else None
+
+
+def find_trade_by_signal(ticker: str, strategy_key: str, signal_date: str) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM taken_trades WHERE ticker = ? AND strategy_key = ? AND signal_date = ?",
+            (ticker, strategy_key, signal_date),
+        ).fetchone()
+    return _row_to_trade(row) if row else None
+
+
+def list_trades(status: str | None = None) -> list[dict]:
+    with _lock:
+        if status:
+            rows = _conn.execute(
+                "SELECT * FROM taken_trades WHERE status = ? ORDER BY entry_date DESC, id DESC", (status,)
+            ).fetchall()
+        else:
+            rows = _conn.execute("SELECT * FROM taken_trades ORDER BY entry_date DESC, id DESC").fetchall()
+    return [_row_to_trade(r) for r in rows]
+
+
+def update_trade_fields(trade_id: int, fields: dict) -> None:
+    """Generic partial update -- fields is a dict of column -> new value."""
+    if not fields:
+        return
+    set_clause = ", ".join(f"{c} = ?" for c in fields)
+    with _lock, _conn:
+        _conn.execute(f"UPDATE taken_trades SET {set_clause} WHERE id = ?",
+                       [*fields.values(), trade_id])
+
+
+def close_trade(trade_id: int, exit_price: float, exit_reason: str, closed_at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            UPDATE taken_trades
+            SET status = 'closed', exit_price = ?, exit_reason = ?, closed_at = ?
+            WHERE id = ?
+        """, (exit_price, exit_reason, closed_at, trade_id))
+
+
+def update_trade_alert_pct(trade_id: int, *, tp_pct: float | None = None, stop_pct: float | None = None) -> None:
+    """Bumps last_alert_tp_pct/last_alert_stop_pct -- only the side(s) passed are touched,
+    so the alert engine can update one side without clobbering the other."""
+    if tp_pct is None and stop_pct is None:
+        return
+    with _lock, _conn:
+        if tp_pct is not None:
+            _conn.execute("UPDATE taken_trades SET last_alert_tp_pct = ? WHERE id = ?", (tp_pct, trade_id))
+        if stop_pct is not None:
+            _conn.execute("UPDATE taken_trades SET last_alert_stop_pct = ? WHERE id = ?", (stop_pct, trade_id))
+
+
+# ─────────────────────────── trade daily marks ───────────────────────────
+
+def upsert_trade_daily_mark(trade_id: int, mark_date: str, close_price: float, updated_at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO trade_daily_marks (trade_id, mark_date, close_price, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(trade_id, mark_date) DO UPDATE SET
+                close_price=excluded.close_price, updated_at=excluded.updated_at
+        """, (trade_id, mark_date, close_price, updated_at))
+
+
+def get_trade_daily_marks(trade_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT mark_date, close_price FROM trade_daily_marks WHERE trade_id = ? ORDER BY mark_date",
+            (trade_id,)
+        ).fetchall()
+    return [{"mark_date": d, "close_price": c} for d, c in rows]
+
+
+def get_trade_daily_marks_bulk(trade_ids: list[int]) -> dict[int, list[dict]]:
+    """Marks for many trades in one query -- for the analytics/cohort view, which would
+    otherwise need one get_trade_daily_marks() call per filtered trade."""
+    if not trade_ids:
+        return {}
+    placeholders = ", ".join("?" * len(trade_ids))
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT trade_id, mark_date, close_price FROM trade_daily_marks "
+            f"WHERE trade_id IN ({placeholders}) ORDER BY trade_id, mark_date",
+            trade_ids,
+        ).fetchall()
+    out: dict[int, list[dict]] = {tid: [] for tid in trade_ids}
+    for tid, mark_date, close_price in rows:
+        out[tid].append({"mark_date": mark_date, "close_price": close_price})
+    return out
+
+
+# ─────────────────────────── notifications ───────────────────────────
+
+def insert_notification(trade_id: int, kind: str, pct: float, message: str, created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute("""
+            INSERT INTO notifications (trade_id, kind, pct, message, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (trade_id, kind, pct, message, created_at))
+        return cur.lastrowid
+
+
+def list_notifications(unread_only: bool = False) -> list[dict]:
+    with _lock:
+        if unread_only:
+            rows = _conn.execute(
+                "SELECT id, trade_id, kind, pct, message, created_at, read_at "
+                "FROM notifications WHERE read_at IS NULL ORDER BY created_at DESC"
+            ).fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT id, trade_id, kind, pct, message, created_at, read_at "
+                "FROM notifications ORDER BY created_at DESC"
+            ).fetchall()
+    cols = ["id", "trade_id", "kind", "pct", "message", "created_at", "read_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def mark_notification_read(notification_id: int, read_at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE notifications SET read_at = ? WHERE id = ?", (read_at, notification_id))

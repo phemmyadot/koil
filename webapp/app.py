@@ -23,6 +23,7 @@ the user clicks Refresh; the background loop wakes (every CHECK_INTERVAL).
 A plain page load with existing computed data just reads it -- no cycle.
 """
 import os
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -284,6 +285,58 @@ def compute_all(force: bool = False) -> None:
         _compute_pass_lock.release()
 
 
+TP_STOP_ALERT_THRESHOLDS = [30, 50, 70, 80, 90, 95]
+
+
+def _update_trade_marks_and_alerts() -> None:
+    """Runs after every compute_all() pass (scheduled 2h wake or manual refresh, same code
+    path -- see refresh_and_compute()). For every open taken trade: upsert today's daily mark
+    from the ticker's already-computed price/date (no new Yahoo call), then check progress
+    toward TP/stop and fire an in-app notification the first time each threshold band is
+    crossed. Alerting is always based on the underlying stock price, never a modeled option
+    price, even for option trades -- see docs/superpowers/specs/2026-07-31-trade-tracking-design.md."""
+    open_trades = db.list_trades("open")
+    if not open_trades:
+        return
+
+    with _compute_lock:
+        price_by_ticker = {p["ticker"]: (p["price"], p["date"]) for p in _computed}
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for trade in open_trades:
+        current = price_by_ticker.get(trade["ticker"])
+        if current is None:
+            continue
+        current_price, bar_date = current
+
+        db.upsert_trade_daily_mark(trade["id"], bar_date, current_price, now_iso)
+
+        entry, tp, stop = trade["entry_price"], trade["tp_price"], trade["stop_price"]
+        # Sign-aware: a short/put-style trade has tp below entry and stop above -- these
+        # denominators are negative in that case, keeping pct_to_* positive as price moves
+        # favorably either direction.
+        pct_to_tp = (current_price - entry) / (tp - entry) * 100 if tp != entry else 0
+        pct_to_stop = (entry - current_price) / (entry - stop) * 100 if stop != entry else 0
+
+        _fire_threshold_alerts(trade, "tp_progress", pct_to_tp, trade["last_alert_tp_pct"])
+        _fire_threshold_alerts(trade, "stop_progress", pct_to_stop, trade["last_alert_stop_pct"])
+
+
+def _fire_threshold_alerts(trade: dict, kind: str, pct: float, last_alert_pct: float | None) -> None:
+    crossed = [t for t in TP_STOP_ALERT_THRESHOLDS if pct >= t and (last_alert_pct is None or t > last_alert_pct)]
+    if not crossed:
+        return
+    highest = max(crossed)
+    side = "TP" if kind == "tp_progress" else "stop"
+    message = f"{trade['ticker']} ({trade['strategy_key']}) is {highest}% of the way to {side}"
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.insert_notification(trade["id"], kind, highest, message, now_iso)
+    if kind == "tp_progress":
+        db.update_trade_alert_pct(trade["id"], tp_pct=highest)
+    else:
+        db.update_trade_alert_pct(trade["id"], stop_pct=highest)
+
+
 def refresh_and_compute(force: bool = False) -> None:
     """The 3-step cycle (see webapp/SCREENING_FETCH_REFACTOR.md): fetch candidate tickers and
     persist them, gap-fetch/full-fetch each one's price data, then run compute_all() (which
@@ -325,6 +378,10 @@ def refresh_and_compute(force: bool = False) -> None:
                   f"({computed_count}/{len(active)}) -- skipping compute_all()'s per-ticker check entirely.")
             return
         compute_all(force=force)
+        try:
+            _update_trade_marks_and_alerts()
+        except Exception as e:  # noqa: BLE001 - a bad pass here must not affect the fetch/compute cycle above
+            print(f"app: _update_trade_marks_and_alerts() failed ({e}); will retry next pass.")
     finally:
         _refresh_pass_lock.release()
 
@@ -533,6 +590,179 @@ def export_csv(body: dict):
     filename = f"exhaustion-export-{strategy}-{local_date}.csv"
     return Response(content=csv_text, media_type="text/csv",
                      headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+_TRADE_SPOT_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price"]
+_TRADE_OPTION_REQUIRED = _TRADE_SPOT_REQUIRED + ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date"]
+_TRADE_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry"]
+
+
+def _validate_trade_body(body: dict) -> dict:
+    instrument = body.get("instrument")
+    if instrument not in ("spot", "option"):
+        raise HTTPException(status_code=400, detail=f"invalid instrument: {instrument!r}")
+    required = _TRADE_OPTION_REQUIRED if instrument == "option" else _TRADE_SPOT_REQUIRED
+    missing = [f for f in required if body.get(f) in (None, "")]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"missing required field(s): {', '.join(missing)}")
+    return body
+
+
+def _backfill_trade_marks(trade_id: int, ticker: str, entry_date: str) -> None:
+    """A late-logged trade (entry_date in the past) has no daily marks for the gap between
+    entry_date and now, since the background loop only marks trades that already exist in
+    taken_trades. Fill that gap once, from the ticker's already-cached bars -- no new fetch."""
+    bars = data.get_bars(ticker)
+    if bars is None or bars.empty:
+        return
+    today = datetime.now(timezone.utc).date().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for idx, row in bars.loc[entry_date:].iterrows():
+        mark_date = idx.strftime("%Y-%m-%d")
+        if mark_date >= today:
+            continue  # today (and beyond) is the background loop's job, not the backfill's
+        db.upsert_trade_daily_mark(trade_id, mark_date, float(row["Close"]), now_iso)
+
+
+@app.post("/api/trades")
+def create_trade(body: dict):
+    _validate_trade_body(body)
+    instrument = body["instrument"]
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    trade = {
+        "ticker": body["ticker"],
+        "strategy_key": body["strategy_key"],
+        "signal_date": body["signal_date"],
+        "instrument": instrument,
+        "entry_date": body["entry_date"],
+        "entry_price": body["entry_price"],
+        "tp_price": body["tp_price"],
+        "stop_price": body["stop_price"],
+        "confirmed_at": now_iso,
+        "status": "open",
+        "exit_price": None, "exit_reason": None, "closed_at": None,
+        "last_alert_tp_pct": None, "last_alert_stop_pct": None,
+        "notes": body.get("notes"),
+    }
+    for f in _TRADE_OPTION_ONLY_FIELDS:
+        trade[f] = body.get(f) if instrument == "option" else None
+
+    try:
+        trade_id = db.insert_trade(trade)
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a trade already exists for {trade['ticker']}/{trade['strategy_key']}/{trade['signal_date']}",
+        )
+
+    if trade["entry_date"] < datetime.now(timezone.utc).date().isoformat():
+        _backfill_trade_marks(trade_id, trade["ticker"], trade["entry_date"])
+
+    return db.get_trade(trade_id)
+
+
+@app.get("/api/trades")
+def list_trades(status: str | None = None):
+    if status not in (None, "open", "closed"):
+        raise HTTPException(status_code=400, detail=f"invalid status: {status!r}")
+    return db.list_trades(status)
+
+
+@app.get("/api/trades/summary")
+def trades_summary():
+    closed = db.list_trades("closed")
+    open_trades = db.list_trades("open")
+    wins = [t for t in closed if (t["exit_price"] or 0) >= t["entry_price"]]
+    returns = [(t["exit_price"] - t["entry_price"]) / t["entry_price"] * 100
+               for t in closed if t["exit_price"] is not None and t["entry_price"]]
+    return {
+        "open_count": len(open_trades),
+        "closed_count": len(closed),
+        "win_count": len(wins),
+        "win_rate_pct": round(len(wins) / len(closed) * 100, 1) if closed else None,
+        "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else None,
+    }
+
+
+@app.get("/api/trades/analytics")
+def trades_analytics(strategy: str | None = None, ticker: str | None = None,
+                      date_from: str | None = None, date_to: str | None = None):
+    trades = db.list_trades()
+    if strategy:
+        trades = [t for t in trades if t["strategy_key"] == strategy]
+    if ticker:
+        trades = [t for t in trades if t["ticker"] == ticker]
+    if date_from:
+        trades = [t for t in trades if t["entry_date"] >= date_from]
+    if date_to:
+        trades = [t for t in trades if t["entry_date"] <= date_to]
+
+    marks_by_trade = db.get_trade_daily_marks_bulk([t["id"] for t in trades])
+    series = []
+    for t in trades:
+        marks = marks_by_trade.get(t["id"], [])
+        series.append({
+            "trade_id": t["id"],
+            "ticker": t["ticker"],
+            "strategy_key": t["strategy_key"],
+            "entry_date": t["entry_date"],
+            "entry_price": t["entry_price"],
+            "marks": marks,
+        })
+    return {"trades": series}
+
+
+@app.get("/api/trades/{trade_id}")
+def get_trade(trade_id: int):
+    trade = db.get_trade(trade_id)
+    if trade is None:
+        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
+    return trade
+
+
+@app.patch("/api/trades/{trade_id}")
+def update_trade(trade_id: int, body: dict):
+    if db.get_trade(trade_id) is None:
+        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
+    editable = {k: v for k, v in body.items() if k in ("tp_price", "stop_price", "notes")}
+    if not editable:
+        raise HTTPException(status_code=400, detail="no editable fields in body (tp_price, stop_price, notes)")
+    db.update_trade_fields(trade_id, editable)
+    return db.get_trade(trade_id)
+
+
+@app.post("/api/trades/{trade_id}/close")
+def close_trade(trade_id: int, body: dict):
+    trade = db.get_trade(trade_id)
+    if trade is None:
+        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
+    if trade["status"] == "closed":
+        raise HTTPException(status_code=400, detail="trade is already closed")
+    exit_price = body.get("exit_price")
+    exit_reason = body.get("exit_reason")
+    if exit_price is None or exit_reason not in ("tp", "stop", "manual"):
+        raise HTTPException(status_code=400, detail="exit_price and exit_reason ('tp'|'stop'|'manual') are required")
+    closed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.close_trade(trade_id, exit_price, exit_reason, closed_at)
+    return db.get_trade(trade_id)
+
+
+@app.get("/api/trades/{trade_id}/marks")
+def trade_marks(trade_id: int):
+    if db.get_trade(trade_id) is None:
+        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
+    return db.get_trade_daily_marks(trade_id)
+
+
+@app.get("/api/notifications")
+def notifications(unread: int = 0):
+    return db.list_notifications(unread_only=bool(unread))
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def read_notification(notification_id: int):
+    db.mark_notification_read(notification_id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"),

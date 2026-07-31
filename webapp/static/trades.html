@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trades</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1a2333; --muted: #67718a;
+    --line: #e3e7ee; --green: #157f3d; --green-bg: #e5f4ea; --red: #b3261e;
+    --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb; --gold-bg: #fdf3d8; --gold: #8a6d1a;
+    --blue: #0d6efd; --blue-bg: #e3f0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
+      --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
+      --red-bg: #391513; --accent: #0b3191; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
+      --blue: #4d9dff; --blue-bg: #0f2c52;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 14px 10px 24px; }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 19px; margin: 0; }
+  a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a.back:hover { text-decoration: underline; }
+  h2 { font-size: 14px; margin: 20px 0 10px; }
+
+  .tabbar { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabbtn { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+            border-radius: 7px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .tabbtn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
+
+  .summarygrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                 gap: 10px; margin-bottom: 18px; }
+  .statbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .statbox .lbl { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; display: block; }
+  .statbox .val { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .val.pos { color: var(--green); } .val.neg { color: var(--red); }
+
+  .filterbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .filterbar select, .filterbar input[type=date] { background: var(--panel); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12.5px; }
+  .filterbar label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  .tradecard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+               padding: 12px 14px; margin-bottom: 12px; }
+  .tradecard .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .tradecard .tk { font-weight: 700; font-size: 14px; }
+  .tradecard .strat { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .tradecard .meta { color: var(--muted); font-size: 12px; }
+  .tradecard .badge { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 5px;
+                       padding: 2px 6px; background: var(--green-bg); color: var(--green); }
+  .tradecard .rowline { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; }
+  .tradecard .rowline b { font-variant-numeric: tabular-nums; }
+  .tradecard .actions { margin-top: 8px; display: flex; gap: 8px; }
+  .smallbtn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px;
+              padding: 4px 10px; font-size: 11.5px; cursor: pointer; }
+  .smallbtn:hover { color: var(--accent); border-color: var(--accent); }
+  .smallbtn.danger:hover { color: var(--red); border-color: var(--red); }
+  .tradechart { width: 100%; height: 90px; margin-top: 8px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+
+  table.histtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.histtable th, table.histtable td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  table.histtable th { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  .exitform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .exitform input[type=number] { width: 100px; background: var(--panel); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 5px 8px; }
+  .exitform select { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 5px 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Trades</h1>
+    <a class="back" href="index.html">&larr; Back to dashboard</a>
+  </header>
+
+  <div class="summarygrid" id="summaryGrid"></div>
+
+  <div class="tabbar">
+    <button type="button" class="tabbtn active" id="tabActive" onclick="setTab('active')">Active</button>
+    <button type="button" class="tabbtn" id="tabHistory" onclick="setTab('history')">History</button>
+  </div>
+
+  <div id="activeView">
+    <div class="filterbar">
+      <label>Strategy</label>
+      <select id="filterStrategy" onchange="renderAnalytics()">
+        <option value="">All</option>
+        <option value="vexh">VEXH</option>
+        <option value="strategy_vcp">VCP</option>
+        <option value="strategy_vcpo">VCPO</option>
+      </select>
+      <label>Ticker</label>
+      <select id="filterTicker" onchange="renderAnalytics()"><option value="">All</option></select>
+    </div>
+    <svg id="cohortChart" class="tradechart" style="height:140px" viewBox="0 0 700 140"></svg>
+    <h2>Open trades</h2>
+    <div id="activeTrades"><p class="empty">Loading&hellip;</p></div>
+  </div>
+
+  <div id="historyView" style="display:none">
+    <h2>Closed trades</h2>
+    <div id="historyTable"><p class="empty">Loading&hellip;</p></div>
+  </div>
+</div>
+<script>
+let openTrades = [];
+let closedTrades = [];
+let summary = {};
+
+function fmtMoney(v) { return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2); }
+function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }
+function plClass(v) { return v >= 0 ? "pos" : "neg"; }
+
+function setTab(tab) {
+  document.getElementById("tabActive").classList.toggle("active", tab === "active");
+  document.getElementById("tabHistory").classList.toggle("active", tab === "history");
+  document.getElementById("activeView").style.display = tab === "active" ? "" : "none";
+  document.getElementById("historyView").style.display = tab === "history" ? "" : "none";
+}
+
+function renderSummary() {
+  const grid = document.getElementById("summaryGrid");
+  grid.innerHTML = [
+    ["Open", summary.open_count ?? 0],
+    ["Closed", summary.closed_count ?? 0],
+    ["Win rate", summary.win_rate_pct != null ? summary.win_rate_pct + "%" : "&mdash;"],
+    ["Avg return", summary.avg_return_pct != null
+      ? `<span class="${plClass(summary.avg_return_pct)}">${fmtPct(summary.avg_return_pct)}</span>` : "&mdash;"],
+  ].map(([lbl, val]) => `<div class="statbox"><span class="lbl">${lbl}</span><span class="val">${val}</span></div>`).join("");
+}
+
+function sparklinePath(marks, w, h, pad) {
+  if (!marks.length) return { path: "", lo: 0, hi: 0 };
+  const prices = marks.map(m => m.close_price);
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const span = (hi - lo) || 1;
+  const iw = w - pad * 2, ih = h - pad * 2;
+  const pts = marks.map((m, i) => {
+    const x = pad + (i / Math.max(marks.length - 1, 1)) * iw;
+    const y = pad + (1 - (m.close_price - lo) / span) * ih;
+    return [x, y];
+  });
+  const path = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  return { path, lo, hi };
+}
+
+function tradeCardHtml(t, marks) {
+  const { path } = sparklinePath(marks, 600, 90, 8);
+  const last = marks.length ? marks[marks.length - 1].close_price : t.entry_price;
+  const pct = ((last - t.entry_price) / t.entry_price * 100);
+  const instrumentLabel = t.instrument === "option"
+    ? `${t.opt_side} ${t.opt_type} $${t.strike} exp ${t.expiry_date}` : "Spot";
+  return `<div class="tradecard">
+    <div class="head">
+      <span><span class="tk">${t.ticker}</span> <span class="strat">${t.strategy_key}</span></span>
+      <span class="badge">OPEN</span>
+    </div>
+    <div class="meta">${instrumentLabel} &middot; entered ${t.entry_date} @ ${fmtMoney(t.entry_price)}</div>
+    <div class="rowline">
+      <span>Entry <b>${fmtMoney(t.entry_price)}</b></span>
+      <span>TP <b>${fmtMoney(t.tp_price)}</b></span>
+      <span>Stop <b>${fmtMoney(t.stop_price)}</b></span>
+      <span>Last <b class="${plClass(pct)}">${fmtMoney(last)} (${fmtPct(pct)})</b></span>
+    </div>
+    <svg class="tradechart" viewBox="0 0 600 90">
+      <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+    </svg>
+    <div class="actions">
+      <button type="button" class="smallbtn" onclick="toggleExitForm(${t.id})">Close trade</button>
+    </div>
+    <div class="exitform" id="exitform_${t.id}" style="display:none">
+      <input type="number" id="exitPrice_${t.id}" step="0.01" placeholder="Exit price">
+      <select id="exitReason_${t.id}">
+        <option value="tp">TP</option>
+        <option value="stop">Stop</option>
+        <option value="manual">Manual</option>
+      </select>
+      <button type="button" class="smallbtn danger" onclick="submitClose(${t.id})">Confirm</button>
+    </div>
+  </div>`;
+}
+
+function toggleExitForm(id) {
+  const el = document.getElementById(`exitform_${id}`);
+  el.style.display = el.style.display === "none" ? "flex" : "none";
+}
+
+async function submitClose(id) {
+  const exit_price = parseFloat(document.getElementById(`exitPrice_${id}`).value);
+  const exit_reason = document.getElementById(`exitReason_${id}`).value;
+  if (!Number.isFinite(exit_price)) { alert("Enter a valid exit price"); return; }
+  try {
+    const res = await fetch(`/api/trades/${id}/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exit_price, exit_reason }),
+    });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    await loadAll();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+let marksByTrade = {};
+
+async function renderActiveTrades() {
+  const el = document.getElementById("activeTrades");
+  if (!openTrades.length) { el.innerHTML = '<p class="empty">No open trades.</p>'; return; }
+  el.innerHTML = openTrades.map(t => tradeCardHtml(t, marksByTrade[t.id] || [])).join("");
+}
+
+function renderHistory() {
+  const el = document.getElementById("historyTable");
+  if (!closedTrades.length) { el.innerHTML = '<p class="empty">No closed trades yet.</p>'; return; }
+  const rows = closedTrades.map(t => {
+    const pct = t.exit_price != null ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : null;
+    return `<tr>
+      <td>${t.ticker}</td><td>${t.strategy_key}</td><td>${t.entry_date}</td>
+      <td>${fmtMoney(t.entry_price)}</td><td>${t.exit_price != null ? fmtMoney(t.exit_price) : "&mdash;"}</td>
+      <td>${t.exit_reason || "&mdash;"}</td>
+      <td>${pct != null ? `<span class="${plClass(pct)}">${fmtPct(pct)}</span>` : "&mdash;"}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `<table class="histtable">
+    <thead><tr><th>Ticker</th><th>Strategy</th><th>Entry date</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Return</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function renderAnalytics() {
+  const strategy = document.getElementById("filterStrategy").value;
+  const ticker = document.getElementById("filterTicker").value;
+  const params = new URLSearchParams();
+  if (strategy) params.set("strategy", strategy);
+  if (ticker) params.set("ticker", ticker);
+  let data;
+  try {
+    data = await (await fetch("/api/trades/analytics?" + params.toString())).json();
+  } catch {
+    return;
+  }
+  const svg = document.getElementById("cohortChart");
+  const w = 700, h = 140, pad = 20;
+  const series = (data.trades || []).filter(t => t.marks.length > 1);
+  if (!series.length) { svg.innerHTML = `<text x="10" y="20" fill="var(--muted)" font-size="12">No data for this filter.</text>`; return; }
+
+  // Index each trade's series to % return from entry, aligned by day offset from entry.
+  const indexed = series.map(t => t.marks.map((m, i) => ({
+    x: i, y: (m.close_price - t.entry_price) / t.entry_price * 100,
+  })));
+  const maxLen = Math.max(...indexed.map(s => s.length));
+  const avgByX = [];
+  for (let x = 0; x < maxLen; x++) {
+    const vals = indexed.filter(s => s[x]).map(s => s[x].y);
+    if (vals.length) avgByX.push({ x, y: vals.reduce((a, b) => a + b, 0) / vals.length });
+  }
+  const yVals = avgByX.map(p => p.y);
+  const yMin = Math.min(0, ...yVals), yMax = Math.max(0, ...yVals);
+  const yRange = (yMax - yMin) || 1;
+  const iw = w - pad * 2, ih = h - pad * 2;
+  const xOf = x => pad + (x / Math.max(maxLen - 1, 1)) * iw;
+  const yOf = y => pad + (1 - (y - yMin) / yRange) * ih;
+  const path = avgByX.map((p, i) => `${i ? "L" : "M"}${xOf(p.x).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(" ");
+  const zeroY = yOf(0);
+  svg.innerHTML = `
+    <line x1="${pad}" x2="${w - pad}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="${pad}" y="14" fill="var(--muted)" font-size="11">Avg % return from entry, indexed by days held (${series.length} trade${series.length === 1 ? "" : "s"})</text>`;
+}
+
+function populateFilters() {
+  const tickerSel = document.getElementById("filterTicker");
+  const tickers = [...new Set([...openTrades, ...closedTrades].map(t => t.ticker))].sort();
+  tickerSel.innerHTML = '<option value="">All</option>' + tickers.map(tk => `<option value="${tk}">${tk}</option>`).join("");
+}
+
+async function loadAll() {
+  try {
+    [openTrades, closedTrades, summary] = await Promise.all([
+      fetch("/api/trades?status=open").then(r => r.json()),
+      fetch("/api/trades?status=closed").then(r => r.json()),
+      fetch("/api/trades/summary").then(r => r.json()),
+    ]);
+  } catch {
+    openTrades = []; closedTrades = []; summary = {};
+  }
+  marksByTrade = {};
+  await Promise.all(openTrades.map(async t => {
+    try {
+      marksByTrade[t.id] = await (await fetch(`/api/trades/${t.id}/marks`)).json();
+    } catch {
+      marksByTrade[t.id] = [];
+    }
+  }));
+  renderSummary();
+  populateFilters();
+  await renderActiveTrades();
+  renderHistory();
+  renderAnalytics();
+}
+loadAll();
+</script>
+</body>
+</html>

@@ -124,6 +124,18 @@
   .tk { font-weight: 700; font-size: 15px; }
   .tklink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
   .tklink:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .notifbell { position: relative; background: none; border: 1px solid var(--line); border-radius: 8px;
+               padding: 4px 9px; font-size: 15px; cursor: pointer; color: var(--text); line-height: 1; }
+  .notifbell:hover { border-color: var(--accent); }
+  .notifbellcount { position: absolute; top: -5px; right: -5px; background: var(--red); color: #fff;
+                     font-size: 10px; font-weight: 700; border-radius: 8px; padding: 1px 5px;
+                     min-width: 14px; text-align: center; line-height: 1.4; }
+  .notiflist { display: flex; flex-direction: column; gap: 6px; }
+  .notifrow { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+              padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+  .notifrow.unread { border-color: var(--accent); background: var(--accent-bg); }
+  .notifrow .msg { font-size: 12.5px; }
+  .notifrow .when { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
   .qscore { display: inline-block; font-size: 12px; font-weight: 700; vertical-align: middle; margin-right: 8px; }
   .chip { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 5px;
           padding: 2px 6px; cursor: default; text-align: center; white-space: nowrap; }
@@ -224,33 +236,23 @@
   .plcalc .optfields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 8px; }
   .plcalc .optfields .formrow { justify-content: space-between; }
   .plcalc .optfields .formrow label { flex: 0 0 auto; }
-  .plcalc .optfields .formrow input { width: 90px; }
+  .plcalc .optfields .formrow input, .plcalc .optfields .formrow select { width: 130px; }
   .plcalc .payoffchart { width: 100%; height: 240px; margin: 4px 0; cursor: crosshair; touch-action: none; }
   .plcalc .payoffchart .axislabel { font-size: 10px; fill: var(--muted); }
   .plcalc .payoffchart .marklabel { font-size: 10px; fill: var(--muted); }
   .plcalc .plnote { font-size: 11px; color: var(--muted); margin: 6px 2px 0; line-height: 1.4; }
   .plcalc .pllegend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin: 4px 2px 0; flex-wrap: wrap; }
   .modalnote { color: var(--muted); font-size: 12px; line-height: 1.5; }
-  .estimateentrybtn { width: 100%; padding: 7px 0; margin-top: 4px; border: 1px solid var(--accent);
-                       background: var(--accent-bg); color: var(--accent); border-radius: 7px;
-                       font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .tradebtn { width: 100%; padding: 7px 0; margin-top: 4px; border: 1px solid var(--green);
+              background: var(--green); color: #fff; border-radius: 7px;
+              font-size: 12.5px; font-weight: 700; letter-spacing: 0.03em; cursor: pointer; }
   .eecalc .formrow { display: flex; align-items: center; justify-content: space-between; gap: 10px;
                       font-size: 12.5px; margin: 6px 0; }
   .eecalc .formrow label { color: var(--muted); text-transform: uppercase; font-size: 11px;
                             letter-spacing: 0.04em; flex: 1 1 auto; }
   .eecalc .formrow input[type=number] { width: 110px; text-align: right; }
-  .eecalc .modebtn { width: 100%; padding: 7px 0; margin-top: 4px; border: 1px solid var(--line);
-                      background: var(--bg); color: var(--muted); border-radius: 7px; font-size: 12.5px;
-                      font-weight: 600; cursor: pointer; }
-  .eecalc .eeoptiontoggle { display: block; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
-  .eecalc .eerecommend { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-                          padding: 10px 12px; margin-top: 6px; text-align: center; }
-  .eecalc .eerecommendlabel { color: var(--muted); font-size: 10.5px; text-transform: uppercase;
-                               letter-spacing: 0.04em; }
-  .eecalc .eerecommendvalue { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
-                               color: var(--accent); }
-  .eecalc .eerecommendpct { color: var(--muted); font-size: 11px; }
   .modalbox:has(.eecalc) { width: 420px; }
+  .modalbox:has(#tradeModalBody) { width: 560px; }
 
   @media (max-width: 1080px) {
     .cardgrid { grid-template-columns: repeat(2, 1fr); }
@@ -291,6 +293,10 @@
     <h1>Exhaustion Dashboard</h1>
     <span class="meta" id="meta">loading&hellip;</span>
     <a class="tklink" href="watchlist.html">Watchlists</a>
+    <a class="tklink" href="trades.html">Trades</a>
+    <button type="button" id="notifBellBtn" class="notifbell" onclick="showNotificationsModal()">
+      &#128276;<span id="notifBellCount" class="notifbellcount" style="display:none">0</span>
+    </button>
     <div class="headeractions">
       <button id="selectAllBtn" type="button">Select all</button>
       <span class="meta" id="selectionCount"></span>
@@ -853,47 +859,68 @@ function showPlCalculator() {
   renderPlCalcForm();
 }
 
-const EE_DAYS_ELAPSED_TO_DIP = 3;   // matches the design doc's fixed assumption
-const EE_DAYS_TO_TP = 15;           // matches the design doc's fixed assumption
+// ---------------- Trade confirm (with Estimate Entry folded in at top) ----------------
+let tradeInstrument = "spot";
+let tradeLastEstimate = null; // most recent /api/estimate_entry response for this modal instance
 
-function showEstimateModal(ticker, stratKey) {
+function setTradeInstrument(v) {
+  tradeInstrument = v;
+  document.querySelectorAll("#tradeInstrumentToggle button").forEach(b => b.classList.toggle("active", b.classList.contains(v)));
+  document.getElementById("tradeOptionFields").style.display = v === "option" ? "" : "none";
+}
+
+function showTradeModal(ticker, stratKey) {
   const r = (lastData?.tickers || []).find(t => t.ticker === ticker);
   const s = r?.[stratKey];
-  const op = s?.open_position;
-  if (!r || !s || !op) return; // stale modal id after a re-render; nothing to show
+  if (!r || !s) return; // stale modal id after a re-render
+  const op = s.open_position;
+  const today = todayIsoDate();
+  const signalDate = op ? op.entry_date : today;
+  const entryPriceDefault = op ? op.entry_price : r.price;
+  tradeInstrument = "spot";
+  tradeLastEstimate = null;
 
-  document.getElementById("modalBox").innerHTML = `
-    <div class="modaltitle">Estimate Entry &mdash; ${ticker}</div>
-    <div class="modalbody eecalc" id="eeModalBody">
+  const estimateSectionHtml = op && s.avg_mae_wins_pct != null ? `
+    <div class="modalbody eecalc" id="tradeEstimateSection">
       ${modalRow("Current price", "$" + r.price.toFixed(2))}
       ${modalRow("Sim entry", "$" + op.entry_price.toFixed(2))}
       ${modalRow("Avg MAE (wins)", "-" + s.avg_mae_wins_pct + "%")}
-      <div id="eeResults"><div class="modalnote">Computing&hellip;</div></div>
+      <div id="tradeEstimateResults"><div class="modalnote">Computing&hellip;</div></div>
+    </div>
+    <div class="modalsep"></div>` : "";
 
-      <div class="modalsep"></div>
-      <label class="eeoptiontoggle"><input type="checkbox" id="eeShowOptions" onchange="toggleEeOptions()"> Show as option</label>
-      <div id="eeOptionsForm" style="display:none">
-        <div class="formrow"><label>Strike</label><input type="number" id="eeStrike" step="0.5" oninput="calcEstimateEntry('${ticker}','${stratKey}')"></div>
-        <div class="formrow"><label>Days to expiry</label><input type="number" id="eeDte" step="1" oninput="calcEstimateEntry('${ticker}','${stratKey}')"></div>
-        <div class="formrow"><label>IV (%)</label><input type="number" id="eeIv" step="1" oninput="calcEstimateEntry('${ticker}','${stratKey}')"></div>
-        <div id="eeOptionResults"></div>
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modaltitle">Confirm Trade &mdash; ${ticker}</div>
+    ${estimateSectionHtml}
+    <div class="modalbody plcalc" id="tradeModalBody">
+      ${toggleGrpHtml("tradeInstrumentToggle", [["spot","Spot"],["option","Option"]], "spot", "setTradeInstrument")}
+      <div class="optfields">
+        <div class="formrow"><label>Entry Date</label><input type="date" id="tradeEntryDate" value="${today}"></div>
+        <div class="formrow"><label>Entry Price</label><input type="number" id="tradeEntryPrice" step="0.01" value="${entryPriceDefault.toFixed(2)}"></div>
+        <div class="formrow"><label>Take Profit</label><input type="number" id="tradeTpPrice" step="0.01" value="${op ? op.target : ""}"></div>
+        <div class="formrow"><label>Stop</label><input type="number" id="tradeStopPrice" step="0.01"></div>
       </div>
+      <div id="tradeOptionFields" class="optfields" style="display:none">
+        <div class="formrow"><label>Side</label>
+          <select id="tradeOptSide"><option value="buy">Buy</option><option value="sell">Sell</option></select>
+        </div>
+        <div class="formrow"><label>Type</label>
+          <select id="tradeOptType"><option value="call">Call</option><option value="put">Put</option></select>
+        </div>
+        <div class="formrow"><label>Strike</label><input type="number" id="tradeStrike" step="0.5"></div>
+        <div class="formrow"><label>Premium ($/sh)</label><input type="number" id="tradePremium" step="0.05"></div>
+        <div class="formrow"><label>Contracts</label><input type="number" id="tradeContracts" step="1" value="1"></div>
+        <div class="formrow"><label>Expiration Date</label><input type="date" id="tradeExpiryDate"></div>
+      </div>
+      <div id="tradeFormError" class="modalnote"></div>
+      <button type="button" class="tradebtn" onclick="submitTrade('${ticker}','${stratKey}','${signalDate}')">Confirm Trade</button>
     </div>`;
   document.getElementById("modalBackdrop").style.display = "flex";
-  calcEstimateEntry(ticker, stratKey);
+
+  if (op && s.avg_mae_wins_pct != null) calcTradeEstimate(ticker, stratKey);
 }
 
-function toggleEeOptions() {
-  const on = document.getElementById("eeShowOptions").checked;
-  document.getElementById("eeOptionsForm").style.display = on ? "" : "none";
-}
-
-// eeLastEstimate holds the most recent /api/estimate_entry response so the options
-// section (recomputed locally on every keystroke) doesn't need to re-POST just to
-// read recommended_limit again.
-let eeLastEstimate = null;
-
-async function calcEstimateEntry(ticker, stratKey) {
+async function calcTradeEstimate(ticker, stratKey) {
   let est;
   try {
     const res = await fetch("/api/estimate_entry", {
@@ -902,62 +929,66 @@ async function calcEstimateEntry(ticker, stratKey) {
       body: JSON.stringify({ ticker, strategy: stratKey }),
     });
     if (!res.ok) {
-      document.getElementById("eeResults").innerHTML = `<div class="modalnote">Failed: ${(await res.json()).detail || res.status}</div>`;
+      document.getElementById("tradeEstimateResults").innerHTML = `<div class="modalnote">Failed: ${(await res.json()).detail || res.status}</div>`;
       return;
     }
     est = await res.json();
   } catch (e) {
-    document.getElementById("eeResults").innerHTML = `<div class="modalnote">Failed: ${e}</div>`;
+    document.getElementById("tradeEstimateResults").innerHTML = `<div class="modalnote">Failed: ${e}</div>`;
     return;
   }
-  eeLastEstimate = est;
+  tradeLastEstimate = est;
 
-  document.getElementById("eeResults").innerHTML = `
+  document.getElementById("tradeEstimateResults").innerHTML = `
     <div class="modalsep"></div>
     ${modalRow("MAE floor", "$" + est.mae_floor.toFixed(2))}
     ${modalRow("Support used", "$" + est.support_used.toFixed(2) + (est.support_touches != null ? ` (${est.support_touches}x)` : ""))}
-    <div class="eerecommend">
-      <div class="eerecommendlabel">Recommended limit</div>
-      <div class="eerecommendvalue">$${est.recommended_limit.toFixed(2)}</div>
-      <div class="eerecommendpct">${est.pct_below_current}% vs current</div>
-    </div>
-    <button type="button" class="modebtn" onclick="navigator.clipboard.writeText('${est.recommended_limit}')">Copy price</button>`;
+    ${modalRow("Recommended limit", `$${est.recommended_limit.toFixed(2)} (${est.pct_below_current}% vs current)`)}`;
 
-  if (document.getElementById("eeShowOptions").checked) updateEeOptions(ticker, stratKey);
+  // Prefill the trade form from the estimate: entry at the recommended limit, stop at the
+  // MAE floor (the same worst-case-winning-trade level the estimate is built from) -- both
+  // remain editable, this is a starting point, not a lock.
+  const entryEl = document.getElementById("tradeEntryPrice");
+  const stopEl = document.getElementById("tradeStopPrice");
+  if (entryEl) entryEl.value = est.recommended_limit.toFixed(2);
+  if (stopEl && !stopEl.value) stopEl.value = est.mae_floor.toFixed(2);
 }
 
-function updateEeOptions(ticker, stratKey) {
-  const out = document.getElementById("eeOptionResults");
-  if (!eeLastEstimate) { out.innerHTML = ""; return; }
-  const r = (lastData?.tickers || []).find(t => t.ticker === ticker);
-  const op = r?.[stratKey]?.open_position;
-  const strike = parseFloat(document.getElementById("eeStrike").value);
-  const dte = parseFloat(document.getElementById("eeDte").value);
-  const ivPct = parseFloat(document.getElementById("eeIv").value);
-  if (!op || !Number.isFinite(strike) || !Number.isFinite(dte) || !Number.isFinite(ivPct) || dte <= 0 || ivPct <= 0) {
-    out.innerHTML = "";
-    return;
+async function submitTrade(ticker, stratKey, signalDate) {
+  const instrument = tradeInstrument;
+  const body = {
+    ticker, strategy_key: stratKey, signal_date: signalDate, instrument,
+    entry_date: document.getElementById("tradeEntryDate").value,
+    entry_price: parseFloat(document.getElementById("tradeEntryPrice").value),
+    tp_price: parseFloat(document.getElementById("tradeTpPrice").value),
+    stop_price: parseFloat(document.getElementById("tradeStopPrice").value),
+  };
+  if (instrument === "option") {
+    body.opt_side = document.getElementById("tradeOptSide").value;
+    body.opt_type = document.getElementById("tradeOptType").value;
+    body.strike = parseFloat(document.getElementById("tradeStrike").value);
+    body.premium = parseFloat(document.getElementById("tradePremium").value);
+    body.contracts = parseInt(document.getElementById("tradeContracts").value, 10);
+    body.expiry_date = document.getElementById("tradeExpiryDate").value;
   }
-  const iv = ivPct / 100;
-  const T_now = dte / 365;
-  const optionNow = blackScholes("call", r.price, strike, T_now, iv, RISK_FREE_RATE).price;
 
-  const T_dip = Math.max(dte - EE_DAYS_ELAPSED_TO_DIP, 0) / 365;
-  const optionDip = blackScholes("call", eeLastEstimate.recommended_limit, strike, T_dip, iv, RISK_FREE_RATE).price;
-
-  const T_tp = Math.max(dte - EE_DAYS_TO_TP, 0) / 365;
-  const optionTp = blackScholes("call", op.target, strike, T_tp, iv, RISK_FREE_RATE).price;
-
-  const expectedReturnPct = optionDip > 0 ? ((optionTp - optionDip) / optionDip * 100) : null;
-
-  out.innerHTML = `
-    <div class="modalsep"></div>
-    ${modalRow("Option now", "$" + optionNow.toFixed(2))}
-    ${modalRow("Option at dip (limit)", "$" + optionDip.toFixed(2))}
-    ${modalRow("Option at TP", "$" + optionTp.toFixed(2))}
-    ${expectedReturnPct != null ? modalRow("Expected return", (expectedReturnPct >= 0 ? "+" : "") + expectedReturnPct.toFixed(1) + "%") : ""}
-    <button type="button" class="modebtn" onclick="navigator.clipboard.writeText('${optionDip.toFixed(2)}')">Copy premium</button>
-    <div class="modalnote">Same-IV approximation -- IV at the dip may differ from IV now (selloffs often spike IV), so this is a planning aid, not a fill guarantee.</div>`;
+  const errEl = document.getElementById("tradeFormError");
+  errEl.textContent = "";
+  try {
+    const res = await fetch("/api/trades", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      errEl.textContent = "Failed: " + ((await res.json()).detail || res.status);
+      return;
+    }
+    hideModal();
+    if (typeof refreshActiveTradesBadges === "function") refreshActiveTradesBadges();
+  } catch (e) {
+    errEl.textContent = "Failed: " + e;
+  }
 }
 
 // ---------------- Advance Filter ----------------
@@ -1207,10 +1238,8 @@ function strategyModal(name, s, ticker, stratKey) {
     rows.push(`<div class="modalnote"><b>${s.verdict}</b>: ${s.verdict_reason || ""}</div>`);
   }
  
-  if (op) {
-    rows.push('<div class="modalsep"></div>');
-    rows.push(`<button type="button" class="estimateentrybtn" onclick="showEstimateModal('${ticker}','${stratKey}')">Estimate Entry</button>`);
-  }
+  rows.push('<div class="modalsep"></div>');
+  rows.push(`<button type="button" class="tradebtn" onclick="showTradeModal('${ticker}','${stratKey}')">TRADE</button>`);
   return registerModal(name, rows);
 }
 
@@ -1816,6 +1845,73 @@ async function checkForBackgroundRefresh() {
   setTimeout(waitUntilDone, BACKGROUND_WATCH_MS);
 }
 setInterval(checkForBackgroundRefresh, BACKGROUND_WATCH_MS);
+
+// ---------------- Notifications ----------------
+async function pollUnreadNotifications() {
+  let list;
+  try {
+    list = await (await fetch("/api/notifications?unread=1")).json();
+  } catch (e) {
+    return;
+  }
+  const countEl = document.getElementById("notifBellCount");
+  if (list.length > 0) {
+    countEl.textContent = list.length > 99 ? "99+" : String(list.length);
+    countEl.style.display = "";
+  } else {
+    countEl.style.display = "none";
+  }
+}
+pollUnreadNotifications();
+setInterval(pollUnreadNotifications, BACKGROUND_WATCH_MS);
+
+function timeAgo(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+async function showNotificationsModal() {
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modaltitle">Notifications</div>
+    <div class="modalbody" id="notifModalBody">
+      <div class="notiflist" id="notifList"><div class="modalnote">Loading&hellip;</div></div>
+    </div>`;
+  document.getElementById("modalBackdrop").style.display = "flex";
+  await renderNotificationsList();
+}
+
+async function renderNotificationsList() {
+  const el = document.getElementById("notifList");
+  let list;
+  try {
+    list = await (await fetch("/api/notifications")).json();
+  } catch (e) {
+    el.innerHTML = `<div class="modalnote">Failed to load: ${e}</div>`;
+    return;
+  }
+  if (!list.length) {
+    el.innerHTML = `<div class="modalnote">No notifications yet.</div>`;
+    return;
+  }
+  el.innerHTML = list.map(n => `
+    <div class="notifrow ${n.read_at ? "" : "unread"}" ${n.read_at ? "" : `onclick="markNotificationRead(${n.id})"`}>
+      <span class="msg">${n.message}</span>
+      <span class="when">${timeAgo(n.created_at)}</span>
+    </div>`).join("");
+}
+
+async function markNotificationRead(id) {
+  try {
+    await fetch(`/api/notifications/${id}/read`, { method: "POST" });
+  } catch (e) { /* best-effort; row just stays marked unread until next poll retries the read */ }
+  await renderNotificationsList();
+  pollUnreadNotifications();
+}
 </script>
 </body>
 </html>
