@@ -81,15 +81,17 @@ const tradeId = new URLSearchParams(location.search).get("id");
 
 function bigChartHtml(marks, valueKey) {
   const w = 860, h = 240, pad = { l: 46, r: 14, t: 14, b: 24 };
-  if (marks.length < 2) return `<svg class="bigchart" viewBox="0 0 ${w} ${h}"><text x="14" y="20" fill="var(--muted)" font-size="12">Not enough data yet.</text></svg>`;
+  if (marks.length === 0) return `<svg class="bigchart" viewBox="0 0 ${w} ${h}"><text x="14" y="20" fill="var(--muted)" font-size="12">No daily marks recorded yet.</text></svg>`;
   const values = marks.map(m => m[valueKey]);
   const lo = Math.min(...values), hi = Math.max(...values);
-  const yPad = (hi - lo) * 0.1 || 1;
+  const yPad = (hi - lo) * 0.1 || Math.max(Math.abs(values[0]) * 0.1, 1);
   const yMin = lo - yPad, yMax = hi + yPad;
   const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
-  const xOf = i => pad.l + (i / (marks.length - 1)) * iw;
+  const xOf = i => pad.l + (i / Math.max(marks.length - 1, 1)) * iw;
   const yOf = v => pad.t + (1 - (v - yMin) / (yMax - yMin)) * ih;
   const path = marks.map((m, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(m[valueKey]).toFixed(1)}`).join(" ");
+  const singlePointDot = marks.length === 1
+    ? `<circle cx="${xOf(0).toFixed(1)}" cy="${yOf(values[0]).toFixed(1)}" r="4" fill="var(--accent)"/>` : "";
 
   const yTicks = [];
   for (let i = 0; i <= 4; i++) yTicks.push(yMin + (yMax - yMin) * i / 4);
@@ -104,6 +106,7 @@ function bigChartHtml(marks, valueKey) {
     ${gridHtml}
     ${xTicksHtml}
     <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    ${singlePointDot}
   </svg>`;
 }
 
