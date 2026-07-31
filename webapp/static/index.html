@@ -868,6 +868,7 @@ function setTradeInstrument(v) {
   tradeInstrument = v;
   document.querySelectorAll("#tradeInstrumentToggle button").forEach(b => b.classList.toggle("active", b.classList.contains(v)));
   document.getElementById("tradeOptionFields").style.display = v === "option" ? "" : "none";
+  document.getElementById("tradeSpotFields").style.display = v === "spot" ? "" : "none";
 }
 
 function showTradeModal(ticker, stratKey) {
@@ -900,6 +901,9 @@ function showTradeModal(ticker, stratKey) {
         <div class="formrow"><label>Entry Price</label><input type="number" id="tradeEntryPrice" step="0.01" value="${entryPriceDefault.toFixed(2)}"></div>
         <div class="formrow"><label>Take Profit</label><input type="number" id="tradeTpPrice" step="0.01" value="${op ? op.target : ""}"></div>
         <div class="formrow"><label>Stop</label><input type="number" id="tradeStopPrice" step="0.01" value="${op && op.stop != null ? op.stop : ""}"></div>
+      </div>
+      <div id="tradeSpotFields" class="optfields">
+        <div class="formrow"><label>Units (shares)</label><input type="number" id="tradeUnits" step="1" value="1"></div>
       </div>
       <div id="tradeOptionFields" class="optfields" style="display:none">
         <div class="formrow"><label>Side</label>
@@ -975,6 +979,8 @@ async function submitTrade(ticker, stratKey, signalDate) {
     body.expiry_date = document.getElementById("tradeExpiryDate").value;
     const ivPct = parseFloat(document.getElementById("tradeIv").value);
     body.iv_at_entry = Number.isFinite(ivPct) ? ivPct / 100 : null;
+  } else {
+    body.units = parseFloat(document.getElementById("tradeUnits").value);
   }
 
   const errEl = document.getElementById("tradeFormError");

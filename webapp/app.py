@@ -649,8 +649,9 @@ def _with_exit_option_value(trade: dict) -> dict:
     return {**trade, "exit_option_value": round(value, 4)}
 
 
-_TRADE_SPOT_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price"]
-_TRADE_OPTION_REQUIRED = _TRADE_SPOT_REQUIRED + ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date"]
+_TRADE_SPOT_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price", "units"]
+_TRADE_OPTION_REQUIRED = ["ticker", "strategy_key", "signal_date", "entry_date", "entry_price", "tp_price", "stop_price",
+                          "opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date"]
 _TRADE_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry"]
 
 
@@ -714,6 +715,7 @@ def create_trade(body: dict):
         "exit_price": None, "exit_reason": None, "closed_at": None,
         "last_alert_tp_pct": None, "last_alert_stop_pct": None,
         "notes": body.get("notes"),
+        "units": body.get("units") if instrument == "spot" else None,
     }
     for f in _TRADE_OPTION_ONLY_FIELDS:
         trade[f] = body.get(f) if instrument == "option" else None
@@ -758,8 +760,11 @@ def trades_summary():
 
 @app.get("/api/trades/analytics")
 def trades_analytics(strategy: str | None = None, ticker: str | None = None,
+                      status: str | None = None,
                       date_from: str | None = None, date_to: str | None = None):
-    trades = db.list_trades()
+    if status not in (None, "open", "closed"):
+        raise HTTPException(status_code=400, detail=f"invalid status: {status!r}")
+    trades = db.list_trades(status)
     if strategy:
         trades = [t for t in trades if t["strategy_key"] == strategy]
     if ticker:
@@ -773,6 +778,7 @@ def trades_analytics(strategy: str | None = None, ticker: str | None = None,
     series = []
     for t in trades:
         marks = _with_option_values(t, marks_by_trade.get(t["id"], []))
+        t_with_exit = _with_exit_option_value(t)
         series.append({
             "trade_id": t["id"],
             "ticker": t["ticker"],
@@ -781,6 +787,12 @@ def trades_analytics(strategy: str | None = None, ticker: str | None = None,
             "entry_price": t["entry_price"],
             "instrument": t["instrument"],
             "premium": t["premium"],
+            "units": t["units"],
+            "contracts": t["contracts"],
+            "status": t["status"],
+            "exit_price": t["exit_price"],
+            "exit_option_value": t_with_exit.get("exit_option_value"),
+            "closed_at": t["closed_at"],
             "marks": marks,
         })
     return {"trades": series}
@@ -795,7 +807,7 @@ def get_trade(trade_id: int):
 
 
 _TRADE_EDITABLE_FIELDS = [
-    "entry_date", "entry_price", "tp_price", "stop_price",
+    "entry_date", "entry_price", "tp_price", "stop_price", "units",
     "opt_side", "opt_type", "strike", "premium", "contracts", "expiry_date", "iv_at_entry",
     "exit_price", "exit_reason", "closed_at", "notes",
 ]

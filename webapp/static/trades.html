@@ -29,11 +29,6 @@
   a.back:hover { text-decoration: underline; }
   h2 { font-size: 14px; margin: 20px 0 10px; }
 
-  .tabbar { display: flex; gap: 6px; margin-bottom: 14px; }
-  .tabbtn { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
-            border-radius: 7px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-  .tabbtn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
-
   .summarygrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
                  gap: 10px; margin-bottom: 18px; }
   .statbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
@@ -53,15 +48,26 @@
   .tradechart { width: 100%; height: 90px; margin-top: 8px; }
   .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
 
-  table.histtable, table.activetable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  table.histtable th, table.histtable td, table.activetable th, table.activetable td {
+  .pnlchart { width: 100%; height: 220px; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 12px; padding: 10px; margin-bottom: 18px; }
+  .pnlchart .axislabel { font-size: 10px; fill: var(--muted); }
+  .pnllegend { display: flex; gap: 16px; font-size: 11.5px; color: var(--muted); margin: -12px 0 14px 4px; }
+  .pnllegend span { display: flex; align-items: center; gap: 5px; }
+  .pnllegend .swatch { width: 12px; height: 2px; display: inline-block; }
+
+  table.tradestable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.tradestable th, table.tradestable td {
     text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  table.histtable th, table.activetable th { color: var(--muted); font-size: 10.5px;
+  table.tradestable th { color: var(--muted); font-size: 10.5px;
     text-transform: uppercase; letter-spacing: 0.03em; }
-  table.activetable td.actionscell { white-space: nowrap; text-align: right; }
+  table.tradestable td.actionscell { white-space: nowrap; text-align: right; }
   a.tklink { color: inherit; text-decoration: none; font-weight: 700; border-bottom: 1px dashed var(--muted); }
   a.tklink:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .strattag { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .statustag { display: inline-block; font-size: 10px; font-weight: 700; border-radius: 5px;
+               padding: 2px 6px; text-transform: uppercase; }
+  .statustag.open { background: var(--green-bg); color: var(--green); }
+  .statustag.closed { background: var(--line); color: var(--muted); }
   .sparkcell { width: 140px; }
   .sparkcell svg { width: 130px; height: 32px; display: block; }
 
@@ -81,37 +87,37 @@
 
   <div class="summarygrid" id="summaryGrid"></div>
 
-  <div class="tabbar">
-    <button type="button" class="tabbtn active" id="tabActive" onclick="setTab('active')">Active</button>
-    <button type="button" class="tabbtn" id="tabHistory" onclick="setTab('history')">History</button>
+  <h2>Daily P&amp;L</h2>
+  <svg id="pnlChart" class="pnlchart" viewBox="0 0 860 220"></svg>
+  <div class="pnllegend">
+    <span><span class="swatch" style="background:var(--accent)"></span> Unrealized</span>
+    <span><span class="swatch" style="background:var(--gold)"></span> Realized (cumulative)</span>
   </div>
 
-  <div id="activeView">
-    <div class="filterbar">
-      <label>Strategy</label>
-      <select id="filterStrategy" onchange="renderAnalytics()">
-        <option value="">All</option>
-        <option value="vexh">VEXH</option>
-        <option value="strategy_vcp">VCP</option>
-        <option value="strategy_vcpo">VCPO</option>
-      </select>
-      <label>Ticker</label>
-      <select id="filterTicker" onchange="renderAnalytics()"><option value="">All</option></select>
-    </div>
-    <svg id="cohortChart" class="tradechart" style="height:140px" viewBox="0 0 700 140"></svg>
-    <h2>Open trades</h2>
-    <div id="activeTrades"><p class="empty">Loading&hellip;</p></div>
+  <div class="filterbar">
+    <label>Status</label>
+    <select id="filterStatus" onchange="onFilterChange()">
+      <option value="">All</option>
+      <option value="open" selected>Open</option>
+      <option value="closed">Closed</option>
+    </select>
+    <label>Strategy</label>
+    <select id="filterStrategy" onchange="onFilterChange()">
+      <option value="">All</option>
+      <option value="vexh">VEXH</option>
+      <option value="strategy_vcp">VCP</option>
+      <option value="strategy_vcpo">VCPO</option>
+    </select>
+    <label>Ticker</label>
+    <select id="filterTicker" onchange="onFilterChange()"><option value="">All</option></select>
   </div>
 
-  <div id="historyView" style="display:none">
-    <h2>Closed trades</h2>
-    <div id="historyTable"><p class="empty">Loading&hellip;</p></div>
-  </div>
+  <h2>Trades</h2>
+  <div id="tradesTable"><p class="empty">Loading&hellip;</p></div>
 </div>
 <script>
-let openTrades = [];
-let closedTrades = [];
-let summary = {};
+let allTrades = [];
+let marksByTrade = {};
 
 function fmtMoney(v) { return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2); }
 function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }
@@ -122,21 +128,39 @@ function plClass(v) { return v >= 0 ? "pos" : "neg"; }
 const STRATEGY_LABELS = { vexh: "VEXH", strategy_vcp: "VCP", strategy_vcpo: "VCPO" };
 function stratLabel(key) { return STRATEGY_LABELS[key] || key; }
 
-function setTab(tab) {
-  document.getElementById("tabActive").classList.toggle("active", tab === "active");
-  document.getElementById("tabHistory").classList.toggle("active", tab === "history");
-  document.getElementById("activeView").style.display = tab === "active" ? "" : "none";
-  document.getElementById("historyView").style.display = tab === "history" ? "" : "none";
+// Cost basis for a trade -- what was actually put in. Spot: entry_price * units. Option:
+// premium * contracts * 100 (standard multiplier). Return % is then just pnl / cost * 100,
+// simple arithmetic once cost and exit total are known -- no Black-Scholes needed for this,
+// that's only for computing the exit VALUE itself (exit_option_value), not the percentage.
+function tradeCostBasis(t) {
+  if (t.instrument === "spot") return t.units != null ? t.entry_price * t.units : null;
+  return t.contracts != null ? t.premium * t.contracts * 100 : null;
+}
+
+function closedTradeReturnPct(t) {
+  const exitValue = t.instrument === "option" ? (t.exit_option_value ?? null) : t.exit_price;
+  if (exitValue == null) return null;
+  const pnl = tradeDollarPnl(t, exitValue);
+  const cost = tradeCostBasis(t);
+  if (pnl == null || !cost) return null;
+  return (pnl / cost) * 100;
 }
 
 function renderSummary() {
+  const closed = allTrades.filter(t => t.status === "closed");
+  const returns = closed.map(closedTradeReturnPct).filter(p => p != null);
+  const wins = returns.filter(p => p >= 0).length;
+  const openCount = allTrades.filter(t => t.status === "open").length;
+  const winRatePct = returns.length ? (wins / returns.length) * 100 : null;
+  const avgReturnPct = returns.length ? returns.reduce((a, b) => a + b, 0) / returns.length : null;
+
   const grid = document.getElementById("summaryGrid");
   grid.innerHTML = [
-    ["Open", summary.open_count ?? 0],
-    ["Closed", summary.closed_count ?? 0],
-    ["Win rate", summary.win_rate_pct != null ? summary.win_rate_pct + "%" : "&mdash;"],
-    ["Avg return", summary.avg_return_pct != null
-      ? `<span class="${plClass(summary.avg_return_pct)}">${fmtPct(summary.avg_return_pct)}</span>` : "&mdash;"],
+    ["Open", openCount],
+    ["Closed", closed.length],
+    ["Win rate", winRatePct != null ? winRatePct.toFixed(1) + "%" : "&mdash;"],
+    ["Avg return", avgReturnPct != null
+      ? `<span class="${plClass(avgReturnPct)}">${fmtPct(avgReturnPct)}</span>` : "&mdash;"],
   ].map(([lbl, val]) => `<div class="statbox"><span class="lbl">${lbl}</span><span class="val">${val}</span></div>`).join("");
 }
 
@@ -161,6 +185,7 @@ function sparklinePath(marks, valueKey, w, h, pad) {
 // misrepresent an option position's actual P&L.
 function tradeRowHtml(t, marks) {
   const isOption = t.instrument === "option";
+  const isOpen = t.status === "open";
   const hasOptionValues = isOption && marks.length && marks[0].option_value != null;
   const valueKey = hasOptionValues ? "option_value" : "close_price";
   const baseline = hasOptionValues ? t.premium : t.entry_price;
@@ -168,22 +193,24 @@ function tradeRowHtml(t, marks) {
   const last = marks.length ? marks[marks.length - 1][valueKey] : baseline;
   const pct = baseline ? ((last - baseline) / baseline * 100) : 0;
   const instrumentLabel = isOption ? `${t.opt_side} ${t.opt_type} $${t.strike}` : "Spot";
+  const actionsHtml = isOpen ? `
+      <button type="button" class="smallbtn" onclick="toggleExitForm(${t.id})">Close</button>
+      <button type="button" class="smallbtn danger" onclick="cancelTrade(${t.id})">Cancel</button>`
+    : `<span class="strattag">${t.exit_reason || ""}</span>`;
   return `<tr>
     <td><a class="tklink" href="trade.html?id=${t.id}">${t.ticker}</a></td>
     <td><span class="strattag">${stratLabel(t.strategy_key)}</span></td>
+    <td><span class="statustag ${t.status}">${t.status}</span></td>
     <td>${instrumentLabel}</td>
     <td>${t.entry_date}<br>${fmtMoney(t.entry_price)}</td>
     <td>${fmtMoney(t.tp_price)}</td>
     <td>${fmtMoney(t.stop_price)}</td>
     <td><b class="${plClass(pct)}">${fmtMoney(last)}<br>${fmtPct(pct)}</b></td>
     <td class="sparkcell"><svg viewBox="0 0 130 32"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.4"/></svg></td>
-    <td class="actionscell">
-      <button type="button" class="smallbtn" onclick="toggleExitForm(${t.id})">Close</button>
-      <button type="button" class="smallbtn danger" onclick="cancelTrade(${t.id})">Cancel</button>
-    </td>
+    <td class="actionscell">${actionsHtml}</td>
   </tr>
-  <tr id="exitrow_${t.id}" style="display:none">
-    <td colspan="9">
+  ${isOpen ? `<tr id="exitrow_${t.id}" style="display:none">
+    <td colspan="10">
       <div class="exitform">
         <input type="number" id="exitPrice_${t.id}" step="0.01" placeholder="Exit price">
         <select id="exitReason_${t.id}">
@@ -194,7 +221,7 @@ function tradeRowHtml(t, marks) {
         <button type="button" class="smallbtn danger" onclick="submitClose(${t.id})">Confirm close</button>
       </div>
     </td>
-  </tr>`;
+  </tr>` : ""}`;
 }
 
 function toggleExitForm(id) {
@@ -232,118 +259,171 @@ async function cancelTrade(id) {
   }
 }
 
-let marksByTrade = {};
+function currentFilters() {
+  return {
+    status: document.getElementById("filterStatus").value,
+    strategy: document.getElementById("filterStrategy").value,
+    ticker: document.getElementById("filterTicker").value,
+  };
+}
 
-async function renderActiveTrades() {
-  const el = document.getElementById("activeTrades");
-  if (!openTrades.length) { el.innerHTML = '<p class="empty">No open trades.</p>'; return; }
-  const rows = openTrades.map(t => tradeRowHtml(t, marksByTrade[t.id] || [])).join("");
-  el.innerHTML = `<table class="activetable">
+function filteredTrades() {
+  const f = currentFilters();
+  return allTrades.filter(t =>
+    (!f.status || t.status === f.status) &&
+    (!f.strategy || t.strategy_key === f.strategy) &&
+    (!f.ticker || t.ticker === f.ticker)
+  );
+}
+
+function renderTradesTable() {
+  const el = document.getElementById("tradesTable");
+  const trades = filteredTrades();
+  if (!trades.length) { el.innerHTML = '<p class="empty">No trades match this filter.</p>'; return; }
+  const rows = trades.map(t => tradeRowHtml(t, marksByTrade[t.id] || [])).join("");
+  el.innerHTML = `<table class="tradestable">
     <thead><tr>
-      <th>Ticker</th><th>Strategy</th><th>Instrument</th><th>Entry</th><th>TP</th><th>Stop</th>
+      <th>Ticker</th><th>Strategy</th><th>Status</th><th>Instrument</th><th>Entry</th><th>TP</th><th>Stop</th>
       <th>Last / P&amp;L</th><th>Chart</th><th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
 
-function renderHistory() {
-  const el = document.getElementById("historyTable");
-  if (!closedTrades.length) { el.innerHTML = '<p class="empty">No closed trades yet.</p>'; return; }
-  const rows = closedTrades.map(t => {
-    const pct = t.exit_price != null ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : null;
-    return `<tr>
-      <td><a class="tklink" href="trade.html?id=${t.id}">${t.ticker}</a></td>
-      <td><span class="strattag">${stratLabel(t.strategy_key)}</span></td><td>${t.entry_date}</td>
-      <td>${fmtMoney(t.entry_price)}</td><td>${t.exit_price != null ? fmtMoney(t.exit_price) : "&mdash;"}</td>
-      <td>${t.exit_reason || "&mdash;"}</td>
-      <td>${pct != null ? `<span class="${plClass(pct)}">${fmtPct(pct)}</span>` : "&mdash;"}</td>
-    </tr>`;
-  }).join("");
-  el.innerHTML = `<table class="histtable">
-    <thead><tr><th>Ticker</th><th>Strategy</th><th>Entry date</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Return</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+// $ P&L per trade at a given mark: (value - baseline) * position size. Spot: baseline =
+// entry_price, size = units. Option (with IV captured): baseline = premium, size = contracts *
+// 100 (standard multiplier). Options missing IV have no modeled value to convert to $ and are
+// excluded from the $ P&L chart (their % return still shows in the per-row sparkline).
+function tradeDollarPnl(t, valueAtMark) {
+  const hasOptionValues = t.instrument === "option" && t.marks.length && t.marks[0].option_value != null;
+  if (t.instrument === "spot") {
+    if (t.units == null) return null;
+    return (valueAtMark - t.entry_price) * t.units;
+  }
+  if (hasOptionValues) {
+    if (t.contracts == null) return null;
+    return (valueAtMark - t.premium) * t.contracts * 100;
+  }
+  return null;
 }
 
-async function renderAnalytics() {
-  const strategy = document.getElementById("filterStrategy").value;
-  const ticker = document.getElementById("filterTicker").value;
-  const params = new URLSearchParams();
-  if (strategy) params.set("strategy", strategy);
-  if (ticker) params.set("ticker", ticker);
-  let data;
-  try {
-    data = await (await fetch("/api/trades/analytics?" + params.toString())).json();
-  } catch {
-    return;
-  }
-  const svg = document.getElementById("cohortChart");
-  const w = 700, h = 140, pad = 20;
-  const series = (data.trades || []).filter(t => t.marks.length >= 1);
-  if (!series.length) { svg.innerHTML = `<text x="10" y="20" fill="var(--muted)" font-size="12">No data for this filter.</text>`; return; }
+// Realized: running total of $ P&L for trades closed on/before each date, step-changing only
+// on days something actually closed. Unrealized: sum of $ P&L (mark-to-market) across whatever
+// was open on that date, recomputed fresh each day (not cumulative -- it reflects a point-in-
+// time position value, not an accumulated total).
+function computePnlSeries(trades) {
+  const dateSet = new Set();
+  for (const t of trades) for (const m of t.marks) dateSet.add(m.mark_date);
+  for (const t of trades) if (t.status === "closed" && t.closed_at) dateSet.add(t.closed_at.slice(0, 10));
+  const dates = [...dateSet].sort();
+  if (!dates.length) return { dates: [], realized: [], unrealized: [] };
 
-  // Index each trade's series to % return, aligned by day offset from entry. Option trades
-  // with a captured IV index off the modeled option value vs. premium paid; everything else
-  // (spot, or an option missing IV) indexes off the underlying stock price vs. entry price.
-  const indexed = series.map(t => {
-    const hasOptionValues = t.instrument === "option" && t.marks.length && t.marks[0].option_value != null;
-    const valueKey = hasOptionValues ? "option_value" : "close_price";
-    const baseline = hasOptionValues ? t.premium : t.entry_price;
-    return t.marks.map((m, i) => ({ x: i, y: baseline ? (m[valueKey] - baseline) / baseline * 100 : 0 }));
-  });
-  const maxLen = Math.max(...indexed.map(s => s.length));
-  const avgByX = [];
-  for (let x = 0; x < maxLen; x++) {
-    const vals = indexed.filter(s => s[x]).map(s => s[x].y);
-    if (vals.length) avgByX.push({ x, y: vals.reduce((a, b) => a + b, 0) / vals.length });
+  const realizedByTrade = {};
+  for (const t of trades) {
+    if (t.status !== "closed" || !t.closed_at) continue;
+    const exitValue = t.instrument === "option" ? (t.exit_option_value ?? null) : t.exit_price;
+    if (exitValue == null) continue;
+    const pnl = tradeDollarPnl(t, exitValue);
+    if (pnl == null) continue;
+    realizedByTrade[t.id] = { date: t.closed_at.slice(0, 10), pnl };
   }
-  const yVals = avgByX.map(p => p.y);
-  const yMin = Math.min(0, ...yVals), yMax = Math.max(0, ...yVals);
-  const yRange = (yMax - yMin) || 1;
-  const iw = w - pad * 2, ih = h - pad * 2;
-  const xOf = x => pad + (x / Math.max(maxLen - 1, 1)) * iw;
-  const yOf = y => pad + (1 - (y - yMin) / yRange) * ih;
-  const path = avgByX.map((p, i) => `${i ? "L" : "M"}${xOf(p.x).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(" ");
+
+  let runningRealized = 0;
+  const realized = [];
+  const unrealized = [];
+  for (const date of dates) {
+    for (const r of Object.values(realizedByTrade)) {
+      if (r.date === date) runningRealized += r.pnl;
+    }
+    realized.push(runningRealized);
+
+    let dayUnrealized = 0;
+    for (const t of trades) {
+      if (t.status !== "open") continue;
+      const mark = t.marks.find(m => m.mark_date === date);
+      if (!mark) continue;
+      const valueKey = t.instrument === "option" && mark.option_value != null ? "option_value" : "close_price";
+      const pnl = tradeDollarPnl(t, mark[valueKey]);
+      if (pnl != null) dayUnrealized += pnl;
+    }
+    unrealized.push(dayUnrealized);
+  }
+  return { dates, realized, unrealized };
+}
+
+function renderPnlChart() {
+  const svg = document.getElementById("pnlChart");
+  // Always all trades, regardless of the table's filter bar -- the chart is a fixed
+  // portfolio-wide view, not scoped to whatever the user happens to be looking at below it.
+  const { dates, realized, unrealized } = computePnlSeries(allTrades);
+  if (!dates.length) { svg.innerHTML = `<text x="14" y="20" fill="var(--muted)" font-size="12">No P&amp;L data for this filter.</text>`; return; }
+
+  const w = 860, h = 220, pad = { l: 54, r: 14, t: 14, b: 24 };
+  const allVals = [...realized, ...unrealized, 0];
+  const yMin = Math.min(...allVals), yMax = Math.max(...allVals);
+  const yPad = (yMax - yMin) * 0.1 || 10;
+  const yLo = yMin - yPad, yHi = yMax + yPad;
+  const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+  const xOf = i => pad.l + (i / Math.max(dates.length - 1, 1)) * iw;
+  const yOf = v => pad.t + (1 - (v - yLo) / (yHi - yLo)) * ih;
+  const pathOf = vals => vals.map((v, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(" ");
+
+  const yTicks = [];
+  for (let i = 0; i <= 4; i++) yTicks.push(yLo + (yHi - yLo) * i / 4);
+  const gridHtml = yTicks.map(v => `
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${yOf(v).toFixed(1)}" y2="${yOf(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+    <text class="axislabel" x="${pad.l - 6}" y="${(yOf(v) + 3).toFixed(1)}" text-anchor="end">${fmtMoney(v)}</text>`).join("");
+  const xTickEvery = Math.max(Math.ceil(dates.length / 7), 1);
+  const xTicksHtml = dates.map((d, i) => i % xTickEvery === 0
+    ? `<text class="axislabel" x="${xOf(i).toFixed(1)}" y="${h - 6}" text-anchor="middle">${d.slice(5)}</text>` : "").join("");
   const zeroY = yOf(0);
-  const singlePointDot = avgByX.length === 1
-    ? `<circle cx="${xOf(avgByX[0].x).toFixed(1)}" cy="${yOf(avgByX[0].y).toFixed(1)}" r="4" fill="var(--accent)"/>` : "";
+
   svg.innerHTML = `
-    <line x1="${pad}" x2="${w - pad}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
-    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
-    ${singlePointDot}
-    <text x="${pad}" y="14" fill="var(--muted)" font-size="11">Avg % return from entry, indexed by days held (${series.length} trade${series.length === 1 ? "" : "s"})</text>`;
+    ${gridHtml}
+    ${xTicksHtml}
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="var(--muted)" stroke-width="1" opacity="0.5"/>
+    <path d="${pathOf(unrealized)}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <path d="${pathOf(realized)}" fill="none" stroke="var(--gold)" stroke-width="2"/>`;
 }
 
 function populateFilters() {
   const tickerSel = document.getElementById("filterTicker");
-  const tickers = [...new Set([...openTrades, ...closedTrades].map(t => t.ticker))].sort();
+  const current = tickerSel.value;
+  const tickers = [...new Set(allTrades.map(t => t.ticker))].sort();
   tickerSel.innerHTML = '<option value="">All</option>' + tickers.map(tk => `<option value="${tk}">${tk}</option>`).join("");
+  if (tickers.includes(current)) tickerSel.value = current;
 }
 
+function onFilterChange() {
+  renderTradesTable();
+}
+
+// /api/trades/analytics (always unfiltered -- the table's filter bar is applied client-side
+// in filteredTrades(), and the chart never filters at all) is the single source of truth for
+// both, since it's the one endpoint that already computes exit_option_value/marks/option_value
+// together -- avoids re-deriving option pricing differently in two places.
 async function loadAll() {
+  let rawTrades = [];
   try {
-    [openTrades, closedTrades, summary] = await Promise.all([
-      fetch("/api/trades?status=open").then(r => r.json()),
-      fetch("/api/trades?status=closed").then(r => r.json()),
-      fetch("/api/trades/summary").then(r => r.json()),
-    ]);
+    rawTrades = await (await fetch("/api/trades/analytics")).json().then(d => d.trades || []);
   } catch {
-    openTrades = []; closedTrades = []; summary = {};
+    rawTrades = [];
   }
-  marksByTrade = {};
-  await Promise.all(openTrades.map(async t => {
-    try {
-      marksByTrade[t.id] = await (await fetch(`/api/trades/${t.id}/marks`)).json();
-    } catch {
-      marksByTrade[t.id] = [];
-    }
-  }));
+  // analytics doesn't carry every raw column (tp_price, stop_price, opt_side, etc.) -- merge
+  // with GET /api/trades for the fields the table needs that analytics doesn't return.
+  let fullTrades = [];
+  try {
+    fullTrades = await (await fetch("/api/trades")).json();
+  } catch {
+    fullTrades = [];
+  }
+  const fullById = Object.fromEntries(fullTrades.map(t => [t.id, t]));
+  allTrades = rawTrades.map(t => ({ ...fullById[t.trade_id], ...t, id: t.trade_id }));
+  marksByTrade = Object.fromEntries(allTrades.map(t => [t.id, t.marks || []]));
   renderSummary();
   populateFilters();
-  await renderActiveTrades();
-  renderHistory();
-  renderAnalytics();
+  renderTradesTable();
+  renderPnlChart();
 }
 loadAll();
 </script>

@@ -112,6 +112,7 @@ def _init_schema() -> None:
                 last_alert_tp_pct REAL,
                 last_alert_stop_pct REAL,
                 notes TEXT,
+                units REAL,
                 UNIQUE (ticker, strategy_key, signal_date)
             );
             CREATE INDEX IF NOT EXISTS idx_taken_trades_status ON taken_trades(status);
@@ -139,6 +140,7 @@ def _init_schema() -> None:
         """)
     _migrate_universe_meta_date_to_epoch()
     _migrate_computed_results_fetch_epoch_to_bar_date()
+    _migrate_taken_trades_add_units()
 
 
 def _migrate_universe_meta_date_to_epoch() -> None:
@@ -198,6 +200,18 @@ def _migrate_computed_results_fetch_epoch_to_bar_date() -> None:
             cols.remove("source_fetched_at")
         if "source_bar_date" not in cols:
             _conn.execute("ALTER TABLE computed_results ADD COLUMN source_bar_date TEXT")
+
+
+def _migrate_taken_trades_add_units() -> None:
+    """One-time migration: taken_trades gained a `units` column (spot position size, the
+    share-count analog of options' `contracts`) after the table already existed in some DBs --
+    CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so add it explicitly if
+    missing. Needed for dollar P&L on spot trades (units * price), which has no other source
+    of position size."""
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(taken_trades)").fetchall()]
+        if "units" not in cols:
+            _conn.execute("ALTER TABLE taken_trades ADD COLUMN units REAL")
 
 
 _init_schema()
@@ -555,7 +569,7 @@ _TAKEN_TRADE_COLUMNS = [
     "entry_price", "tp_price", "stop_price", "opt_side", "opt_type", "strike",
     "premium", "contracts", "expiry_date", "iv_at_entry", "confirmed_at",
     "status", "exit_price", "exit_reason", "closed_at",
-    "last_alert_tp_pct", "last_alert_stop_pct", "notes",
+    "last_alert_tp_pct", "last_alert_stop_pct", "notes", "units",
 ]
 
 
