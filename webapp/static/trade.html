@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1a2333; --muted: #67718a;
+    --line: #e3e7ee; --green: #157f3d; --green-bg: #e5f4ea; --red: #b3261e;
+    --red-bg: #fbeae9; --accent: #2554c7; --accent-bg: #e8eefb; --gold-bg: #fdf3d8; --gold: #8a6d1a;
+    --blue: #0d6efd; --blue-bg: #e3f0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141c; --panel: #171d29; --text: #e6eaf2; --muted: #8b94a8;
+      --line: #262e3f; --green: #4ecb7d; --green-bg: #12301e; --red: #f2726b;
+      --red-bg: #391513; --accent: #0b3191; --accent-bg: #1a2540; --gold-bg: #33290f; --gold: #e8c96a;
+      --blue: #4d9dff; --blue-bg: #0f2c52;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 14px 10px 24px; }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 21px; margin: 0; }
+  h2 { font-size: 14px; margin: 20px 0 10px; }
+  a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a.back:hover { text-decoration: underline; }
+  .strattag { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 5px;
+           padding: 2px 8px; }
+  .badge.open { background: var(--green-bg); color: var(--green); }
+  .badge.closed { background: var(--line); color: var(--muted); }
+
+  .infogrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+              gap: 10px; margin-bottom: 18px; }
+  .statbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .statbox .lbl { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; display: block; }
+  .statbox .val { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .val.pos { color: var(--green); } .val.neg { color: var(--red); }
+
+  .bigchart { width: 100%; height: 260px; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 12px; padding: 10px; margin-bottom: 18px; }
+  .bigchart .axislabel { font-size: 10px; fill: var(--muted); }
+
+  table.markstable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.markstable th, table.markstable td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  table.markstable th { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+
+  .actions { display: flex; gap: 8px; margin: 16px 0; }
+  .smallbtn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px;
+              padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
+  .smallbtn:hover { color: var(--accent); border-color: var(--accent); }
+  .smallbtn.danger:hover { color: var(--red); border-color: var(--red); }
+  .exitform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .exitform input[type=number] { width: 100px; background: var(--panel); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 5px 8px; }
+  .exitform select { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 5px 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="pageTitle">Loading&hellip;</h1>
+    <a class="back" href="trades.html">&larr; Back to Trades</a>
+  </header>
+  <div id="content"></div>
+</div>
+<script>
+const STRATEGY_LABELS = { vexh: "VEXH", strategy_vcp: "VCP", strategy_vcpo: "VCPO" };
+function stratLabel(key) { return STRATEGY_LABELS[key] || key; }
+function fmtMoney(v) { return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2); }
+function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }
+function plClass(v) { return v >= 0 ? "pos" : "neg"; }
+
+const tradeId = new URLSearchParams(location.search).get("id");
+
+function bigChartHtml(marks, valueKey) {
+  const w = 860, h = 240, pad = { l: 46, r: 14, t: 14, b: 24 };
+  if (marks.length < 2) return `<svg class="bigchart" viewBox="0 0 ${w} ${h}"><text x="14" y="20" fill="var(--muted)" font-size="12">Not enough data yet.</text></svg>`;
+  const values = marks.map(m => m[valueKey]);
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const yPad = (hi - lo) * 0.1 || 1;
+  const yMin = lo - yPad, yMax = hi + yPad;
+  const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+  const xOf = i => pad.l + (i / (marks.length - 1)) * iw;
+  const yOf = v => pad.t + (1 - (v - yMin) / (yMax - yMin)) * ih;
+  const path = marks.map((m, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(m[valueKey]).toFixed(1)}`).join(" ");
+
+  const yTicks = [];
+  for (let i = 0; i <= 4; i++) yTicks.push(yMin + (yMax - yMin) * i / 4);
+  const gridHtml = yTicks.map(v => `
+    <line x1="${pad.l}" x2="${w - pad.r}" y1="${yOf(v).toFixed(1)}" y2="${yOf(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+    <text class="axislabel" x="${pad.l - 6}" y="${(yOf(v) + 3).toFixed(1)}" text-anchor="end">$${v.toFixed(2)}</text>`).join("");
+  const xTickEvery = Math.max(Math.ceil(marks.length / 6), 1);
+  const xTicksHtml = marks.map((m, i) => i % xTickEvery === 0
+    ? `<text class="axislabel" x="${xOf(i).toFixed(1)}" y="${h - 6}" text-anchor="middle">${m.mark_date.slice(5)}</text>` : "").join("");
+
+  return `<svg class="bigchart" viewBox="0 0 ${w} ${h}">
+    ${gridHtml}
+    ${xTicksHtml}
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+  </svg>`;
+}
+
+function toggleExitForm() {
+  const el = document.getElementById("exitform");
+  el.style.display = el.style.display === "none" ? "flex" : "none";
+}
+
+async function submitClose() {
+  const exit_price = parseFloat(document.getElementById("exitPrice").value);
+  const exit_reason = document.getElementById("exitReason").value;
+  if (!Number.isFinite(exit_price)) { alert("Enter a valid exit price"); return; }
+  try {
+    const res = await fetch(`/api/trades/${tradeId}/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exit_price, exit_reason }),
+    });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    load();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+async function cancelTrade() {
+  if (!confirm("Cancel this trade? This permanently deletes it and cannot be undone.")) return;
+  try {
+    const res = await fetch(`/api/trades/${tradeId}`, { method: "DELETE" });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    location.href = "trades.html";
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
+async function load() {
+  if (!tradeId) {
+    document.getElementById("pageTitle").textContent = "No trade specified";
+    return;
+  }
+  let trade, marks;
+  try {
+    [trade, marks] = await Promise.all([
+      fetch(`/api/trades/${tradeId}`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(`/api/trades/${tradeId}/marks`).then(r => r.json()),
+    ]);
+  } catch (e) {
+    document.getElementById("pageTitle").textContent = "Trade not found";
+    document.getElementById("content").innerHTML = `<p class="empty">Failed to load trade ${tradeId}: ${e}</p>`;
+    return;
+  }
+
+  const isOption = trade.instrument === "option";
+  const hasOptionValues = isOption && marks.length && marks[0].option_value != null;
+  const valueKey = hasOptionValues ? "option_value" : "close_price";
+  const baseline = hasOptionValues ? trade.premium : trade.entry_price;
+  const last = marks.length ? marks[marks.length - 1][valueKey] : baseline;
+  const pct = baseline ? ((last - baseline) / baseline * 100) : 0;
+  const lastLabel = hasOptionValues ? "Option value" : "Last price";
+
+  document.getElementById("pageTitle").innerHTML =
+    `${trade.ticker} <span class="strattag">${stratLabel(trade.strategy_key)}</span> <span class="badge ${trade.status}">${trade.status.toUpperCase()}</span>`;
+
+  const instrumentDetail = isOption
+    ? `${trade.opt_side} ${trade.opt_type} $${trade.strike} &middot; premium ${fmtMoney(trade.premium)} &times; ${trade.contracts} &middot; exp ${trade.expiry_date}${trade.iv_at_entry != null ? ` &middot; IV ${(trade.iv_at_entry * 100).toFixed(1)}%` : " (no IV captured -- tracking stock price)"}`
+    : "Spot";
+
+  const statBoxes = [
+    ["Entry", `${trade.entry_date}<br>${fmtMoney(trade.entry_price)}`],
+    ["Take Profit", fmtMoney(trade.tp_price)],
+    ["Stop", fmtMoney(trade.stop_price)],
+    [lastLabel, `<span class="${plClass(pct)}">${fmtMoney(last)}<br>${fmtPct(pct)}</span>`],
+  ];
+  if (trade.status === "closed") {
+    statBoxes.push(["Exit", `${trade.closed_at ? trade.closed_at.slice(0, 10) : ""}<br>${fmtMoney(trade.exit_price)}`]);
+    statBoxes.push(["Exit reason", trade.exit_reason || "&mdash;"]);
+  }
+
+  const actionsHtml = trade.status === "open" ? `
+    <div class="actions">
+      <button type="button" class="smallbtn" onclick="toggleExitForm()">Close trade</button>
+      <button type="button" class="smallbtn danger" onclick="cancelTrade()">Cancel trade</button>
+    </div>
+    <div class="exitform" id="exitform" style="display:none">
+      <input type="number" id="exitPrice" step="0.01" placeholder="Exit price">
+      <select id="exitReason">
+        <option value="tp">TP</option>
+        <option value="stop">Stop</option>
+        <option value="manual">Manual</option>
+      </select>
+      <button type="button" class="smallbtn danger" onclick="submitClose()">Confirm close</button>
+    </div>` : "";
+
+  const marksRows = marks.slice().reverse().map(m => `<tr>
+    <td>${m.mark_date}</td>
+    <td>${fmtMoney(m.close_price)}</td>
+    ${hasOptionValues ? `<td>${fmtMoney(m.option_value)}</td>` : ""}
+  </tr>`).join("");
+
+  document.getElementById("content").innerHTML = `
+    <div class="meta strattag" style="margin-bottom:14px">${instrumentDetail}</div>
+    <div class="infogrid">
+      ${statBoxes.map(([lbl, val]) => `<div class="statbox"><span class="lbl">${lbl}</span><span class="val">${val}</span></div>`).join("")}
+    </div>
+    ${bigChartHtml(marks, valueKey)}
+    ${actionsHtml}
+    <h2>Daily marks</h2>
+    ${marks.length ? `<table class="markstable">
+      <thead><tr><th>Date</th><th>Stock close</th>${hasOptionValues ? "<th>Option value</th>" : ""}</tr></thead>
+      <tbody>${marksRows}</tbody>
+    </table>` : '<p class="empty">No daily marks recorded yet.</p>'}
+    ${trade.notes ? `<h2>Notes</h2><p>${trade.notes}</p>` : ""}
+  `;
+}
+load();
+</script>
+</body>
+</html>

@@ -46,17 +46,6 @@
     color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12.5px; }
   .filterbar label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
 
-  .tradecard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-               padding: 12px 14px; margin-bottom: 12px; }
-  .tradecard .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .tradecard .tk { font-weight: 700; font-size: 14px; }
-  .tradecard .strat { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .tradecard .meta { color: var(--muted); font-size: 12px; }
-  .tradecard .badge { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 5px;
-                       padding: 2px 6px; background: var(--green-bg); color: var(--green); }
-  .tradecard .rowline { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; }
-  .tradecard .rowline b { font-variant-numeric: tabular-nums; }
-  .tradecard .actions { margin-top: 8px; display: flex; gap: 8px; }
   .smallbtn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px;
               padding: 4px 10px; font-size: 11.5px; cursor: pointer; }
   .smallbtn:hover { color: var(--accent); border-color: var(--accent); }
@@ -64,11 +53,19 @@
   .tradechart { width: 100%; height: 90px; margin-top: 8px; }
   .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
 
-  table.histtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  table.histtable th, table.histtable td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-  table.histtable th { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  table.histtable, table.activetable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.histtable th, table.histtable td, table.activetable th, table.activetable td {
+    text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.histtable th, table.activetable th { color: var(--muted); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.03em; }
+  table.activetable td.actionscell { white-space: nowrap; text-align: right; }
+  a.tklink { color: inherit; text-decoration: none; font-weight: 700; border-bottom: 1px dashed var(--muted); }
+  a.tklink:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .strattag { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .sparkcell { width: 140px; }
+  .sparkcell svg { width: 130px; height: 32px; display: block; }
 
-  .exitform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .exitform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
   .exitform input[type=number] { width: 100px; background: var(--panel); border: 1px solid var(--line);
     color: var(--text); border-radius: 6px; padding: 5px 8px; }
   .exitform select { background: var(--panel); border: 1px solid var(--line); color: var(--text);
@@ -120,6 +117,11 @@ function fmtMoney(v) { return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2); }
 function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }
 function plClass(v) { return v >= 0 ? "pos" : "neg"; }
 
+// Display labels only -- strategy_key itself (e.g. "strategy_vcpo") stays the wire format
+// used everywhere else (API params, DB rows); this map is purely cosmetic.
+const STRATEGY_LABELS = { vexh: "VEXH", strategy_vcp: "VCP", strategy_vcpo: "VCPO" };
+function stratLabel(key) { return STRATEGY_LABELS[key] || key; }
+
 function setTab(tab) {
   document.getElementById("tabActive").classList.toggle("active", tab === "active");
   document.getElementById("tabHistory").classList.toggle("active", tab === "history");
@@ -157,51 +159,47 @@ function sparklinePath(marks, valueKey, w, h, pad) {
 // strike/iv_at_entry/expiry) and premium paid, not the underlying stock -- a stock moving 2%
 // can easily be a 20%+ swing in the option's value, so tracking stock price alone would
 // misrepresent an option position's actual P&L.
-function tradeCardHtml(t, marks) {
+function tradeRowHtml(t, marks) {
   const isOption = t.instrument === "option";
   const hasOptionValues = isOption && marks.length && marks[0].option_value != null;
   const valueKey = hasOptionValues ? "option_value" : "close_price";
   const baseline = hasOptionValues ? t.premium : t.entry_price;
-  const { path } = sparklinePath(marks, valueKey, 600, 90, 8);
+  const { path } = sparklinePath(marks, valueKey, 130, 32, 3);
   const last = marks.length ? marks[marks.length - 1][valueKey] : baseline;
   const pct = baseline ? ((last - baseline) / baseline * 100) : 0;
-  const instrumentLabel = isOption
-    ? `${t.opt_side} ${t.opt_type} $${t.strike} exp ${t.expiry_date}${t.iv_at_entry == null ? " (no IV -- tracking stock price)" : ""}`
-    : "Spot";
-  const lastLabel = hasOptionValues ? "Option value" : "Last";
-  return `<div class="tradecard">
-    <div class="head">
-      <span><span class="tk">${t.ticker}</span> <span class="strat">${t.strategy_key}</span></span>
-      <span class="badge">OPEN</span>
-    </div>
-    <div class="meta">${instrumentLabel} &middot; entered ${t.entry_date} @ ${fmtMoney(t.entry_price)}${isOption ? ` &middot; premium ${fmtMoney(t.premium)}` : ""}</div>
-    <div class="rowline">
-      <span>Entry <b>${fmtMoney(t.entry_price)}</b></span>
-      <span>TP <b>${fmtMoney(t.tp_price)}</b></span>
-      <span>Stop <b>${fmtMoney(t.stop_price)}</b></span>
-      <span>${lastLabel} <b class="${plClass(pct)}">${fmtMoney(last)} (${fmtPct(pct)})</b></span>
-    </div>
-    <svg class="tradechart" viewBox="0 0 600 90">
-      <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
-    </svg>
-    <div class="actions">
-      <button type="button" class="smallbtn" onclick="toggleExitForm(${t.id})">Close trade</button>
-    </div>
-    <div class="exitform" id="exitform_${t.id}" style="display:none">
-      <input type="number" id="exitPrice_${t.id}" step="0.01" placeholder="Exit price">
-      <select id="exitReason_${t.id}">
-        <option value="tp">TP</option>
-        <option value="stop">Stop</option>
-        <option value="manual">Manual</option>
-      </select>
-      <button type="button" class="smallbtn danger" onclick="submitClose(${t.id})">Confirm</button>
-    </div>
-  </div>`;
+  const instrumentLabel = isOption ? `${t.opt_side} ${t.opt_type} $${t.strike}` : "Spot";
+  return `<tr>
+    <td><a class="tklink" href="trade.html?id=${t.id}">${t.ticker}</a></td>
+    <td><span class="strattag">${stratLabel(t.strategy_key)}</span></td>
+    <td>${instrumentLabel}</td>
+    <td>${t.entry_date}<br>${fmtMoney(t.entry_price)}</td>
+    <td>${fmtMoney(t.tp_price)}</td>
+    <td>${fmtMoney(t.stop_price)}</td>
+    <td><b class="${plClass(pct)}">${fmtMoney(last)}<br>${fmtPct(pct)}</b></td>
+    <td class="sparkcell"><svg viewBox="0 0 130 32"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.4"/></svg></td>
+    <td class="actionscell">
+      <button type="button" class="smallbtn" onclick="toggleExitForm(${t.id})">Close</button>
+      <button type="button" class="smallbtn danger" onclick="cancelTrade(${t.id})">Cancel</button>
+    </td>
+  </tr>
+  <tr id="exitrow_${t.id}" style="display:none">
+    <td colspan="9">
+      <div class="exitform">
+        <input type="number" id="exitPrice_${t.id}" step="0.01" placeholder="Exit price">
+        <select id="exitReason_${t.id}">
+          <option value="tp">TP</option>
+          <option value="stop">Stop</option>
+          <option value="manual">Manual</option>
+        </select>
+        <button type="button" class="smallbtn danger" onclick="submitClose(${t.id})">Confirm close</button>
+      </div>
+    </td>
+  </tr>`;
 }
 
 function toggleExitForm(id) {
-  const el = document.getElementById(`exitform_${id}`);
-  el.style.display = el.style.display === "none" ? "flex" : "none";
+  const el = document.getElementById(`exitrow_${id}`);
+  el.style.display = el.style.display === "none" ? "" : "none";
 }
 
 async function submitClose(id) {
@@ -221,12 +219,32 @@ async function submitClose(id) {
   }
 }
 
+// Cancel = hard delete, distinct from Close (a real exit) -- for a trade confirmed in error.
+// Not reversible, so confirm before sending the DELETE.
+async function cancelTrade(id) {
+  if (!confirm("Cancel this trade? This permanently deletes it and cannot be undone.")) return;
+  try {
+    const res = await fetch(`/api/trades/${id}`, { method: "DELETE" });
+    if (!res.ok) { alert("Failed: " + ((await res.json()).detail || res.status)); return; }
+    await loadAll();
+  } catch (e) {
+    alert("Failed: " + e);
+  }
+}
+
 let marksByTrade = {};
 
 async function renderActiveTrades() {
   const el = document.getElementById("activeTrades");
   if (!openTrades.length) { el.innerHTML = '<p class="empty">No open trades.</p>'; return; }
-  el.innerHTML = openTrades.map(t => tradeCardHtml(t, marksByTrade[t.id] || [])).join("");
+  const rows = openTrades.map(t => tradeRowHtml(t, marksByTrade[t.id] || [])).join("");
+  el.innerHTML = `<table class="activetable">
+    <thead><tr>
+      <th>Ticker</th><th>Strategy</th><th>Instrument</th><th>Entry</th><th>TP</th><th>Stop</th>
+      <th>Last / P&amp;L</th><th>Chart</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 function renderHistory() {
@@ -235,7 +253,8 @@ function renderHistory() {
   const rows = closedTrades.map(t => {
     const pct = t.exit_price != null ? ((t.exit_price - t.entry_price) / t.entry_price * 100) : null;
     return `<tr>
-      <td>${t.ticker}</td><td>${t.strategy_key}</td><td>${t.entry_date}</td>
+      <td><a class="tklink" href="trade.html?id=${t.id}">${t.ticker}</a></td>
+      <td><span class="strattag">${stratLabel(t.strategy_key)}</span></td><td>${t.entry_date}</td>
       <td>${fmtMoney(t.entry_price)}</td><td>${t.exit_price != null ? fmtMoney(t.exit_price) : "&mdash;"}</td>
       <td>${t.exit_reason || "&mdash;"}</td>
       <td>${pct != null ? `<span class="${plClass(pct)}">${fmtPct(pct)}</span>` : "&mdash;"}</td>
@@ -261,7 +280,7 @@ async function renderAnalytics() {
   }
   const svg = document.getElementById("cohortChart");
   const w = 700, h = 140, pad = 20;
-  const series = (data.trades || []).filter(t => t.marks.length > 1);
+  const series = (data.trades || []).filter(t => t.marks.length >= 1);
   if (!series.length) { svg.innerHTML = `<text x="10" y="20" fill="var(--muted)" font-size="12">No data for this filter.</text>`; return; }
 
   // Index each trade's series to % return, aligned by day offset from entry. Option trades

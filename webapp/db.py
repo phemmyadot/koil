@@ -622,6 +622,16 @@ def close_trade(trade_id: int, exit_price: float, exit_reason: str, closed_at: s
         """, (exit_price, exit_reason, closed_at, trade_id))
 
 
+def delete_trade(trade_id: int) -> None:
+    """Hard delete -- used for 'cancel trade' (the trade was confirmed in error, or the entry
+    never actually happened), not for a normal exit. Cascades to the trade's daily marks and
+    notifications so nothing orphaned lingers referencing a since-deleted trade_id."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM taken_trades WHERE id = ?", (trade_id,))
+        _conn.execute("DELETE FROM trade_daily_marks WHERE trade_id = ?", (trade_id,))
+        _conn.execute("DELETE FROM notifications WHERE trade_id = ?", (trade_id,))
+
+
 def update_trade_alert_pct(trade_id: int, *, tp_pct: float | None = None, stop_pct: float | None = None) -> None:
     """Bumps last_alert_tp_pct/last_alert_stop_pct -- only the side(s) passed are touched,
     so the alert engine can update one side without clobbering the other."""

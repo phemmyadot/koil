@@ -185,12 +185,20 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
 def _active_tickers() -> list[str]:
     """Candidate tickers (from the DB table -- see step 1 of the cycle in this module's
     docstring, NOT a live Yahoo screener call) plus any ticker a client has ever reported as
-    watchlisted -- a watchlisted ticker that later fails the technical filter must keep being
-    fetched/computed, or its saved watchlist row silently goes stale forever."""
+    watchlisted, plus any ticker with an open taken_trades row -- both a watchlisted ticker
+    and an actively-traded one must keep being fetched/computed even if they later fail the
+    technical filter, or they silently go stale forever (an open trade's daily marks and
+    TP/stop alerts depend on this)."""
     candidates = db.get_candidate_tickers()
     watchlisted = db.get_watchlist_tickers()
+    traded = [t["ticker"] for t in db.list_trades("open")]
     seen = set(candidates)
-    return candidates + [tk for tk in watchlisted if tk not in seen]
+    extra = []
+    for tk in watchlisted + traded:
+        if tk not in seen:
+            extra.append(tk)
+            seen.add(tk)
+    return candidates + extra
 
 
 def compute_all(force: bool = False) -> None:
@@ -642,8 +650,22 @@ def _backfill_trade_marks(trade_id: int, ticker: str, entry_date: str) -> None:
     for idx, row in bars.loc[entry_date:].iterrows():
         mark_date = idx.strftime("%Y-%m-%d")
         if mark_date >= today:
-            continue  # today (and beyond) is the background loop's job, not the backfill's
+            continue  # today (and beyond) is seeded from _computed by _seed_todays_mark, not here
         db.upsert_trade_daily_mark(trade_id, mark_date, float(row["Close"]), now_iso)
+
+
+def _seed_todays_mark(trade_id: int, ticker: str) -> None:
+    """A trade confirmed today has no mark for today yet -- the background loop (or the next
+    manual refresh) is what normally writes it, but that could be up to CHECK_INTERVAL away.
+    Seed it immediately from the ticker's already-computed price/date (same source
+    _update_trade_marks_and_alerts() uses), so the Trades page has data to show right away
+    instead of an empty chart until the next cycle."""
+    with _compute_lock:
+        payload = next((p for p in _computed if p["ticker"] == ticker), None)
+    if payload is None:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.upsert_trade_daily_mark(trade_id, payload["date"], payload["price"], now_iso)
 
 
 @app.post("/api/trades")
@@ -679,6 +701,7 @@ def create_trade(body: dict):
 
     if trade["entry_date"] < datetime.now(timezone.utc).date().isoformat():
         _backfill_trade_marks(trade_id, trade["ticker"], trade["entry_date"])
+    _seed_todays_mark(trade_id, trade["ticker"])
 
     return db.get_trade(trade_id)
 
@@ -753,6 +776,16 @@ def update_trade(trade_id: int, body: dict):
         raise HTTPException(status_code=400, detail="no editable fields in body (tp_price, stop_price, notes)")
     db.update_trade_fields(trade_id, editable)
     return db.get_trade(trade_id)
+
+
+@app.delete("/api/trades/{trade_id}")
+def cancel_trade(trade_id: int):
+    """Hard delete -- for a trade confirmed in error, distinct from /close (a real exit).
+    Cascades to the trade's marks/notifications in db.delete_trade()."""
+    if db.get_trade(trade_id) is None:
+        raise HTTPException(status_code=404, detail=f"no trade with id {trade_id}")
+    db.delete_trade(trade_id)
+    return {"ok": True}
 
 
 @app.post("/api/trades/{trade_id}/close")
