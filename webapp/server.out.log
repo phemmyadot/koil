@@ -1,9 +1,0 @@
-INFO:     127.0.0.1:57387 - "GET /api/meta HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57389 - "GET / HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57390 - "GET /api/tickers HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59162 - "GET / HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59162 - "GET /api/meta HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59162 - "GET /api/tickers HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59162 - "GET / HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:59162 - "GET /api/meta HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59162 - "GET /api/tickers HTTP/1.1" 200 OK
