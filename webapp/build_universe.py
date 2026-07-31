@@ -18,9 +18,18 @@ so criteria changes don't require a code push -- just set the env var.
 """
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import pandas as pd
 import yfinance as yf
+
+SCREEN_TIMEOUT = 20  # seconds -- matches data.py's FETCH_TIMEOUT
+_screen_executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _screen_with_timeout(query, size, offset):
+    future = _screen_executor.submit(yf.screen, query, size=size, offset=offset, sortField="ticker", sortAsc=True)
+    return future.result(timeout=SCREEN_TIMEOUT)
 
 
 def _load_dotenv() -> None:
@@ -95,7 +104,10 @@ def fetch_candidates(min_cap: int = DEFAULT_MIN_CAP, min_vol: int = DEFAULT_MIN_
     query = yf.EquityQuery("and", filters)
     symbols, offset, size, total = [], 0, 250, None
     while True:
-        res = yf.screen(query, size=size, offset=offset, sortField="ticker", sortAsc=True)
+        try:
+            res = _screen_with_timeout(query, size, offset)
+        except FutureTimeoutError:
+            raise TimeoutError(f"yf.screen() timed out after {SCREEN_TIMEOUT}s (offset={offset})") from None
         quotes = res.get("quotes", [])
         if not quotes:
             break
