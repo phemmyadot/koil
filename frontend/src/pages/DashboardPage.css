@@ -1,0 +1,77 @@
+.dashboard-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.dashboard-header h1 {
+  font-size: 20px;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.dashboard-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.dashboard-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.dashboard-header-actions button {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dashboard-header-actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.dashboard-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.dashboard-progress-bar {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+.dashboard-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease-out;
+}
+.dashboard-progress-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.dashboard-foot {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 12px;
+}
+.dashboard-foot button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}

@@ -1,0 +1,156 @@
+.plcalc .mode-mid {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.plcalc .mode-btn {
+  flex: 1;
+  padding: 7px 0;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plcalc .mode-btn.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.plcalc .form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.plcalc .form-row label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  flex: 1 1 auto;
+}
+.plcalc .form-row input[type="number"],
+.plcalc .form-row input[type="date"] {
+  width: 110px;
+  text-align: right;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.plcalc .result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin-top: 4px;
+}
+.plcalc .result-box {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.plcalc .result-box .rlbl {
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: block;
+}
+.plcalc .result-box .rval {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.plcalc .rval.pos {
+  color: var(--green);
+}
+.plcalc .rval.neg {
+  color: var(--red);
+}
+.plcalc .opt-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.plcalc .toggle-grp {
+  display: flex;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+.plcalc .toggle-grp button {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plcalc .toggle-grp button.active.buy,
+.plcalc .toggle-grp button.active.call {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.plcalc .toggle-grp button.active.sell,
+.plcalc .toggle-grp button.active.put {
+  background: var(--red-bg);
+  color: var(--red);
+}
+.plcalc .opt-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.plcalc .opt-fields .form-row {
+  justify-content: space-between;
+}
+.plcalc .opt-fields .form-row label {
+  flex: 0 0 auto;
+}
+.plcalc .opt-fields .form-row input {
+  width: 130px;
+}
+.plcalc .payoff-chart {
+  width: 100%;
+  height: 240px;
+  margin: 4px 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+.plcalc .payoff-chart .axis-label {
+  font-size: 10px;
+  fill: var(--muted);
+}
+.plcalc .payoff-chart .mark-label {
+  font-size: 10px;
+  fill: var(--muted);
+}
+.plcalc .pl-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 2px 0;
+  line-height: 1.4;
+}
+.plcalc .pl-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 4px 2px 0;
+  flex-wrap: wrap;
+}

@@ -1,0 +1,10 @@
+.watchlists-page header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.watchlists-page h1 {
+  font-size: 19px;
+  margin: 0;
+}

@@ -1,0 +1,47 @@
+.filterbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.filterbar label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.filterbar .sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 0 4px;
+}
+.filterbar input[type="text"] {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  width: 140px;
+}
+.filterbar input[type="number"] {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  width: 4em;
+}
+@media (max-width: 720px) {
+  .filterbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .filterbar .sep {
+    display: none;
+  }
+}

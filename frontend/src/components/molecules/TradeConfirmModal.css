@@ -1,0 +1,86 @@
+.trade-modal .opt-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.trade-modal .form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.trade-modal .form-row label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+.trade-modal .form-row input,
+.trade-modal .form-row select {
+  width: 130px;
+  text-align: right;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.trade-modal .toggle-grp {
+  display: flex;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.trade-modal .toggle-grp button {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.trade-modal .toggle-grp button.active.spot,
+.trade-modal .toggle-grp button.active.entry {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.trade-modal .toggle-grp button.active.option,
+.trade-modal .toggle-grp button.active.exit {
+  background: var(--gold-bg);
+  color: var(--gold);
+}
+.trade-modal .form-error {
+  color: var(--red);
+  font-size: 12px;
+  min-height: 16px;
+}
+.watchlist-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.watchlist-pick-btn {
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.watchlist-pick-btn:hover {
+  border-color: var(--accent);
+}

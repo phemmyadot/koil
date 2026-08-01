@@ -1,0 +1,141 @@
+.tickercard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tickercard.fire {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold) inset;
+}
+.tickercard.err {
+  opacity: 0.5;
+}
+.cardhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cardhead .price {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 15px;
+}
+.cardcheck {
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+.cardsection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cardsection .lbl {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.divider {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+.scoresections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scorebox {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.strategygrid2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px 14px;
+}
+.strategycell {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.strategyname {
+  flex: 0 0 32px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text);
+}
+.strategybody {
+  flex: 1;
+  min-width: 0;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.tk {
+  font-weight: 700;
+  font-size: 15px;
+}
+.tklink {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--muted);
+}
+.tklink:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.qscore {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+.condgrid {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 4px 6px;
+}
+.firetag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--gold);
+  background: var(--gold-bg);
+  border-radius: 5px;
+  padding: 2px 6px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.firetag.weak {
+  color: var(--muted);
+  background: var(--line);
+}
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 2px 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+.chip-neutral {
+  background: var(--line);
+  color: var(--muted);
+}

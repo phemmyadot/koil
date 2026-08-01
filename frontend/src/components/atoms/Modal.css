@@ -47,3 +47,25 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+.modal-sep {
+  border-top: 1px solid var(--line);
+  margin: 2px 0;
+}
+.modal-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.trade-btn {
+  width: 100%;
+  padding: 7px 0;
+  margin-top: 4px;
+  border: 1px solid var(--green);
+  background: var(--green);
+  color: #fff;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}

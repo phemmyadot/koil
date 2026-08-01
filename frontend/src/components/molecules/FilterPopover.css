@@ -1,0 +1,189 @@
+.advfilter {
+  position: relative;
+}
+.advfilterbtn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-left: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.advfiltercount {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+}
+.advfilterpanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  padding: 10px;
+  width: 340px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.advmetric {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.advcheck {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.advfilterfoot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.advsectionlabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 10px 0 4px;
+}
+.advsectionlabel:first-child {
+  margin-top: 2px;
+}
+.advradiorow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.advsliderrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.advslider {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.advslider input[type="range"],
+.advfilterpanel input[type="range"] {
+  display: block;
+  width: 100%;
+  margin: 4px 0 2px;
+  box-sizing: border-box;
+}
+.advslidersteps {
+  display: flex;
+  font-size: 10.5px;
+  color: var(--muted);
+  gap: 2px;
+}
+.advslidersteps span {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.advslidersteps span:first-child {
+  text-align: left;
+}
+.advslidersteps span:last-child {
+  text-align: right;
+}
+.advand {
+  align-self: center;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-weight: 700;
+  padding-top: 22px;
+}
+.switchgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin-top: 4px;
+}
+.switchrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 30px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.switchtrack {
+  position: absolute;
+  inset: 0;
+  background: var(--line);
+  border-radius: 999px;
+  transition: background 0.15s;
+}
+.switchtrack::before {
+  content: "";
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.switch input:checked + .switchtrack {
+  background: var(--accent);
+}
+.switch input:checked + .switchtrack::before {
+  transform: translateX(13px);
+}
+.clearfilters {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-left: 0;
+}
+@media (max-width: 720px) {
+  .advfilterpanel {
+    width: 100%;
+    left: 0;
+    right: 0;
+  }
+}

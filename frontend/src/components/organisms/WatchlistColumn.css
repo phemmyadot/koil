@@ -1,0 +1,112 @@
+.watchlist-cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .watchlist-cols {
+    grid-template-columns: 1fr;
+  }
+}
+.watchlist-col {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.watchlist-colhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.watchlist-colhead h2 {
+  font-size: 14px;
+  margin: 0;
+  flex: 1 1 auto;
+}
+.watchlist-colhead .count {
+  color: var(--muted);
+  font-size: 12px;
+}
+.watchlist-colhead input[type="checkbox"] {
+  cursor: pointer;
+}
+.watchlist-colactions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.watchlist-rmselbtn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.watchlist-rmselbtn:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.wl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.wl-row:last-child {
+  border-bottom: 0;
+}
+.wl-row input[type="checkbox"] {
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.wl-row .badge-row {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+.wl-row a.tk {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--muted);
+  font-weight: 700;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+.wl-row a.tk:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.wl-rmbtn {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.wl-rmbtn:hover {
+  color: var(--red);
+}
+
+@media (max-width: 720px) {
+  .wl-row {
+    flex-wrap: wrap;
+  }
+  .wl-row .badge-row {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    order: 3;
+  }
+  .watchlist-colactions {
+    justify-content: flex-start;
+  }
+}

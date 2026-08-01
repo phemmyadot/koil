@@ -1,0 +1,30 @@
+.pnl-chart {
+  width: 100%;
+  height: 220px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 18px;
+}
+.pnl-chart .axis-label {
+  font-size: 10px;
+  fill: var(--muted);
+}
+.pnl-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: -12px 0 14px 4px;
+}
+.pnl-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.pnl-legend .swatch {
+  width: 12px;
+  height: 2px;
+  display: inline-block;
+}

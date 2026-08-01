@@ -1,0 +1,185 @@
+.position-page header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.position-page h1 {
+  font-size: 21px;
+  margin: 0;
+}
+.position-page h2 {
+  font-size: 14px;
+  margin: 20px 0 10px;
+}
+.position-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 2px 8px;
+}
+.position-badge.open {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.position-badge.closed {
+  background: var(--line);
+  color: var(--muted);
+}
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+.small-btn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.small-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.small-btn.danger:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.small-btn.tiny {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.fill-form,
+.edit-form {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 16px 0;
+}
+.fill-form .fill-grid,
+.edit-form .edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.fill-form .form-row label,
+.edit-form .form-row label {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.fill-form .form-row input,
+.fill-form .form-row select,
+.edit-form .form-row input,
+.edit-form .form-row select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.fill-form .form-actions,
+.edit-form .edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.edit-form .edit-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 8px;
+}
+.toggle-grp {
+  display: flex;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+.toggle-grp button {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toggle-grp button.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.fillstable,
+.markstable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.fillstable th,
+.fillstable td,
+.markstable th,
+.markstable td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.fillstable th,
+.markstable th {
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.fillstable td.actions-cell {
+  white-space: nowrap;
+  text-align: right;
+}
+.kind-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+.kind-tag.entry {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+.kind-tag.exit {
+  background: var(--gold-bg);
+  color: var(--gold);
+}
+.strat-tag {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 0;
+}
