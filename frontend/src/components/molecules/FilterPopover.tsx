@@ -44,8 +44,8 @@ export function FilterPopover({ label, activeCount, onClear, children, open, onO
     return () => document.removeEventListener("click", onDocClick);
   }, [open, onOpenChange]);
 
-  return (
-    <div className={`advfilter${className ? ` ${className}` : ""}`} ref={ref}>
+  const popover = (
+    <div className="advfilter" ref={ref}>
       <button
         type="button"
         className="advfilterbtn"
@@ -71,4 +71,6 @@ export function FilterPopover({ label, activeCount, onClear, children, open, onO
       )}
     </div>
   );
+
+  return className ? <div className={className}>{popover}</div> : popover;
 }
