@@ -21,8 +21,8 @@
   filter: brightness(1.08);
 }
 .plcalc-fab-icon {
-  font-size: 15px;
-  line-height: 1;
+  flex: 0 0 auto;
+  display: block;
 }
 
 @media (max-width: 719px) {
@@ -40,7 +40,8 @@
     gap: 0;
   }
   .plcalc-fab-icon {
-    font-size: 20px;
+    width: 21px;
+    height: 21px;
   }
   .plcalc-fab-label {
     display: none;
