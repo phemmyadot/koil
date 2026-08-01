@@ -46,6 +46,14 @@ describe("buildPayoffChart", () => {
     const chart = buildPayoffChart(f, 0, 120, 93);
     expect(chart.evalProfit).toBe(true);
   });
+
+  it("positions the strike marker at the strike price and labels it", () => {
+    const f = baseOpt({ K: 105 });
+    const chart = buildPayoffChart(f, 0, f.S, 108);
+    expect(chart.strikeLabel).toBe("K $105");
+    expect(chart.strikeX).toBeGreaterThan(PAD.l);
+    expect(chart.strikeX).toBeLessThan(560 - PAD.r);
+  });
 });
 
 describe("priceFromChartX", () => {

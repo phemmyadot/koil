@@ -97,3 +97,22 @@ body {
 a {
   color: inherit;
 }
+
+/* Every clickable control's focus ring/tap highlight should follow ITS OWN border-radius,
+   not the browser's default sharp rectangle. In Chromium/WebKit, `outline` already clips to
+   whatever border-radius is set on the element itself, so a plain outline here is enough --
+   no extra property needed. This also kills the mobile tap-highlight rectangle, which is the
+   "sharp overlay on a rounded button" seen on touch devices. */
+button,
+a,
+input,
+select,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

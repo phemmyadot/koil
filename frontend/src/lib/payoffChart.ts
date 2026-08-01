@@ -26,6 +26,8 @@ export interface PayoffChartData {
   breakevenLabel: string;
   evalPoint: ChartPoint;
   evalProfit: boolean;
+  strikeX: number;
+  strikeLabel: string;
 }
 
 function niceStep(range: number): number {
@@ -95,6 +97,8 @@ export function buildPayoffChart(f: OptFields, evalDays: number, evalPrice: numb
     breakevenLabel: `BE $${breakeven.toFixed(2)}`,
     evalPoint: { x: evalX, y: evalY },
     evalProfit: evalPL >= 0,
+    strikeX: xOf(f.K),
+    strikeLabel: `K $${f.K}`,
   };
 }
 

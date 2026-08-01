@@ -1,0 +1,48 @@
+.plcalc-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.plcalc-fab:hover {
+  filter: brightness(1.08);
+}
+.plcalc-fab-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+@media (max-width: 719px) {
+  .plcalc-fab {
+    /* Clears the fixed bottom nav bar (see AppShell.css's .app-bottomnav) instead of
+       overlapping it. */
+    bottom: calc(56px + 16px);
+    right: 16px;
+    /* Icon-only circle on mobile -- there's less room, and the label doubles as a tooltip
+       via aria-label instead of visible text. */
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  .plcalc-fab-icon {
+    font-size: 20px;
+  }
+  .plcalc-fab-label {
+    display: none;
+  }
+}

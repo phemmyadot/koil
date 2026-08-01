@@ -284,6 +284,18 @@ function OptionsForm() {
           strokeDasharray="5,4"
           opacity={0.95}
         />
+        <line
+          x1={chart.strikeX}
+          x2={chart.strikeX}
+          y1={PAD.t}
+          y2={PAD.t + (CHART_H - PAD.t - PAD.b)}
+          stroke="var(--muted)"
+          strokeWidth={1}
+          strokeDasharray="2,4"
+        />
+        <text className="mark-label" x={chart.strikeX + 4} y={PAD.t + 11}>
+          {chart.strikeLabel}
+        </text>
         {chart.breakevenPoint && (
           <>
             <circle

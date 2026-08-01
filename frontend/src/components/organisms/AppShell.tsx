@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { KMark } from "../atoms/KMark";
 import { NotificationBell } from "./NotificationBell";
+import { PLCalcFab } from "./PLCalcFab";
 import "./AppShell.css";
 
 // Responsive nav shell per docs/superpowers/specs/2026-07-31-react-spa-rewrite-design.md:
@@ -35,6 +36,8 @@ export function AppShell() {
       <main className="app-content">
         <Outlet />
       </main>
+
+      <PLCalcFab />
 
       <nav className="app-bottomnav">
         {NAV_ITEMS.map((item) => (

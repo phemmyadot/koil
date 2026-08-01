@@ -35,6 +35,39 @@
   width: 340px;
   max-height: 70vh;
   overflow-y: auto;
+  transform-origin: top left;
+  animation: advfilter-rollout 0.15s ease-out;
+}
+/* Duration must match CLOSE_ANIM_MS in FilterPopover.tsx, which keeps the panel mounted long
+   enough for this to actually finish playing before it's removed from the DOM. */
+.advfilterpanel-closing {
+  animation: advfilter-rollin 0.13s ease-in forwards;
+}
+@keyframes advfilter-rollout {
+  from {
+    opacity: 0;
+    transform: scaleY(0.85) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1) translateY(0);
+  }
+}
+@keyframes advfilter-rollin {
+  from {
+    opacity: 1;
+    transform: scaleY(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scaleY(0.85) translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .advfilterpanel,
+  .advfilterpanel-closing {
+    animation: none;
+  }
 }
 .advmetric {
   display: flex;

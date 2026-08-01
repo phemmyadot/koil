@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { FilterPopover } from "../molecules/FilterPopover";
 import {
   ADV_PF_DEFAULT_INDEX,
@@ -63,7 +64,12 @@ export interface FilterBarProps {
 
 // Replaces the filterbar + its 3 popover panels (index.html). Panel visibility/outside-click is
 // owned by FilterPopover; this component only owns the filter values themselves.
+type PopoverKey = "adv" | "tradeOn" | "prebreak";
+
 export function FilterBar({ state, onChange }: FilterBarProps) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  // Only one popover open at a time -- opening one closes whichever else was open.
+  const [openPopover, setOpenPopover] = useState<PopoverKey | null>(null);
   const advActive = (state.adv.wrMin > WR_STEPS[0] ? 1 : 0) + (state.adv.pfMin > PF_STEPS[0] ? 1 : 0);
   const prebreakActive =
     (state.prebreak.phaseMin !== PHASE_STEPS[PHASE_DEFAULT_INDEX][1] ? 1 : 0) +
@@ -72,29 +78,74 @@ export function FilterBar({ state, onChange }: FilterBarProps) {
 
   return (
     <div className="filterbar">
-      <input
-        type="text"
-        placeholder="Search ticker&hellip;"
-        autoComplete="off"
-        value={state.tickerSearch}
-        onChange={(e) => onChange({ ...state, tickerSearch: e.target.value })}
-      />
-      <span className="sep" />
-      <label htmlFor="minTradesFilter">Min trades</label>
-      <input
-        id="minTradesFilter"
-        type="number"
-        min={0}
-        step={1}
-        value={state.minTrades}
-        onChange={(e) => onChange({ ...state, minTrades: Number(e.target.value) || 0 })}
-      />
+      <button
+        type="button"
+        className="filtertoggle"
+        aria-expanded={mobileOpen}
+        onClick={() => setMobileOpen((v) => !v)}
+      >
+        Filters <span className="filtertogglearrow">&#9662;</span>
+      </button>
+      <div className={`filtercontrols${mobileOpen ? " open" : ""}`}>
+      <div className="filterrow1">
+        <input
+          type="text"
+          placeholder="Search ticker&hellip;"
+          autoComplete="off"
+          maxLength={6}
+          value={state.tickerSearch}
+          onChange={(e) => onChange({ ...state, tickerSearch: e.target.value })}
+        />
+        <span className="sep" />
+        <label htmlFor="minTradesFilter">Min trades</label>
+        <input
+          id="minTradesFilter"
+          type="number"
+          min={0}
+          step={1}
+          value={state.minTrades}
+          onChange={(e) => onChange({ ...state, minTrades: Number(e.target.value) || 0 })}
+        />
+        <span className="sep" />
+
+        <FilterPopover
+          label="Trade on"
+          activeCount={state.tradeOnStrats.length}
+          onClear={() => onChange({ ...state, tradeOnStrats: [] })}
+          open={openPopover === "tradeOn"}
+          onOpenChange={(open) => setOpenPopover(open ? "tradeOn" : null)}
+        >
+          <div className="advmetric">
+            {ADV_STRATEGIES.map(([key, label]) => (
+              <label className="advcheck" key={key}>
+                <input
+                  type="checkbox"
+                  checked={state.tradeOnStrats.includes(key)}
+                  onChange={(e) =>
+                    onChange({
+                      ...state,
+                      tradeOnStrats: e.target.checked
+                        ? [...state.tradeOnStrats, key]
+                        : state.tradeOnStrats.filter((k) => k !== key),
+                    })
+                  }
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        </FilterPopover>
+      </div>
+
       <span className="sep" />
 
       <FilterPopover
         label="Advance Filter"
         activeCount={advActive}
         onClear={() => onChange({ ...state, adv: defaultFilterBarState().adv })}
+        open={openPopover === "adv"}
+        onOpenChange={(open) => setOpenPopover(open ? "adv" : null)}
+        className="filterrow2"
       >
         <div className="advsectionlabel">Strategy</div>
         <div className="advradiorow">
@@ -142,37 +193,12 @@ export function FilterBar({ state, onChange }: FilterBarProps) {
       <span className="sep" />
 
       <FilterPopover
-        label="Trade on"
-        activeCount={state.tradeOnStrats.length}
-        onClear={() => onChange({ ...state, tradeOnStrats: [] })}
-      >
-        <div className="advmetric">
-          {ADV_STRATEGIES.map(([key, label]) => (
-            <label className="advcheck" key={key}>
-              <input
-                type="checkbox"
-                checked={state.tradeOnStrats.includes(key)}
-                onChange={(e) =>
-                  onChange({
-                    ...state,
-                    tradeOnStrats: e.target.checked
-                      ? [...state.tradeOnStrats, key]
-                      : state.tradeOnStrats.filter((k) => k !== key),
-                  })
-                }
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-      </FilterPopover>
-
-      <span className="sep" />
-
-      <FilterPopover
         label="Pre-Breakout"
         activeCount={prebreakActive}
         onClear={() => onChange({ ...state, prebreak: defaultFilterBarState().prebreak })}
+        open={openPopover === "prebreak"}
+        onOpenChange={(open) => setOpenPopover(open ? "prebreak" : null)}
+        className="filterrow3"
       >
         <div className="advsectionlabel">Phase</div>
         <input
@@ -228,6 +254,7 @@ export function FilterBar({ state, onChange }: FilterBarProps) {
       <button type="button" className="clearfilters" onClick={() => onChange(defaultFilterBarState())}>
         Clear filters
       </button>
+      </div>
     </div>
   );
 }

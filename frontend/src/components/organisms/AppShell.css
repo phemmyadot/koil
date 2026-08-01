@@ -50,6 +50,10 @@
   color: var(--text);
 }
 
+.notif-bell {
+  margin-left: auto;
+}
+
 .app-content {
   flex: 1 1 auto;
   padding: 16px 20px 32px;

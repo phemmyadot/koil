@@ -7,8 +7,6 @@ import { exportCsv, exportPdf } from "../api/plCalc";
 import type { Position, StrategyKey, TickerPayload } from "../api/types";
 import { FilterBar, defaultFilterBarState, type FilterBarState } from "../components/organisms/FilterBar";
 import { Pagination, TickerCardGrid } from "../components/organisms/TickerCardGrid";
-import { NotificationBell } from "../components/organisms/NotificationBell";
-import { PLCalculatorModal } from "../components/molecules/PLCalculatorModal";
 import { StrategyDetailModal } from "../components/molecules/StrategyDetailModal";
 import { TradeConfirmModal } from "../components/molecules/TradeConfirmModal";
 import { AddFillModal } from "../components/molecules/AddFillModal";
@@ -28,7 +26,7 @@ import "./DashboardPage.css";
 
 const PAGE_SIZE = 9;
 
-type ModalState = { kind: "strategy"; ticker: string; stratKey: StrategyKey } | { kind: "plCalc" } | { kind: "watchlistPicker" } | { kind: "export" } | null;
+type ModalState = { kind: "strategy"; ticker: string; stratKey: StrategyKey } | { kind: "watchlistPicker" } | { kind: "export" } | null;
 
 // Trade/AddFill are looked up async (need the ticker's open-position status), so they get
 // their own bit of state rather than folding into ModalState -- see openTradeFlow().
@@ -222,12 +220,6 @@ export function DashboardPage() {
 
       <Pagination page={clampedPage} pageCount={pageCount} onPrev={() => setPage((p) => p - 1)} onNext={() => setPage((p) => p + 1)} />
 
-      <p className="dashboard-foot">
-        <button type="button" onClick={() => setModal({ kind: "plCalc" })}>
-          P/L Calculator
-        </button>
-      </p>
-
       {modal?.kind === "strategy" &&
         (() => {
           const row = data?.tickers.find((t) => t.ticker === modal.ticker);
@@ -243,8 +235,6 @@ export function DashboardPage() {
             />
           );
         })()}
-
-      {modal?.kind === "plCalc" && <PLCalculatorModal onClose={() => setModal(null)} />}
 
       {modal?.kind === "watchlistPicker" && (
         <WatchlistPickerModal

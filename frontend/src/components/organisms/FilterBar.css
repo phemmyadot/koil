@@ -24,7 +24,7 @@
   padding: 6px 10px;
   font: inherit;
   font-size: 13px;
-  width: 140px;
+  width: 7em;
 }
 .filterbar input[type="number"] {
   background: var(--panel);
@@ -36,6 +36,16 @@
   font-size: 13px;
   width: 4em;
 }
+.filtertoggle {
+  display: none;
+}
+.filtercontrols,
+.filterrow1,
+.filterrow2,
+.filterrow3 {
+  display: contents;
+}
+
 @media (max-width: 720px) {
   .filterbar {
     flex-direction: column;
@@ -43,5 +53,65 @@
   }
   .filterbar .sep {
     display: none;
+  }
+  .filtertoggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    margin-left: 0;
+  }
+  .filtertogglearrow {
+    transition: transform 0.15s ease-out;
+  }
+  .filtertoggle[aria-expanded="true"] .filtertogglearrow {
+    transform: rotate(180deg);
+  }
+  .filtercontrols {
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+  }
+  .filtercontrols.open {
+    display: flex;
+  }
+  /* Row 1: search / min trades / trade-on, side by side, wrapping if needed. */
+  .filterrow1 {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .filterrow1 input[type="text"] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* Rows 2 and 3: Advance Filter / Pre-Breakout, each its own full-width row. */
+  .filterrow2,
+  .filterrow3 {
+    display: block;
+    width: 100%;
+  }
+  .filterrow2 .advfilterbtn,
+  .filterrow3 .advfilterbtn {
+    width: 100%;
+  }
+  /* Count badge + dropdown arrow both hug the right edge together, right after the label --
+     not spread apart with the badge stranded in the row's visual center by
+     justify-content: space-between (the label/badge/arrow order in the DOM). */
+  .filterrow2 .advfilterbtn .advfiltercount,
+  .filterrow3 .advfilterbtn .advfiltercount {
+    margin-left: auto;
   }
 }
