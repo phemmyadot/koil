@@ -151,3 +151,26 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 :root[data-theme="light"] input[type="date"]::-webkit-calendar-picker-indicator {
   filter: none;
 }
+
+/* iOS Safari renders <input type=date> with its own fixed intrinsic width sized to its
+   locale-formatted text ("Jul 31, 2026" is wider than desktop's compact "07/31/2026" + icon
+   glyph) and refuses to shrink below that inside a flex/grid track, which is what breaks the
+   2-up field-grid layout on a phone -- width:100% alone doesn't override it. min-width:0 lets
+   it actually shrink to its grid cell like every other input already does. */
+input[type="date"] {
+  min-width: 0;
+}
+
+/* <input type=number>'s up/down stepper arrows are the same "browser-drawn, unstyleable"
+   problem as the date icon above, except WebKit doesn't expose an invert-able pseudo-element
+   for them -- they're just permanently near-black regardless of theme. Hiding them entirely
+   (rather than trying to reskin) since these fields are for typing a price/quantity, not
+   click-stepping, and a hidden control beats a black one that clashes with the dark theme. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
