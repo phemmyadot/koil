@@ -119,43 +119,65 @@ Ref: [2026-07-31-trade-tracking-design.md](2026-07-31-trade-tracking-design.md)
       in 1b (API-level) and 1f (UI-level via Playwright: card moved from Active tab to History
       tab, summary stats updated)
 
-## Phase 2 — PWA & Push Notifications
+## Phase 2 — PWA & Push Notifications — DONE (implementation), pending manual verification
 
 Ref: [2026-07-31-pwa-push-design.md](2026-07-31-pwa-push-design.md)
 
-Do not start until Phase 1's alert engine (1c) is live and producing real `notifications` rows
-— PWA has nothing meaningful to push otherwise.
+Implemented against the React SPA (`frontend/`), not the legacy `webapp/static/` this plan
+was originally written against — the repo was restructured (`webapp/` → `backend/` +
+`frontend/`) and the SPA rewrite landed in between this plan being written and Phase 2
+starting. All file paths below reflect where things actually ended up, not the original plan.
 
-### 2a. Installability
-- [ ] Create `webapp/static/manifest.json` (name, icons, `start_url`, `display: standalone`,
+### 2a. Installability — DONE
+- [x] Create `frontend/public/manifest.json` (name, icons, `start_url`, `display: standalone`,
       theme/background colors)
-- [ ] Produce app icon set at required sizes
-- [ ] Add `<link rel="manifest">` + registration script to `index.html`
-- [ ] Create `webapp/static/service-worker.js` (install/activate lifecycle)
-- [ ] Confirm HTTPS is available in the deployment target (hard prerequisite — flag/resolve
-      before continuing; push does not work over plain HTTP except localhost)
+- [x] Produce app icon set at required sizes (`frontend/public/icons/`: 192, 512,
+      apple-touch-icon — rasterized programmatically from the KOIL K-mark SVG, not a
+      hand-designed icon set; fine functionally, worth a real design pass later if the
+      install/home-screen experience matters)
+- [x] Add `<link rel="manifest">` + registration script (`index.html` + `main.tsx` →
+      `frontend/src/lib/serviceWorker.ts`)
+- [x] Create `frontend/public/service-worker.js` (install/activate lifecycle)
+- [x] HTTPS available in the deployment target — already true, Cloudflare Tunnel terminates
+      TLS in front of the existing deploy (confirmed via `deploy.sh`'s `cloudflared` restart)
 
-### 2b. Push subscription plumbing
-- [ ] Generate VAPID key pair; store as env vars (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
-      `VAPID_SUBJECT`), never committed
-- [ ] Add `push_subscriptions` table to `webapp/db.py`
-- [ ] `GET /api/push/vapid-public-key`
-- [ ] `POST /api/push/subscribe` (upsert on `endpoint`)
-- [ ] `POST /api/push/unsubscribe`
-- [ ] Frontend: Settings toggle "Enable push notifications" → `Notification.requestPermission()`
-      → `pushManager.subscribe()` → `POST /api/push/subscribe`
+### 2b. Push subscription plumbing — DONE
+- [x] Generate VAPID key pair; stored as env vars (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+      `VAPID_SUBJECT`) in `.env` (gitignored, never committed). **`VAPID_SUBJECT` is still the
+      placeholder `mailto:replace-me@example.com` — replace with a real contact (mailto: or
+      URL) before relying on push in production; the Web Push spec requires push services be
+      able to reach the sender.**
+- [x] Add `push_subscriptions` table to `backend/db.py`
+- [x] `GET /api/push/vapid-public-key`
+- [x] `POST /api/push/subscribe` (upsert on `endpoint`)
+- [x] `POST /api/push/unsubscribe`
+- [x] Frontend: toggle "Push notifications" → `Notification.requestPermission()` →
+      `pushManager.subscribe()` → `POST /api/push/subscribe` (`frontend/src/hooks/usePush.ts`).
+      Lives inside the notification bell's dropdown (`NotificationPanel`), not a dedicated
+      Settings page — none existed yet; worth carving out `/settings` if more toggles show up
+      later.
 
-### 2c. Push send path
-- [ ] Add `pywebpush` dependency
-- [ ] Extend alert engine (Phase 1c) to also send a push payload per subscription when a
-      `notifications` row is inserted
-- [ ] Handle expired/invalid subscriptions (410/404) by deleting the stale row
-- [ ] Service worker: handle `push` event → `showNotification`
-- [ ] Service worker: handle `notificationclick` → focus/open app, deep-link to the trade
+### 2c. Push send path — DONE
+- [x] Add `pywebpush` dependency (`requirements.txt`)
+- [x] Extend alert engine (`_fire_threshold_alerts` in `backend/app.py`) to also send a push
+      payload per subscription when a `notifications` row is inserted — `backend/push.py`
+- [x] Handle expired/invalid subscriptions (410/404) by deleting the stale row; other failures
+      (timeout, 5xx, network errors) leave the subscription in place to retry next alert
+- [x] Service worker: handle `push` event → `showNotification`
+- [x] Service worker: handle `notificationclick` → focus an existing tab (or open one),
+      deep-link to `/trades/:positionId`
 
 ### 2d. Verify
-- [ ] Install PWA on desktop browser, confirm standalone launch
-- [ ] Subscribe to push, trigger a test threshold crossing, confirm OS notification appears
-      with app closed
-- [ ] Click notification, confirm it opens/focuses app at the relevant trade
-- [ ] Test on iOS Safari (installed) per the design doc's platform caveat
+- [x] Manifest, icons, service-worker file all serve correctly and the SW registers in a real
+      browser — verified live via Playwright against the running backend
+- [x] `tsc`, full frontend test suite (115 tests), and backend import all pass clean
+- [x] Push send path exercised against a real (fake-endpoint) subscription: fails gracefully,
+      doesn't crash the alert loop, leaves the subscription in place on a non-410/404 failure
+- [ ] Install PWA on a real desktop browser, confirm standalone launch — not yet done, needs a
+      human with a real browser (Playwright doesn't exercise the install prompt)
+- [ ] Subscribe to push for real, trigger a real threshold crossing, confirm an OS notification
+      appears with the app fully closed — not yet done, needs `VAPID_SUBJECT` fixed first and a
+      real device/browser
+- [ ] Click a real push notification, confirm it opens/focuses the app at the relevant trade —
+      not yet done
+- [ ] Test on iOS Safari (installed) per the design doc's platform caveat — not yet done
