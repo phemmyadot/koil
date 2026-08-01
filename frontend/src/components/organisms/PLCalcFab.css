@@ -6,7 +6,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;
   border: 0;
   border-radius: 999px;

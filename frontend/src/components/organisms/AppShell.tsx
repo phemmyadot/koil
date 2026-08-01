@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { KMark } from "../atoms/KMark";
+import { WordMark } from "../atoms/WordMark";
 import { NotificationBell } from "./NotificationBell";
 import { PLCalcFab } from "./PLCalcFab";
 import "./AppShell.css";
@@ -20,8 +21,8 @@ export function AppShell() {
     <div className="app-shell">
       <header className="app-topbar">
         <NavLink to="/" className="app-brand" end>
+          <WordMark height={28} />
           <KMark size={28} />
-          <span className="app-brand-name">KOIL</span>
         </NavLink>
         <nav className="app-toplinks">
           {NAV_ITEMS.map((item) => (

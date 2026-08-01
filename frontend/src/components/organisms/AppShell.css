@@ -22,12 +22,20 @@
   gap: 8px;
   text-decoration: none;
   flex-shrink: 0;
-}
-.app-brand-name {
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
   color: var(--text);
+}
+/* Wordmark (mark + "OIL") on desktop; standalone mark only on mobile, where there's less
+   top-bar width to spend on branding. */
+.app-brand .k-mark {
+  display: none;
+}
+@media (max-width: 719px) {
+  .app-brand .word-mark {
+    display: none;
+  }
+  .app-brand .k-mark {
+    display: block;
+  }
 }
 .app-toplinks {
   display: flex;

@@ -3,7 +3,7 @@
 // data; this is a 1:1 port as a React component so it themes/scales without an asset request).
 export function KMark({ size = 32 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <svg className="k-mark" width={size} height={size} viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
         <linearGradient id="koilGrad" x1="10%" y1="100%" x2="90%" y2="0%">
           <stop offset="0%" stopColor="#0B3191" />

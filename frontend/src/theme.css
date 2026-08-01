@@ -1,6 +1,14 @@
 /* KOIL design tokens. Ported verbatim from the current app's copy-pasted :root blocks
    (index.html, trades.html, position.html, watchlist.html all defined the same 15 tokens x 2
    modes independently) -- this is now the single source of truth, imported once in main.tsx. */
+/* --accent is for text/links/borders/focus rings (anything painted on top of --bg or --panel).
+   --accent-fill is for solid backgrounds with white text on top (buttons, badges, the FAB).
+   In light mode the same hue clears AA contrast in both roles, so the two tokens match; in
+   dark mode a color bright enough to read as text on a near-black panel is, by definition,
+   too light for white text to read on top of it (a real WCAG contrast-math constraint, not a
+   design choice) -- so dark mode uses two different blues for the two jobs. See
+   docs/superpowers/specs (accent-color-accessibility-fix) for the contrast numbers behind
+   these picks; both meet WCAG AA (4.5:1) in every surface they're used against. */
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;
@@ -12,10 +20,13 @@
   --red: #b3261e;
   --red-bg: #fbeae9;
   --accent: #2554c7;
+  --accent-fill: #2554c7;
   --accent-bg: #e8eefb;
   --gold-bg: #fdf3d8;
   --gold: #8a6d1a;
-  --blue: #0d6efd;
+  /* #0959c4 vs #e3f0ff (5.61:1) -- the original #0d6efd (3.90:1) fell short of WCAG AA's
+     4.5:1 text threshold, same bug class as the accent fix above. */
+  --blue: #0959c4;
   --blue-bg: #e3f0ff;
 }
 
@@ -30,7 +41,8 @@
     --green-bg: #12301e;
     --red: #f2726b;
     --red-bg: #391513;
-    --accent: #0b3191;
+    --accent: #5b8def;
+    --accent-fill: #1e46b0;
     --accent-bg: #1a2540;
     --gold-bg: #33290f;
     --gold: #e8c96a;
@@ -51,7 +63,8 @@
   --green-bg: #12301e;
   --red: #f2726b;
   --red-bg: #391513;
-  --accent: #0b3191;
+  --accent: #5b8def;
+  --accent-fill: #1e46b0;
   --accent-bg: #1a2540;
   --gold-bg: #33290f;
   --gold: #e8c96a;
@@ -70,11 +83,12 @@
   --red: #b3261e;
   --red-bg: #fbeae9;
   --accent: #2554c7;
+  --accent-fill: #2554c7;
   --accent-bg: #e8eefb;
+  --blue: #0959c4;
+  --blue-bg: #e3f0ff;
   --gold-bg: #fdf3d8;
   --gold: #8a6d1a;
-  --blue: #0d6efd;
-  --blue-bg: #e3f0ff;
 }
 
 * {
