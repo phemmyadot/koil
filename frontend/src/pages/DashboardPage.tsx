@@ -103,6 +103,11 @@ export function DashboardPage() {
     setPage(1);
   }
 
+  function goToPage(next: number) {
+    setPage(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function toggleSelect(ticker: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -218,7 +223,7 @@ export function DashboardPage() {
         />
       )}
 
-      <Pagination page={clampedPage} pageCount={pageCount} onPrev={() => setPage((p) => p - 1)} onNext={() => setPage((p) => p + 1)} />
+      <Pagination page={clampedPage} pageCount={pageCount} onPrev={() => goToPage(clampedPage - 1)} onNext={() => goToPage(clampedPage + 1)} />
 
       {modal?.kind === "strategy" &&
         (() => {
