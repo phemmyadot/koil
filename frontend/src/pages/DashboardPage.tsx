@@ -168,7 +168,6 @@ export function DashboardPage() {
       <div className="dashboard-header">
         <h1>Exhaustion Dashboard</h1>
         <span className="dashboard-meta">{metaText}</span>
-        <NotificationBell />
         <div className="dashboard-header-actions">
           {selected.size === 0 ? (
             <button type="button" onClick={() => setSelected(new Set(pageRows.map((r) => r.ticker)))}>

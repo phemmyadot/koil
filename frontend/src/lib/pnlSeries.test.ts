@@ -95,12 +95,48 @@ describe("computePnlSeries", () => {
     expect(result.dates).toEqual([]);
   });
 
-  it("accumulates realized P&L on the day a position closes", () => {
+  it("realizes P&L on the date of a full-close exit fill", () => {
     const closed = makePosition({ id: 1, status: "closed", closed_at: "2026-01-10T00:00:00Z", realized_pnl: 500 });
-    const marks: Record<number, DailyMark[]> = { 1: [{ mark_date: "2026-01-10", close_price: 110 }] };
-    const result = computePnlSeries([closed], marks, { 1: [] });
+    const fills: Record<number, Fill[]> = {
+      1: [
+        makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", price: 100, units: 10 }),
+        makeFill({ id: 2, kind: "exit", fill_date: "2026-01-10", price: 150, units: 10 }),
+      ],
+    };
+    const result = computePnlSeries([closed], {}, fills);
     expect(result.dates).toEqual(["2026-01-10"]);
     expect(result.realized).toEqual([500]);
+  });
+
+  // Regression test: a partial exit on a still-open position must show up in the realized
+  // series immediately, not only once (if ever) the position fully closes.
+  it("realizes P&L on the date of a partial exit, while the position is still open", () => {
+    const open = makePosition({ id: 1, status: "open", units_remaining: 6, realized_pnl: 40 });
+    const fills: Record<number, Fill[]> = {
+      1: [
+        makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", price: 100, units: 10 }),
+        makeFill({ id: 2, kind: "exit", fill_date: "2026-01-05", price: 110, units: 4 }),
+      ],
+    };
+    const result = computePnlSeries([open], {}, fills);
+    expect(result.dates).toEqual(["2026-01-05"]);
+    expect(result.realized).toEqual([40]); // (110 - 100) * 4
+  });
+
+  it("keeps a partial exit's realized P&L in the running total on later dates too", () => {
+    const open = makePosition({ id: 1, status: "open", units_remaining: 6 });
+    const marks: Record<number, DailyMark[]> = { 1: [{ mark_date: "2026-01-08", close_price: 105 }] };
+    const fills: Record<number, Fill[]> = {
+      1: [
+        makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", price: 100, units: 10 }),
+        makeFill({ id: 2, kind: "exit", fill_date: "2026-01-05", price: 110, units: 4 }),
+      ],
+    };
+    const result = computePnlSeries([open], marks, fills);
+    expect(result.dates).toEqual(["2026-01-05", "2026-01-08"]);
+    expect(result.realized).toEqual([40, 40]);
+    // Remaining 6 units still mark-to-market as unrealized.
+    expect(result.unrealized[1]).toBeCloseTo((105 - 100) * 6, 5);
   });
 
   it("computes mark-to-market unrealized P&L for an open position using replayed state", () => {

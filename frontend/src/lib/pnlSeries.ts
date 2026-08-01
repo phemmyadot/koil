@@ -48,34 +48,29 @@ export function computePnlSeries(
 ): PnlSeries {
   const dateSet = new Set<string>();
   for (const p of positions) for (const m of marksByPosition[p.id] ?? []) dateSet.add(m.mark_date);
-  for (const p of positions) if (p.status === "closed" && p.closed_at) dateSet.add(p.closed_at.slice(0, 10));
+  for (const p of positions) for (const f of fillsByPosition[p.id] ?? []) if (f.kind === "exit") dateSet.add(f.fill_date);
   const dates = [...dateSet].sort();
   if (!dates.length) return { dates: [], realized: [], unrealized: [] };
 
-  let runningRealized = 0;
   const realized: number[] = [];
   const unrealized: number[] = [];
-  const closedDates = new Set(
-    positions.filter((p) => p.status === "closed" && p.closed_at).map((p) => p.closed_at!.slice(0, 10)),
-  );
   for (const date of dates) {
-    if (closedDates.has(date)) {
-      for (const p of positions) {
-        if (p.status === "closed" && p.closed_at && p.closed_at.slice(0, 10) === date) runningRealized += p.realized_pnl;
-      }
-    }
-    realized.push(runningRealized);
-
+    let dayRealized = 0;
     let dayUnrealized = 0;
     for (const p of positions) {
+      const state = replayAsOf(fillsByPosition[p.id] ?? [], date);
+      // Cumulative realized P&L as of this date -- includes every partial exit along the way,
+      // not just a step-change on the date the position fully closed.
+      dayRealized += state.realized;
+
+      if (state.units <= 0 || state.avgCost == null) continue;
       const marks = marksByPosition[p.id] ?? [];
       const mark = marks.find((m) => m.mark_date === date);
       if (!mark) continue;
-      const state = replayAsOf(fillsByPosition[p.id] ?? [], date);
-      if (state.units <= 0 || state.avgCost == null) continue;
       const value = mark.option_value != null ? mark.option_value : mark.close_price;
       dayUnrealized += (value - state.avgCost) * state.units * state.multiplier;
     }
+    realized.push(dayRealized);
     unrealized.push(dayUnrealized);
   }
   return { dates, realized, unrealized };
