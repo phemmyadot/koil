@@ -1,0 +1,16 @@
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="koilGradFavicon" x1="10%" y1="100%" x2="90%" y2="0%">
+      <stop offset="0%" stop-color="#0B3191"/>
+      <stop offset="100%" stop-color="#4D9DFF"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="116" height="116" rx="26" fill="#0A0E17"/>
+  <g fill="none" stroke="url(#koilGradFavicon)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 36 20 L 36 30 L 48 36 L 36 42 L 48 48 L 36 54 L 36 58"/>
+    <path d="M 36 58 L 36 98"/>
+    <path d="M 36 58 L 92 24"/>
+    <path d="M 42 62 L 88 98"/>
+  </g>
+  <circle cx="92" cy="24" r="6.5" fill="#4D9DFF"/>
+</svg>

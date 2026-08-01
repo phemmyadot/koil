@@ -19,33 +19,51 @@ throwaway build container.
 
 ## Wiring it into FastAPI
 
-`backend/app.py` currently mounts `backend/static/` (the legacy hand-written HTML
-frontend) at `/` via `StaticFiles`. `backend/static_frontend/` (the new SPA build
-output) is copied into the image but **not yet mounted** -- the SPA is still mid-build
-(see `docs/superpowers/specs/2026-07-31-react-spa-rewrite-design.md`) and isn't ready to
-replace the page users currently see in production.
+`backend/app.py` mounts `backend/static_frontend/` (the built SPA) at `/` via a custom
+`SPAStaticFiles` class -- a thin `StaticFiles` subclass that falls back to serving
+`index.html` for any GET that doesn't match a real file. That fallback matters because
+react-router's `browserRouter` (not hash-based) needs it: a hard refresh or a direct link
+to e.g. `/trades/42` is a real GET to the server, not a client-side navigation, and plain
+`StaticFiles` would 404 that instead of loading the app shell that handles the route
+client-side.
 
-To cut over once the SPA is feature-complete, change the mount in `backend/app.py`:
+`backend/static/` (the old hand-written HTML frontend) is **kept in the repo for
+reference only** -- not mounted, not served at any path, not deleted. There is no
+`/legacy` route or similar; any request that doesn't match a real SPA asset falls
+straight through to the SPA's own `index.html`, same as every other unmatched route.
 
-```python
-app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static_frontend"),
-                           html=True), name="static")
-```
-
-and delete `backend/static/` (the legacy frontend) once nothing references it.
+The app now **requires** `backend/static_frontend/` to exist -- `app.py` fails to import
+if it's missing, since there's no other frontend to fall back to. This matches Docker's
+build (the `frontend-build` stage always produces it before the Python stage starts),
+but means a bare `uvicorn backend.app:app` outside Docker needs the SPA built first (see
+Local development below).
 
 ## Local development
 
-The SPA is not run through Docker/uvicorn's static mount during development -- use
-Vite's own dev server, which proxies API calls to a locally-running backend:
+Two options:
 
-```bash
-# terminal 1 -- backend
-.venv/Scripts/python.exe -m uvicorn backend.app:app --port 8123
+- **Fastest iteration**: run the SPA through Vite's own dev server, which proxies API
+  calls to a locally-running backend and hot-reloads on save.
 
-# terminal 2 -- frontend (proxies /api to :8123, see frontend/vite.config.ts)
-cd frontend && npm run dev
-```
+  ```bash
+  # terminal 1 -- backend
+  .venv/Scripts/python.exe -m uvicorn backend.app:app --port 8123
+
+  # terminal 2 -- frontend (proxies /api to :8123, see frontend/vite.config.ts)
+  cd frontend && npm run dev
+  ```
+
+  Note `backend/app.py` still needs `backend/static_frontend/` to exist to import at all
+  (see above) even though this path doesn't serve it -- run `npm run build` once first if
+  you haven't, or copy `frontend/dist/*` into `backend/static_frontend/`.
+
+- **Testing the built SPA through the backend directly** (closer to production):
+
+  ```bash
+  cd frontend && npm run build
+  # copy frontend/dist/* into backend/static_frontend/, then:
+  .venv/Scripts/python.exe -m uvicorn backend.app:app --port 8123
+  ```
 
 ## Deploy
 

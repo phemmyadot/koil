@@ -49,6 +49,7 @@ PAYLOAD_SCHEMA_VERSION = 6
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from yfinance.exceptions import YFRateLimitError
 
 import backend.build_universe as build_universe
@@ -1129,5 +1130,24 @@ def push_unsubscribe(body: dict):
     return {"ok": True}
 
 
-app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"),
-                           html=True), name="static")
+class SPAStaticFiles(StaticFiles):
+    """Serves the built React SPA, falling back to index.html for any GET that doesn't match a
+    real file -- react-router's browserRouter (not hash-based) needs this: a hard refresh or
+    direct link to e.g. /trades/42 is a real GET to the server, not a client-side navigation,
+    and with plain StaticFiles that 404s instead of loading the app shell that would otherwise
+    handle the route client-side."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or scope["method"] not in ("GET", "HEAD"):
+                raise
+            return await super().get_response("index.html", scope)
+
+
+# backend/static/ (the old hand-written frontend) is kept in the repo purely for reference --
+# not served, not deleted. The app serves the React SPA (backend/static_frontend/, built by the
+# Dockerfile's frontend-build stage) exclusively.
+app.mount("/", SPAStaticFiles(directory=os.path.join(os.path.dirname(__file__), "static_frontend"),
+                               html=True), name="static")
