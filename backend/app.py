@@ -22,6 +22,7 @@ Runs when: no computed data exists yet (cold start, blocks until done);
 the user clicks Refresh; the background loop wakes (every CHECK_INTERVAL).
 A plain page load with existing computed data just reads it -- no cycle.
 """
+import json
 import os
 import sqlite3
 import threading
@@ -57,6 +58,7 @@ import backend.db as db
 import backend.entry_estimate as entry_estimate
 import backend.options_pricing as options_pricing
 import backend.pdf_export as pdf_export
+import backend.push as push
 import backend.support_resistance as support_resistance
 import backend.prebreak as prebreak
 import backend.score as score
@@ -450,6 +452,12 @@ def _fire_threshold_alerts(position: dict, kind: str, pct: float, last_alert_pct
         db.update_position_alert_pct(position["id"], tp_pct=highest)
     else:
         db.update_position_alert_pct(position["id"], stop_pct=highest)
+
+    # Same message as the in-app notification, plus position_id so the service worker's
+    # notificationclick handler can deep-link to the right trade -- see
+    # docs/superpowers/specs/2026-07-31-pwa-push-design.md.
+    payload = json.dumps({"title": f"{position['ticker']} — {side}", "body": message, "position_id": position["id"]})
+    push.send_push_to_all(payload, now_iso)
 
 
 def refresh_and_compute(force: bool = False) -> None:
@@ -1089,6 +1097,35 @@ def notifications(unread: int = 0):
 @app.post("/api/notifications/{notification_id}/read")
 def read_notification(notification_id: int):
     db.mark_notification_read(notification_id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return {"ok": True}
+
+
+@app.get("/api/push/vapid-public-key")
+def push_vapid_public_key():
+    key = os.environ.get("VAPID_PUBLIC_KEY")
+    if not key:
+        raise HTTPException(status_code=503, detail="push notifications are not configured on this server")
+    return {"public_key": key}
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(body: dict):
+    endpoint = body.get("endpoint")
+    keys = body.get("keys") or {}
+    p256dh, auth = keys.get("p256dh"), keys.get("auth")
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="expected a PushSubscription.toJSON() body")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.upsert_push_subscription(endpoint, p256dh, auth, now_iso)
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(body: dict):
+    endpoint = body.get("endpoint")
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="expected {\"endpoint\": ...}")
+    db.delete_push_subscription(endpoint)
     return {"ok": True}
 
 

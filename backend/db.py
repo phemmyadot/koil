@@ -160,6 +160,18 @@ def _init_schema() -> None:
                 read_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read_at);
+
+            -- No user/account table exists in this single-user app, so subscriptions aren't
+            -- scoped to a user id -- every stored subscription receives every push (see
+            -- docs/superpowers/specs/2026-07-31-pwa-push-design.md).
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            );
         """)
 
 
@@ -873,3 +885,34 @@ def list_notifications(unread_only: bool = False) -> list[dict]:
 def mark_notification_read(notification_id: int, read_at: str) -> None:
     with _lock, _conn:
         _conn.execute("UPDATE notifications SET read_at = ? WHERE id = ?", (read_at, notification_id))
+
+
+# ─────────────────────────── push subscriptions ───────────────────────────
+
+def upsert_push_subscription(endpoint: str, p256dh: str, auth: str, now_iso: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO push_subscriptions (endpoint, p256dh, auth, created_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth,
+                last_seen_at = excluded.last_seen_at
+        """, (endpoint, p256dh, auth, now_iso, now_iso))
+
+
+def delete_push_subscription(endpoint: str) -> None:
+    with _lock, _conn:
+        _conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+
+
+def list_push_subscriptions() -> list[dict]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions"
+        ).fetchall()
+    cols = ["id", "endpoint", "p256dh", "auth"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def touch_push_subscription(endpoint: str, now_iso: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE push_subscriptions SET last_seen_at = ? WHERE endpoint = ?", (now_iso, endpoint))
