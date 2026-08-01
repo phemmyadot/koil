@@ -154,3 +154,26 @@
   margin: 4px 2px 0;
   flex-wrap: wrap;
 }
+
+@media (max-width: 720px) {
+  /* .opt-grid2 holds the Buy/Sell + Call/Put toggle-button pairs, not label+input fields --
+     those two full-width toggle groups genuinely don't fit side by side on a phone, so this
+     one stays collapsed to a single column (stacked). */
+  .plcalc .opt-grid2 {
+    grid-template-columns: 1fr;
+  }
+  /* .opt-fields (and the plain .form-row fields above) stay 2-up -- same fix as
+     TradeConfirmModal.css: the problem was a label AND a fixed-width input crammed
+     side-by-side into each half-width cell, not the 2-column grid itself. Stack label above
+     input within each cell instead, and size the input to the cell's own width. */
+  .plcalc .form-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+  .plcalc .form-row input[type="number"],
+  .plcalc .form-row input[type="date"],
+  .plcalc .opt-fields .form-row input {
+    width: 100%;
+  }
+}

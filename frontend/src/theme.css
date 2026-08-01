@@ -130,3 +130,24 @@ a:focus-visible,
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* <input type=date>'s calendar icon is browser-drawn, not styleable via color/currentColor --
+   the only lever Chromium/WebKit expose is inverting it. It renders black by default, which
+   reads fine on light --panel backgrounds but is barely visible (or just ugly) against the
+   dark theme's near-black panels, so this only inverts it there. Follows the same three-way
+   theme precedence as the token blocks above: OS preference, then explicit data-theme
+   overrides in both directions. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+@media (prefers-color-scheme: dark) {
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+}
+:root[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+:root[data-theme="light"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: none;
+}

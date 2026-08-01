@@ -30,6 +30,23 @@
   font: inherit;
   font-size: 13px;
 }
+
+@media (max-width: 720px) {
+  /* Stays 2-up (Date/Price, TP/Stop, Side/Type, ...) even on a phone-width modal -- the desktop
+     layout's problem wasn't the 2-column grid, it was cramming a label AND a fixed 130px input
+     side-by-side into each half-width cell. Stacking the label above its input inside each
+     cell, and letting the input fill the cell's own width instead of a fixed px, fits two
+     fields per row comfortably at any phone width. */
+  .trade-modal .form-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+  .trade-modal .form-row input,
+  .trade-modal .form-row select {
+    width: 100%;
+  }
+}
 .trade-modal .toggle-grp {
   display: flex;
   background: var(--bg);
