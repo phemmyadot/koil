@@ -30,7 +30,9 @@ export function PnlChart({ series }: { series: PnlSeries }) {
   const yOf = (v: number) => PAD.t + (1 - (v - yLo) / (yHi - yLo)) * ih;
   const pathOf = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(" ");
 
-  const yTicks = [0, 1, 2, 3, 4].map((i) => yLo + ((yHi - yLo) * i) / 4);
+  const evenTicks = [0, 1, 2, 3, 4].map((i) => yLo + ((yHi - yLo) * i) / 4);
+  const zeroEps = (yHi - yLo) * 0.01;
+  const yTicks = evenTicks.some((v) => Math.abs(v) < zeroEps) ? evenTicks : [...evenTicks, 0].sort((a, b) => a - b);
   const xTickEvery = Math.max(Math.ceil(dates.length / 7), 1);
   const zeroY = yOf(0);
 
