@@ -156,11 +156,8 @@ describe("computePnlSeries", () => {
       1: [makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", price: 5, premium: 5, units: 2, instrument: "option" })],
     };
     const result = computePnlSeries([open], marks, fills);
-    // Ported verbatim from trades.html's own (multiplier-in-avgCost, then multiplier-again)
-    // convention: replayAsOf's avgCost is cost/units where cost already has the 100x baked
-    // in (500), then dayUnrealized multiplies by multiplier again -- not a bug we should
-    // "fix" here, parity with the legacy math is the point.
-    expect(result.unrealized[0]).toBeCloseTo((8 - 500) * 2 * 100, 5);
+    // option_value (8) is per-share; entry premium (5) is also per-share -- multiplier applies once.
+    expect(result.unrealized[0]).toBeCloseTo((8 - 5) * 2 * 100, 5);
   });
 });
 

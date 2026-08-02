@@ -68,7 +68,10 @@ export function computePnlSeries(
       const mark = marks.find((m) => m.mark_date === date);
       if (!mark) continue;
       const value = mark.option_value != null ? mark.option_value : mark.close_price;
-      dayUnrealized += (value - state.avgCost) * state.units * state.multiplier;
+      // state.avgCost has the multiplier baked in (cost/units, where cost already includes it) --
+      // unwind to per-share before comparing against value, which is always per-share.
+      const avgCostPerShare = state.avgCost / state.multiplier;
+      dayUnrealized += (value - avgCostPerShare) * state.units * state.multiplier;
     }
     realized.push(dayRealized);
     unrealized.push(dayUnrealized);
