@@ -663,13 +663,24 @@ def fetch_one_ticker(body: dict):
         raise HTTPException(status_code=400, detail="ticker is required")
     data.warm_cache([ticker], force=True)
     _, payload, err, _ = _compute_one(ticker)
-    if payload is None:
+    if payload is not None:
+        now = time.time()
+        db.upsert_computed(ticker, payload, payload["date"], now, None)
+        with _compute_lock:
+            _computed[:] = [p for p in _computed if p["ticker"] != ticker] + [payload]
+        return {"ticker": ticker, "price": payload["price"], "date": payload["date"], "found": True}
+    # Strategy compute failed (e.g. too little history for VEXH/VCP/VCPO), but a ticker with too
+    # little history to score is still tradeable -- the trade form only needs a last price, not a
+    # computed payload. Fall back to raw bars so "insufficient history" never blocks Add Trade.
+    bars = data.get_bars(ticker)
+    if bars is None or bars.empty:
         raise HTTPException(status_code=422, detail=err or "no data")
-    now = time.time()
-    db.upsert_computed(ticker, payload, payload["date"], now, None)
-    with _compute_lock:
-        _computed[:] = [p for p in _computed if p["ticker"] != ticker] + [payload]
-    return {"ticker": ticker, "price": payload["price"], "date": payload["date"], "found": True}
+    return {
+        "ticker": ticker,
+        "price": round(float(bars.Close.iloc[-1]), 4),
+        "date": str(bars.index[-1].date()),
+        "found": True,
+    }
 
 
 @app.post("/api/watchlist-tickers")

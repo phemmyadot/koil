@@ -130,10 +130,12 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
         if hasattr(df.columns, "get_level_values"):
             df.columns = df.columns.get_level_values(0)
         df = df.drop(columns=["Adj Close"], errors="ignore").dropna()
-        if last_bar_date is None and len(df) < 250:
-            # Cold fetch only -- an incremental fetch of 1-2 new rows is
-            # correct and expected, not "insufficient history."
+        if df.empty:
             return ticker, None, "insufficient history"
+        # Fewer than 250 bars means strategy compute (VCP/VCPO/VEXH, all needing long lookback
+        # windows) will likely score this ticker as None -- but the bars themselves are real and
+        # still enough to trade against (last price, manual entry), so they're still stored. See
+        # docs/superpowers/specs/2026-08-01-add-trade-untracked-ticker-design.md.
         return ticker, df, None
     except YFRateLimitError:
         # Distinct from an ordinary per-ticker failure -- Yahoo is throttling
