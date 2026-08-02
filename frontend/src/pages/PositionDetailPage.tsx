@@ -7,8 +7,11 @@ import { BigChart } from "../components/organisms/BigChart";
 import { AddFillForm } from "../components/organisms/AddFillForm";
 import { EditPositionForm } from "../components/organisms/EditPositionForm";
 import { FillsTable } from "../components/organisms/FillsTable";
+import { Pagination } from "../components/organisms/TickerCardGrid";
 import { fmtMoney, fmtPct, plClass } from "../lib/format";
 import "./PositionDetailPage.css";
+
+const MARKS_PAGE_SIZE = 20;
 
 export function PositionDetailPage() {
   const { positionId } = useParams();
@@ -26,6 +29,7 @@ export function PositionDetailPage() {
 
   const [showFillForm, setShowFillForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
+  const [marksPage, setMarksPage] = useState(1);
 
   if (isError) {
     return (
@@ -52,6 +56,15 @@ export function PositionDetailPage() {
 
   const marksList = marks ?? [];
   const fillsList = fills ?? [];
+  // Newest-first, same order the table already rendered in -- paginating a long-running
+  // position's daily marks instead of dumping every row on one page.
+  const marksDesc = marksList.slice().reverse();
+  const marksPageCount = Math.max(1, Math.ceil(marksDesc.length / MARKS_PAGE_SIZE));
+  const clampedMarksPage = Math.min(Math.max(1, marksPage), marksPageCount);
+  const marksPageRows = marksDesc.slice(
+    (clampedMarksPage - 1) * MARKS_PAGE_SIZE,
+    clampedMarksPage * MARKS_PAGE_SIZE,
+  );
   const isOption = position.instrument === "option";
   const hasOptionValues = isOption && marksList.length > 0 && marksList[0].option_value != null;
   const values = marksList.map((m) => (hasOptionValues ? (m.option_value as number) : m.close_price));
@@ -157,28 +170,33 @@ export function PositionDetailPage() {
       />
 
       <h2>Daily marks</h2>
-      {marksList.length ? (
-        <table className="markstable">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Stock close</th>
-              {hasOptionValues && <th>Option value</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {marksList
-              .slice()
-              .reverse()
-              .map((m) => (
+      {marksDesc.length ? (
+        <>
+          <table className="markstable">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Stock close</th>
+                {hasOptionValues && <th>Option value</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {marksPageRows.map((m) => (
                 <tr key={m.mark_date}>
                   <td>{m.mark_date}</td>
                   <td>{fmtMoney(m.close_price)}</td>
                   {hasOptionValues && <td>{fmtMoney(m.option_value as number)}</td>}
                 </tr>
               ))}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+          <Pagination
+            page={clampedMarksPage}
+            pageCount={marksPageCount}
+            onPrev={() => setMarksPage((p) => p - 1)}
+            onNext={() => setMarksPage((p) => p + 1)}
+          />
+        </>
       ) : (
         <p className="empty">No daily marks recorded yet.</p>
       )}
