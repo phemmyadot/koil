@@ -6,7 +6,7 @@ import type { DailyMark, ExitReason, Fill } from "../api/types";
 import { StatBox } from "../components/atoms/StatBox";
 import { PositionsTable } from "../components/organisms/PositionsTable";
 import { PnlChart } from "../components/organisms/PnlChart";
-import { fmtPct } from "../lib/format";
+import { fmtMoney, fmtPct } from "../lib/format";
 import { computePnlSeries } from "../lib/pnlSeries";
 import { todayIsoDate } from "../lib/dates";
 import "./TradesPage.css";
@@ -55,6 +55,21 @@ export function TradesPage() {
   );
 
   const tickers = useMemo(() => [...new Set((positions ?? []).map((p) => p.ticker))].sort(), [positions]);
+
+  const totalUnrealized = useMemo(() => {
+    return (positions ?? [])
+      .filter((p) => p.status === "open" && p.avg_cost != null)
+      .reduce((sum, p) => {
+        const marks = marksByPosition[p.id] ?? [];
+        if (!marks.length) return sum;
+        const isOption = p.instrument === "option";
+        const hasOptionValues = isOption && marks[0].option_value != null;
+        const last = hasOptionValues ? (marks[marks.length - 1].option_value as number) : marks[marks.length - 1].close_price;
+        const avgCostPerShare = isOption ? (p.avg_cost as number) / 100 : (p.avg_cost as number);
+        const multiplier = isOption ? 100 : 1;
+        return sum + (last - avgCostPerShare) * p.units_remaining * multiplier;
+      }, 0);
+  }, [positions, marksByPosition]);
 
   const filtered = (positions ?? []).filter(
     (p) => (!statusFilter || p.status === statusFilter) && (!tickerFilter || p.ticker === tickerFilter),
@@ -116,6 +131,12 @@ export function TradesPage() {
           label="Avg return"
           value={summary?.avg_return_pct != null ? fmtPct(summary.avg_return_pct) : "—"}
           tone={summary?.avg_return_pct ?? undefined}
+        />
+        <StatBox label="Total unrealized" value={fmtMoney(totalUnrealized)} tone={totalUnrealized} />
+        <StatBox
+          label="Total realized"
+          value={summary?.total_realized_pnl != null ? fmtMoney(summary.total_realized_pnl) : "—"}
+          tone={summary?.total_realized_pnl ?? undefined}
         />
       </div>
 

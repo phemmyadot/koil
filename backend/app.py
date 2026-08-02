@@ -1027,6 +1027,7 @@ def positions_summary():
         "win_count": len(wins),
         "win_rate_pct": round(len(wins) / len(returns) * 100, 1) if returns else None,
         "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else None,
+        "total_realized_pnl": round(sum(p["realized_pnl"] for p in closed), 2),
     }
 
 

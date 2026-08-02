@@ -141,6 +141,7 @@ export interface PositionsSummary {
   win_count: number;
   win_rate_pct: number | null;
   avg_return_pct: number | null;
+  total_realized_pnl: number;
 }
 
 export interface CreatePositionBody {
