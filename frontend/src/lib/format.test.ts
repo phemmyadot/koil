@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtMoney, fmtPct, plClass } from "./format";
+import { fmtMoney, fmtPct, fmtUnits, plClass } from "./format";
 
 describe("fmtMoney", () => {
   it("formats positive values with a dollar sign", () => {
@@ -25,6 +25,24 @@ describe("fmtPct", () => {
   });
   it("prefixes exactly zero with + (>=0 branch)", () => {
     expect(fmtPct(0)).toBe("+0.0%");
+  });
+});
+
+describe("fmtUnits", () => {
+  it("trims trailing zeros for a whole number", () => {
+    expect(fmtUnits(1)).toBe("1");
+  });
+  it("trims trailing zeros for a simple fraction", () => {
+    expect(fmtUnits(2.5)).toBe("2.5");
+  });
+  it("shows up to 6 decimal places for a fractional share", () => {
+    expect(fmtUnits(0.123456)).toBe("0.123456");
+  });
+  it("rounds beyond 6 decimal places", () => {
+    expect(fmtUnits(0.1234567)).toBe("0.123457");
+  });
+  it("formats zero as 0, not an empty string", () => {
+    expect(fmtUnits(0)).toBe("0");
   });
 });
 

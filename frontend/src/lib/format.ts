@@ -9,6 +9,10 @@ export function fmtPct(v: number): string {
   return (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
 }
 
+export function fmtUnits(v: number): string {
+  return v.toFixed(6).replace(/\.?0+$/, "");
+}
+
 // Resolves a real inconsistency found across the old pages: index.html treated an exact-zero
 // P&L as neutral (no color); trades.html/position.html treated it as positive (green).
 // Decided: zero is neutral -- a flat position hasn't won or lost anything, so coloring it green

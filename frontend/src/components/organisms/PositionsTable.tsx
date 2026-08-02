@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { DailyMark, ExitReason, Position } from "../../api/types";
-import { fmtMoney, fmtPct, plClass } from "../../lib/format";
+import { fmtMoney, fmtPct, fmtUnits, plClass } from "../../lib/format";
 import { sparklinePath } from "../../lib/sparkline";
 import "./PositionsTable.css";
 
@@ -80,7 +80,7 @@ function PositionRow({
           <span className={`status-tag ${p.status}`}>{p.status}</span>
         </td>
         <td>{isOption ? "Option" : "Spot"}</td>
-        <td>{p.units_remaining}</td>
+        <td>{fmtUnits(p.units_remaining)}</td>
         <td>{p.avg_cost != null ? fmtMoney(p.avg_cost) : "—"}</td>
         <td>{fmtMoney(p.tp_price)}</td>
         <td>{fmtMoney(p.stop_price)}</td>

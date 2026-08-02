@@ -223,13 +223,19 @@ def compute_all(force: bool = False) -> None:
             prior_source_fetch = dict(_computed_source_fetch)
             prior_errors = dict(_computed_errors)
 
+        always_include = set(db.get_watchlist_tickers()) | {p["ticker"] for p in db.list_positions("open")}
+
         filtered_tickers = []
         for tk in _active_tickers():
             bars = data.get_bars(tk)
-            try:
-                passes = bars is not None and not bars.empty and build_universe.passes_technical_filters(bars)
-            except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
-                passes = False
+            has_data = bars is not None and not bars.empty
+            if tk in always_include:
+                passes = has_data
+            else:
+                try:
+                    passes = has_data and build_universe.passes_technical_filters(bars)
+                except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
+                    passes = False
             if passes:
                 filtered_tickers.append(tk)
 

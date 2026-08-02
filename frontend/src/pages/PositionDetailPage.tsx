@@ -8,7 +8,7 @@ import { AddFillForm } from "../components/organisms/AddFillForm";
 import { EditPositionForm } from "../components/organisms/EditPositionForm";
 import { FillsTable } from "../components/organisms/FillsTable";
 import { Pagination } from "../components/organisms/TickerCardGrid";
-import { fmtMoney, fmtPct, plClass } from "../lib/format";
+import { fmtMoney, fmtPct, fmtUnits, plClass } from "../lib/format";
 import "./PositionDetailPage.css";
 
 const MARKS_PAGE_SIZE = 20;
@@ -101,7 +101,7 @@ export function PositionDetailPage() {
       </header>
 
       <div className="info-grid">
-        <StatBox label="Units remaining" value={position.units_remaining} />
+        <StatBox label="Units remaining" value={fmtUnits(position.units_remaining)} />
         <StatBox label="Avg cost" value={position.avg_cost != null ? fmtMoney(position.avg_cost) : "—"} />
         <StatBox label="Take Profit" value={fmtMoney(position.tp_price)} />
         <StatBox label="Stop" value={fmtMoney(position.stop_price)} />

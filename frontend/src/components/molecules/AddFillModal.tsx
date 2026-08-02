@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Modal, ModalRow } from "../atoms/Modal";
 import { todayIsoDate } from "../../lib/dates";
 import { addFill } from "../../api/positions";
+import { fmtUnits } from "../../lib/format";
 import type { ExitReason, FillKind, Position, StrategyKey } from "../../api/types";
 import "./TradeConfirmModal.css";
 
@@ -68,7 +69,7 @@ export function AddFillModal({ position, stratKey, signalDate, currentPrice, onC
     <Modal title={`Add to Position — ${position.ticker}`} onClose={onClose} width={480}>
       <div className="trade-modal">
         <ModalRow label="Current avg cost" value={position.avg_cost != null ? `$${position.avg_cost.toFixed(2)}` : "—"} />
-        <ModalRow label="Units remaining" value={position.units_remaining} />
+        <ModalRow label="Units remaining" value={fmtUnits(position.units_remaining)} />
         <div className="modal-sep" />
         <div className="toggle-grp">
           <button type="button" className={`entry${kind === "entry" ? " active" : ""}`} onClick={() => setKind("entry")}>
