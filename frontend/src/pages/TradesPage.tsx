@@ -56,19 +56,23 @@ export function TradesPage() {
 
   const tickers = useMemo(() => [...new Set((positions ?? []).map((p) => p.ticker))].sort(), [positions]);
 
-  const totalUnrealized = useMemo(() => {
-    return (positions ?? [])
-      .filter((p) => p.status === "open" && p.avg_cost != null)
-      .reduce((sum, p) => {
-        const marks = marksByPosition[p.id] ?? [];
-        if (!marks.length) return sum;
-        const isOption = p.instrument === "option";
-        const hasOptionValues = isOption && marks[0].option_value != null;
-        const last = hasOptionValues ? (marks[marks.length - 1].option_value as number) : marks[marks.length - 1].close_price;
-        const avgCostPerShare = isOption ? (p.avg_cost as number) / 100 : (p.avg_cost as number);
-        const multiplier = isOption ? 100 : 1;
-        return sum + (last - avgCostPerShare) * p.units_remaining * multiplier;
-      }, 0);
+  // avg_cost has the 100x multiplier baked in for options; marks/option_value are per-share.
+  const { totalCost, totalUnrealized, totalValue } = useMemo(() => {
+    let cost = 0;
+    let unrealized = 0;
+    for (const p of positions ?? []) {
+      if (p.status !== "open" || p.avg_cost == null) continue;
+      const marks = marksByPosition[p.id] ?? [];
+      if (!marks.length) continue;
+      const isOption = p.instrument === "option";
+      const hasOptionValues = isOption && marks[0].option_value != null;
+      const last = hasOptionValues ? (marks[marks.length - 1].option_value as number) : marks[marks.length - 1].close_price;
+      const avgCostPerShare = isOption ? p.avg_cost / 100 : p.avg_cost;
+      const multiplier = isOption ? 100 : 1;
+      cost += avgCostPerShare * p.units_remaining * multiplier;
+      unrealized += (last - avgCostPerShare) * p.units_remaining * multiplier;
+    }
+    return { totalCost: cost, totalUnrealized: unrealized, totalValue: cost + unrealized };
   }, [positions, marksByPosition]);
 
   const filtered = (positions ?? []).filter(
@@ -138,6 +142,8 @@ export function TradesPage() {
           value={summary?.total_realized_pnl != null ? fmtMoney(summary.total_realized_pnl) : "—"}
           tone={summary?.total_realized_pnl ?? undefined}
         />
+        <StatBox label="Portfolio cost" value={fmtMoney(totalCost)} />
+        <StatBox label="Portfolio value" value={fmtMoney(totalValue)} />
       </div>
 
       <h2>Daily P&amp;L</h2>

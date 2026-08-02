@@ -28,6 +28,7 @@ function FillEditRow({ fill, onSave, onCancel }: { fill: Fill; onSave: FillsTabl
       units: parseFloat(units),
       ...(fill.kind === "exit" ? { exit_reason: exitReason } : {}),
     });
+    onCancel();
   }
 
   return (
