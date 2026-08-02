@@ -143,27 +143,29 @@ function PositionRow({
 export function PositionsTable({ positions, marksByPosition, onExit, onCancel }: PositionsTableProps) {
   if (!positions.length) return <p className="empty">No positions match this filter.</p>;
   return (
-    <table className="postable">
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          <th>Status</th>
-          <th>Instrument</th>
-          <th>Units</th>
-          <th>Avg Cost</th>
-          <th>TP</th>
-          <th>Stop</th>
-          <th>Last / Unrealized %</th>
-          <th>Realized $</th>
-          <th>Chart</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {positions.map((p) => (
-          <PositionRow key={p.id} p={p} marks={marksByPosition[p.id] ?? []} onExit={onExit} onCancel={onCancel} />
-        ))}
-      </tbody>
-    </table>
+    <div className="table-scroll">
+      <table className="postable">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Status</th>
+            <th>Instrument</th>
+            <th>Units</th>
+            <th>Avg Cost</th>
+            <th>TP</th>
+            <th>Stop</th>
+            <th>Last / Unrealized %</th>
+            <th>Realized $</th>
+            <th>Chart</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => (
+            <PositionRow key={p.id} p={p} marks={marksByPosition[p.id] ?? []} onExit={onExit} onCancel={onCancel} />
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

@@ -137,6 +137,9 @@
   border-collapse: collapse;
   font-size: 12.5px;
 }
+.fillstable {
+  min-width: 560px;
+}
 .fillstable th,
 .fillstable td,
 .markstable th,

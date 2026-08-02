@@ -172,24 +172,26 @@ export function PositionDetailPage() {
       <h2>Daily marks</h2>
       {marksDesc.length ? (
         <>
-          <table className="markstable">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Stock close</th>
-                {hasOptionValues && <th>Option value</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {marksPageRows.map((m) => (
-                <tr key={m.mark_date}>
-                  <td>{m.mark_date}</td>
-                  <td>{fmtMoney(m.close_price)}</td>
-                  {hasOptionValues && <td>{fmtMoney(m.option_value as number)}</td>}
+          <div className="table-scroll">
+            <table className="markstable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Stock close</th>
+                  {hasOptionValues && <th>Option value</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {marksPageRows.map((m) => (
+                  <tr key={m.mark_date}>
+                    <td>{m.mark_date}</td>
+                    <td>{fmtMoney(m.close_price)}</td>
+                    {hasOptionValues && <td>{fmtMoney(m.option_value as number)}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <Pagination
             page={clampedMarksPage}
             pageCount={marksPageCount}

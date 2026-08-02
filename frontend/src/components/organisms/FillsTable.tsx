@@ -80,45 +80,47 @@ export function FillsTable({ fills, onEdit, onDelete }: FillsTableProps) {
   if (!fills.length) return <p className="empty">No fills recorded.</p>;
 
   return (
-    <table className="fillstable">
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Kind</th>
-          <th>Strategy</th>
-          <th>Price</th>
-          <th>Units</th>
-          <th>Exit Reason</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {fills.map((f) => (
-          <>
-            <tr key={f.id}>
-              <td>{f.fill_date}</td>
-              <td>
-                <span className={`kind-tag ${f.kind}`}>{f.kind}</span>
-              </td>
-              <td>
-                <span className="strat-tag">{stratLabel(f.strategy_key)}</span>
-              </td>
-              <td>{fmtMoney(f.instrument === "option" ? (f.premium ?? 0) : (f.price ?? 0))}</td>
-              <td>{fmtUnits(f.units)}</td>
-              <td>{f.exit_reason ?? "—"}</td>
-              <td className="actions-cell">
-                <button type="button" className="small-btn tiny" onClick={() => setEditingId(editingId === f.id ? null : f.id)}>
-                  Edit
-                </button>{" "}
-                <button type="button" className="small-btn tiny danger" onClick={() => onDelete(f.id)}>
-                  Delete
-                </button>
-              </td>
-            </tr>
-            {editingId === f.id && <FillEditRow key={`edit-${f.id}`} fill={f} onSave={onEdit} onCancel={() => setEditingId(null)} />}
-          </>
-        ))}
-      </tbody>
-    </table>
+    <div className="table-scroll">
+      <table className="fillstable">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Kind</th>
+            <th>Strategy</th>
+            <th>Price</th>
+            <th>Units</th>
+            <th>Exit Reason</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {fills.map((f) => (
+            <>
+              <tr key={f.id}>
+                <td>{f.fill_date}</td>
+                <td>
+                  <span className={`kind-tag ${f.kind}`}>{f.kind}</span>
+                </td>
+                <td>
+                  <span className="strat-tag">{stratLabel(f.strategy_key)}</span>
+                </td>
+                <td>{fmtMoney(f.instrument === "option" ? (f.premium ?? 0) : (f.price ?? 0))}</td>
+                <td>{fmtUnits(f.units)}</td>
+                <td>{f.exit_reason ?? "—"}</td>
+                <td className="actions-cell">
+                  <button type="button" className="small-btn tiny" onClick={() => setEditingId(editingId === f.id ? null : f.id)}>
+                    Edit
+                  </button>{" "}
+                  <button type="button" className="small-btn tiny danger" onClick={() => onDelete(f.id)}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+              {editingId === f.id && <FillEditRow key={`edit-${f.id}`} fill={f} onSave={onEdit} onCancel={() => setEditingId(null)} />}
+            </>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

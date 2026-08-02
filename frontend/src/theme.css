@@ -192,3 +192,20 @@ select {
 input[type="number"] {
   -moz-appearance: textfield;
 }
+
+/* Shared +/- P&L color convention (plClass() in lib/format.ts) -- was only ever styled scoped
+   under .statbox-val/.plcalc .rval, so tables/pages applying the bare class (PositionsTable,
+   PositionDetailPage) rendered with no color at all. */
+.pos {
+  color: var(--green);
+}
+.neg {
+  color: var(--red);
+}
+
+/* Wide tables (PositionsTable, FillsTable, daily marks) must scroll inside their own container
+   on mobile rather than widening the page body. */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
