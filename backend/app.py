@@ -395,7 +395,14 @@ def _update_trade_marks_and_alerts() -> None:
     for position in open_positions:
         current = price_by_ticker.get(position["ticker"])
         if current is None:
-            continue
+            # Ticker never made it into _computed (e.g. too little history for any strategy to
+            # score it -- see /api/tickers/fetch-one) -- a traded ticker still needs its daily
+            # mark/TP-stop check every cycle regardless of compute status, so fall back to its
+            # raw bars rather than skipping it forever.
+            bars = data.get_bars(position["ticker"])
+            if bars is None or bars.empty:
+                continue
+            current = (round(float(bars.Close.iloc[-1]), 4), str(bars.index[-1].date()))
         current_price, bar_date = current
 
         db.upsert_trade_daily_mark(position["id"], bar_date, current_price, now_iso)
@@ -909,10 +916,15 @@ def _seed_todays_mark(position_id: int, ticker: str) -> None:
     instead of an empty chart until the next cycle."""
     with _compute_lock:
         payload = next((p for p in _computed if p["ticker"] == ticker), None)
-    if payload is None:
+    if payload is not None:
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        db.upsert_trade_daily_mark(position_id, payload["date"], payload["price"], now_iso)
+        return
+    bars = data.get_bars(ticker)
+    if bars is None or bars.empty:
         return
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db.upsert_trade_daily_mark(position_id, payload["date"], payload["price"], now_iso)
+    db.upsert_trade_daily_mark(position_id, str(bars.index[-1].date()), float(bars.Close.iloc[-1]), now_iso)
 
 
 def _position_with_state(position: dict) -> dict:
