@@ -4,6 +4,12 @@
   gap: 8px 12px;
   margin-bottom: 8px;
 }
+/* Options drop the Entry Price field, leaving Entry Date as an odd cell that would otherwise
+   pair with Take Profit and strand Stop alone in the row below with an empty gap next to it --
+   spanning both columns puts Entry Date on its own row so Take Profit/Stop form a clean pair. */
+.trade-modal .form-row-full {
+  grid-column: 1 / -1;
+}
 .trade-modal .form-row {
   display: flex;
   align-items: center;

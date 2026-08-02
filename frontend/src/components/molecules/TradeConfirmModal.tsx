@@ -150,7 +150,7 @@ export function TradeConfirmModal({
           </button>
         </div>
         <div className="opt-fields">
-          <div className="form-row">
+          <div className={`form-row${instrument === "option" ? " form-row-full" : ""}`}>
             <label>Entry Date</label>
             <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} />
           </div>
