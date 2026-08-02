@@ -372,9 +372,12 @@ def _update_trade_marks_and_alerts() -> None:
     path -- see refresh_and_compute()). For every open position: upsert today's daily mark
     from the ticker's already-computed price/date (no new Yahoo call), auto-close any option
     fills that have hit expiry, then check progress toward TP/stop and fire an in-app
-    notification the first time each threshold band is crossed. Alerting is always based on
-    the underlying stock price, never a modeled option price, even for option positions -- see
-    docs/superpowers/specs/2026-07-31-trade-tracking-design.md."""
+    notification the first time each threshold band is crossed. TP/stop are always stock-price
+    levels the user set, for both spot and option positions -- but progress toward them for an
+    option position is measured in the option's own price terms (avg premium vs. the option's
+    modeled value at the tp/stop stock price, decayed to today), not the raw stock price, since
+    avg_cost for an option position is premium, not a stock price. See
+    docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md."""
     open_positions = db.list_positions("open")
     if not open_positions:
         return
@@ -411,12 +414,18 @@ def _update_trade_marks_and_alerts() -> None:
             if expired_lot is None:
                 break
             lot_fill = expired_lot["fill"]
+            # Exit premium at expiry is intrinsic value (option_price with T<=0 returns exactly
+            # that) -- an expired option is worth its intrinsic value, nothing else, matching
+            # option_price's own expiry-day behavior used everywhere else in this file.
+            expiry_premium = options_pricing.option_price(
+                lot_fill["opt_type"], current_price, lot_fill["strike"], 0.0, lot_fill["iv_at_entry"] or 0.0,
+            )
             db.insert_fill({
                 "position_id": position["id"], "strategy_key": lot_fill["strategy_key"],
                 "signal_date": lot_fill["signal_date"], "kind": "exit", "fill_date": bar_date,
-                "price": current_price, "units": expired_lot["units_remaining"], "instrument": "option",
+                "price": None, "units": expired_lot["units_remaining"], "instrument": "option",
                 "exit_reason": "expired", "opt_side": lot_fill["opt_side"], "opt_type": lot_fill["opt_type"],
-                "strike": lot_fill["strike"], "premium": lot_fill["premium"],
+                "strike": lot_fill["strike"], "premium": round(expiry_premium, 4),
                 "expiry_date": lot_fill["expiry_date"], "iv_at_entry": lot_fill["iv_at_entry"],
                 "notes": None, "created_at": now_iso,
             })
@@ -430,11 +439,37 @@ def _update_trade_marks_and_alerts() -> None:
 
         avg_cost = state["avg_cost"]
         tp, stop = position["tp_price"], position["stop_price"]
-        # Sign-aware: a short/put-style position has tp below avg_cost and stop above -- these
-        # denominators are negative in that case, keeping pct_to_* positive as price moves
-        # favorably either direction.
-        pct_to_tp = (current_price - avg_cost) / (tp - avg_cost) * 100 if tp != avg_cost else 0
-        pct_to_stop = (avg_cost - current_price) / (avg_cost - stop) * 100 if stop != avg_cost else 0
+        # TP/stop are ALWAYS stock-price levels the user set, for both spot and option
+        # positions -- same familiar input either way, see
+        # docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md. For an option
+        # position avg_cost is average premium, not a stock price, so comparing it directly
+        # against a stock-price tp/stop (as this used to) mixed units and produced a meaningless
+        # pct -- fixed by translating tp/stop into "what would the option be worth today if the
+        # stock were at that level" (decay from entry to today already applied, since T is
+        # measured as of today) and comparing THAT against avg_cost instead.
+        if state["instrument"] == "option":
+            today = datetime.now(timezone.utc).date()
+            tp_value = _blended_option_value(state["open_lots"], tp, today)
+            stop_value = _blended_option_value(state["open_lots"], stop, today)
+            compare_value = _blended_option_value(state["open_lots"], current_price, today)
+            if tp_value is None or stop_value is None or compare_value is None:
+                continue  # no priced lots (missing iv_at_entry) -- can't derive an option-price target, skip alerting this cycle
+            # _blended_option_value is per-share; avg_cost from replay_fills already has the
+            # 100x contract multiplier baked in (see replay_fills's own docstring) -- scale up
+            # to the same units before comparing, or every option position looks artificially
+            # close to both tp and stop simultaneously.
+            multiplier = state["multiplier"]
+            tp_value *= multiplier
+            stop_value *= multiplier
+            compare_value *= multiplier
+            pct_to_tp = (compare_value - avg_cost) / (tp_value - avg_cost) * 100 if tp_value != avg_cost else 0
+            pct_to_stop = (avg_cost - compare_value) / (avg_cost - stop_value) * 100 if stop_value != avg_cost else 0
+        else:
+            # Sign-aware: a short/put-style position has tp below avg_cost and stop above --
+            # these denominators are negative in that case, keeping pct_to_* positive as price
+            # moves favorably either direction.
+            pct_to_tp = (current_price - avg_cost) / (tp - avg_cost) * 100 if tp != avg_cost else 0
+            pct_to_stop = (avg_cost - current_price) / (avg_cost - stop) * 100 if stop != avg_cost else 0
 
         _fire_threshold_alerts(position, "tp_progress", pct_to_tp, position["last_alert_tp_pct"])
         _fire_threshold_alerts(position, "stop_progress", pct_to_stop, position["last_alert_stop_pct"])
@@ -609,6 +644,28 @@ def tickers(refresh: int = 0):
     }
 
 
+@app.post("/api/tickers/fetch-one")
+def fetch_one_ticker(body: dict):
+    """One-off fetch+compute for a single ticker outside the screened universe, so the trade
+    form has real price data to prefill from -- see
+    docs/superpowers/specs/2026-08-01-add-trade-untracked-ticker-design.md. Does NOT add the
+    ticker to candidate_tickers or run passes_technical_filters -- this is explicitly a user
+    override, not a screener pass. Blocking/synchronous since it's a single-ticker,
+    user-initiated action, not the bulk background cycle."""
+    ticker = (body.get("ticker") or "").strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    data.warm_cache([ticker], force=True)
+    _, payload, err, _ = _compute_one(ticker)
+    if payload is None:
+        raise HTTPException(status_code=422, detail=err or "no data")
+    now = time.time()
+    db.upsert_computed(ticker, payload, payload["date"], now, None)
+    with _compute_lock:
+        _computed[:] = [p for p in _computed if p["ticker"] != ticker] + [payload]
+    return {"ticker": ticker, "price": payload["price"], "date": payload["date"], "found": True}
+
+
 @app.post("/api/watchlist-tickers")
 def sync_watchlist_tickers(tickers: list[str]):
     """Client reports the full set of tickers currently on any saved watchlist (watchlists
@@ -724,36 +781,53 @@ def _fill_exit_value(fill: dict) -> float:
     return fill["premium"] if fill["instrument"] == "option" else fill["price"]
 
 
+def _blended_option_value(open_lots: list[dict], spot_price: float, as_of_date) -> float | None:
+    """Black-Scholes value of a position's still-open option lots at a given hypothetical (or
+    real) underlying spot price, as of as_of_date (a date object) -- blended across lots weighted
+    by each one's own remaining units, strike, and IV, since a position can hold fills from
+    different entries with different strikes/IVs. Each lot's own risk-free rate is looked up from
+    its own days-to-expiry as of as_of_date (see options_pricing.risk_free_rate_for), not a flat
+    constant. Returns None if no lot has iv_at_entry (can't be priced)."""
+    priced_lots = [lot for lot in open_lots if lot["fill"].get("iv_at_entry") is not None]
+    if not priced_lots:
+        return None
+    total_units = sum(lot["units_remaining"] for lot in priced_lots)
+    blended_value = 0.0
+    for lot in priced_lots:
+        f = lot["fill"]
+        expiry = datetime.strptime(f["expiry_date"], "%Y-%m-%d").date()
+        days_to_expiry = max((expiry - as_of_date).days, 0)
+        T = days_to_expiry / 365
+        r = options_pricing.risk_free_rate_for(days_to_expiry)
+        value = options_pricing.option_price(f["opt_type"], spot_price, f["strike"], T, f["iv_at_entry"], r)
+        blended_value += value * (lot["units_remaining"] / total_units)
+    return blended_value
+
+
 def _with_option_values(position: dict, fills: list[dict], marks: list[dict]) -> list[dict]:
     """Annotates each daily stock-price mark with the position's modeled option value that day
-    (Black-Scholes, blended across whichever option entry fills are still open as of that mark
-    date -- weighted by each fill's own remaining units, strike, and IV, since a position can
-    hold fills from different entries with different strikes/IVs). Spot positions, or option
-    positions with no fills carrying iv_at_entry, pass marks through unchanged."""
+    (see _blended_option_value). Spot positions, or option positions with no fills carrying
+    iv_at_entry, pass marks through unchanged."""
     if not fills or fills[0]["instrument"] != "option":
         return marks
     out = []
     for m in marks:
         state = replay_fills(fills, as_of_date=m["mark_date"])
-        priced_lots = [lot for lot in state["open_lots"] if lot["fill"].get("iv_at_entry") is not None]
-        if not priced_lots:
+        mark_date = datetime.strptime(m["mark_date"], "%Y-%m-%d").date()
+        blended_value = _blended_option_value(state["open_lots"], m["close_price"], mark_date)
+        if blended_value is None:
             out.append(m)
             continue
-        mark_date = datetime.strptime(m["mark_date"], "%Y-%m-%d").date()
-        total_units = sum(lot["units_remaining"] for lot in priced_lots)
-        blended_value = 0.0
-        for lot in priced_lots:
-            f = lot["fill"]
-            expiry = datetime.strptime(f["expiry_date"], "%Y-%m-%d").date()
-            T = max((expiry - mark_date).days, 0) / 365
-            value = options_pricing.option_price(f["opt_type"], m["close_price"], f["strike"], T, f["iv_at_entry"])
-            blended_value += value * (lot["units_remaining"] / total_units)
         out.append({**m, "option_value": round(blended_value, 4)})
     return out
 
 
 _FILL_SPOT_REQUIRED = ["price", "units", "strategy_key", "signal_date", "fill_date"]
-_FILL_OPTION_REQUIRED = _FILL_SPOT_REQUIRED + ["opt_side", "opt_type", "strike", "premium", "expiry_date"]
+# Options never need a stock "entry/exit price" -- premium (the option's own price at this
+# fill, entry or exit) is what actually drives P&L, see
+# docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md. price stays spot-only.
+_FILL_OPTION_REQUIRED = ["units", "strategy_key", "signal_date", "fill_date",
+                         "opt_side", "opt_type", "strike", "premium", "expiry_date"]
 _FILL_OPTION_ONLY_FIELDS = ["opt_side", "opt_type", "strike", "premium", "expiry_date", "iv_at_entry"]
 
 
@@ -782,7 +856,7 @@ def _build_fill(position_id: int, body: dict, kind: str, now_iso: str) -> dict:
         "signal_date": body["signal_date"],
         "kind": kind,
         "fill_date": body["fill_date"],
-        "price": body["price"],
+        "price": body.get("price"),  # spot-only; options carry their price in premium instead
         "units": body["units"],
         "instrument": instrument,
         "exit_reason": body.get("exit_reason") if kind == "exit" else None,

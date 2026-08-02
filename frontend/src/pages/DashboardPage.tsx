@@ -10,6 +10,7 @@ import { Pagination, TickerCardGrid } from "../components/organisms/TickerCardGr
 import { StrategyDetailModal } from "../components/molecules/StrategyDetailModal";
 import { TradeConfirmModal } from "../components/molecules/TradeConfirmModal";
 import { AddFillModal } from "../components/molecules/AddFillModal";
+import { AddTradeTickerModal } from "../components/molecules/AddTradeTickerModal";
 import { WatchlistPickerModal } from "../components/molecules/WatchlistPickerModal";
 import { ExportPickerModal } from "../components/molecules/ExportPickerModal";
 import { todayIsoDate } from "../lib/dates";
@@ -26,13 +27,20 @@ import "./DashboardPage.css";
 
 const PAGE_SIZE = 9;
 
-type ModalState = { kind: "strategy"; ticker: string; stratKey: StrategyKey } | { kind: "watchlistPicker" } | { kind: "export" } | null;
+type ModalState =
+  | { kind: "strategy"; ticker: string; stratKey: StrategyKey }
+  | { kind: "watchlistPicker" }
+  | { kind: "export" }
+  | { kind: "addTradeTicker" }
+  | null;
 
 // Trade/AddFill are looked up async (need the ticker's open-position status), so they get
 // their own bit of state rather than folding into ModalState -- see openTradeFlow().
 interface TradeFlowState {
   ticker: string;
-  stratKey: StrategyKey;
+  // "manual" -- added via "+ Add Trade" for a ticker with no strategy signal behind it, see
+  // docs/superpowers/specs/2026-08-01-add-trade-untracked-ticker-design.md.
+  stratKey: StrategyKey | "manual";
   signalDate: string;
   currentPrice: number;
 }
@@ -164,7 +172,10 @@ export function DashboardPage() {
   }
 
   const tradeRow: TickerPayload | undefined = tradeFlow ? data?.tickers.find((t) => t.ticker === tradeFlow.ticker) : undefined;
-  const tradeStrategy = tradeFlow && tradeRow ? tradeRow[tradeFlow.stratKey] : null;
+  // "manual" isn't a key on TickerPayload -- a manual trade has no strategy signal to look up,
+  // so tradeStrategy is only ever derived for the 3 real strategy keys.
+  const tradeStrategy =
+    tradeFlow && tradeRow && tradeFlow.stratKey !== "manual" ? tradeRow[tradeFlow.stratKey] : null;
 
   return (
     <div>
@@ -172,6 +183,9 @@ export function DashboardPage() {
         <h1>Exhaustion Dashboard</h1>
         <span className="dashboard-meta">{metaText}</span>
         <div className="dashboard-header-actions">
+          <button type="button" onClick={() => setModal({ kind: "addTradeTicker" })}>
+            + Add Trade
+          </button>
           {selected.size === 0 ? (
             <button type="button" onClick={() => setSelected(new Set(pageRows.map((r) => r.ticker)))}>
               Select all
@@ -254,8 +268,27 @@ export function DashboardPage() {
 
       {modal?.kind === "export" && <ExportPickerModal count={selected.size} onClose={() => setModal(null)} onPick={runExport} />}
 
+      {modal?.kind === "addTradeTicker" && (
+        <AddTradeTickerModal
+          onClose={() => setModal(null)}
+          onExistingPosition={(position, currentPrice) => {
+            setModal(null);
+            setExistingPosition(position);
+            setTradeFlow({ ticker: position.ticker, stratKey: "manual", signalDate: todayIsoDate(), currentPrice });
+          }}
+          onNewTrade={(response) => {
+            setModal(null);
+            setExistingPosition(null);
+            setTradeFlow({ ticker: response.ticker, stratKey: "manual", signalDate: todayIsoDate(), currentPrice: response.price });
+          }}
+        />
+      )}
+
       {tradeFlow &&
-        tradeRow &&
+        // A manual-flow ticker isn't necessarily in data.tickers at all (that's the whole
+        // point -- it's outside the screened universe), so tradeRow is only required as a
+        // gate for the real-strategy flow, which needs it to derive tradeStrategy above.
+        (tradeFlow.stratKey === "manual" || tradeRow) &&
         (existingPosition ? (
           <AddFillModal
             position={existingPosition}

@@ -8,7 +8,12 @@ import "./TradeConfirmModal.css";
 
 export interface TradeConfirmModalProps {
   ticker: string;
-  stratKey: StrategyKey;
+  // "manual" -- a trade added via "+ Add Trade" for a ticker with no strategy signal behind it
+  // (see docs/superpowers/specs/2026-08-01-add-trade-untracked-ticker-design.md) -- is NOT part
+  // of StrategyKey itself (that stays the 3-value screener-signal union, used elsewhere to index
+  // TickerPayload's per-strategy fields, which "manual" was never a member of), just accepted
+  // here as an additional valid value for this one prop.
+  stratKey: StrategyKey | "manual";
   signalDate: string;
   currentPrice: number;
   openPosition: OpenPosition | null;
@@ -50,8 +55,12 @@ export function TradeConfirmModal({
 
   useEffect(() => {
     if (!showEstimate) return;
+    // showEstimate is only true when op (an existing open_position from a real strategy
+    // signal) is present -- the manual flow (stratKey === "manual") never has one, so this
+    // narrowing is safe: stratKey is a real StrategyKey whenever this code actually runs.
+    const realStratKey = stratKey as StrategyKey;
     let cancelled = false;
-    estimateEntry(ticker, stratKey)
+    estimateEntry(ticker, realStratKey)
       .then((est) => {
         if (cancelled) return;
         setEstimate(est);
@@ -73,11 +82,13 @@ export function TradeConfirmModal({
       signal_date: signalDate,
       instrument,
       fill_date: entryDate,
-      price: parseFloat(entryPrice),
       tp_price: parseFloat(tpPrice),
       stop_price: parseFloat(stopPrice),
       units:
         instrument === "option" ? Math.max(1, Math.round(parseFloat(contracts) || 1)) : parseFloat(units),
+      // Options never need a stock entry price -- premium is what drives P&L, see
+      // docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md. price stays
+      // spot-only.
       ...(instrument === "option"
         ? {
             opt_side: optSide,
@@ -87,7 +98,7 @@ export function TradeConfirmModal({
             expiry_date: expiryDate,
             iv_at_entry: Number.isFinite(parseFloat(iv)) ? parseFloat(iv) / 100 : null,
           }
-        : {}),
+        : { price: parseFloat(entryPrice) }),
     };
     setSubmitting(true);
     try {
@@ -143,10 +154,12 @@ export function TradeConfirmModal({
             <label>Entry Date</label>
             <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} />
           </div>
-          <div className="form-row">
-            <label>Entry Price</label>
-            <input type="number" step={0.01} value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)} />
-          </div>
+          {instrument === "spot" && (
+            <div className="form-row">
+              <label>Entry Price</label>
+              <input type="number" step={0.01} value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)} />
+            </div>
+          )}
           <div className="form-row">
             <label>Take Profit</label>
             <input type="number" step={0.01} value={tpPrice} onChange={(e) => setTpPrice(e.target.value)} />

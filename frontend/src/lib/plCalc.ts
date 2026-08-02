@@ -2,7 +2,7 @@
 // (updateSpotCalc/plAtExpiry/plModelAt/plPriceRange) -- kept separate from the chart/DOM
 // concerns in the component so it's independently testable.
 
-import { blackScholes, type OptionType } from "./blackScholes";
+import { blackScholes, riskFreeRateFor, type OptionType } from "./blackScholes";
 
 export interface SpotCalcInput {
   entry: number;
@@ -72,13 +72,17 @@ export function plAtExpiry(f: OptFields, S: number): number {
 
 // daysFromEntry: position on the entry->expiry timeline (0 = entry date, f.dte = expiration).
 export function plModelAt(f: OptFields, S: number, daysFromEntry: number): number {
-  const T = Math.max(f.dte - daysFromEntry, 0) / 365;
-  return plSign(f) * (blackScholes(f.type, S, f.K, T, f.iv).price - f.premium) * plMult(f);
+  const daysToExpiry = Math.max(f.dte - daysFromEntry, 0);
+  const T = daysToExpiry / 365;
+  const r = riskFreeRateFor(daysToExpiry);
+  return plSign(f) * (blackScholes(f.type, S, f.K, T, f.iv, r).price - f.premium) * plMult(f);
 }
 
 export function plOptionPriceAt(f: OptFields, S: number, daysFromEntry: number): number {
-  const T = Math.max(f.dte - daysFromEntry, 0) / 365;
-  return blackScholes(f.type, S, f.K, T, f.iv).price;
+  const daysToExpiry = Math.max(f.dte - daysFromEntry, 0);
+  const T = daysToExpiry / 365;
+  const r = riskFreeRateFor(daysToExpiry);
+  return blackScholes(f.type, S, f.K, T, f.iv, r).price;
 }
 
 export function plPriceRange(f: OptFields): [number, number] {

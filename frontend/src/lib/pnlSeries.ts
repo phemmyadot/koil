@@ -21,7 +21,7 @@ export function replayAsOf(fills: Fill[], asOfDate: string): ReplayState {
   let realized = 0;
   const multiplier = ordered.length && ordered[0].instrument === "option" ? 100 : 1;
   for (const f of ordered) {
-    const value = f.instrument === "option" ? (f.premium ?? 0) : f.price;
+    const value = f.instrument === "option" ? (f.premium ?? 0) : (f.price ?? 0);
     if (f.kind === "entry") {
       cost += value * f.units * multiplier;
       units += f.units;

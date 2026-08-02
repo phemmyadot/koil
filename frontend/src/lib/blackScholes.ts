@@ -11,8 +11,32 @@ export interface OptionPricing {
   theta: number; // per-day (annual theta / 365), the conventional quoting
 }
 
-// Fixed assumption, not user-configurable -- minor P&L impact either way.
+// Fallback for daysToExpiry beyond every tier below (>2y) -- also the value this project used
+// everywhere before the tiered lookup existed.
 export const RISK_FREE_RATE = 0.045;
+
+// (days-to-expiry upper bound, rate) -- ordered ascending, first match wins. Mirrors
+// backend/options_pricing.py's RISK_FREE_RATE_TIERS exactly (kept numerically identical, same
+// convention as the Black-Scholes math itself) -- U.S. Treasury bill/note yields at tenors
+// closest to common option expiries. See
+// docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
+export const RISK_FREE_RATE_TIERS: [number, number][] = [
+  [30, 0.0378], // ~1 month -- 4-Week T-Bill
+  [60, 0.0385], // ~2 months -- 8-Week T-Bill
+  [90, 0.0377], // ~3 months -- 13-Week T-Bill
+  [180, 0.0398], // ~6 months -- 26-Week T-Bill
+  [365, 0.0406], // ~1 year -- 52-Week T-Note
+  [730, 0.043], // ~2 years (LEAPS) -- 2-Year T-Note
+];
+
+// Rate for whichever tier's upper bound is the first to cover daysToExpiry. Beyond the longest
+// tier (2y), falls back to RISK_FREE_RATE rather than extrapolating or erroring.
+export function riskFreeRateFor(daysToExpiry: number): number {
+  for (const [upperBound, rate] of RISK_FREE_RATE_TIERS) {
+    if (daysToExpiry <= upperBound) return rate;
+  }
+  return RISK_FREE_RATE;
+}
 
 function normCdf(x: number): number {
   const sign = x < 0 ? -1 : 1;

@@ -23,6 +23,11 @@ export const STRATEGY_LABELS: Record<string, string> = {
   vexh: "VEXH",
   strategy_vcp: "VCP",
   strategy_vcpo: "VCPO",
+  // Not a screener signal -- a trade added via "+ Add Trade" for a ticker outside the screened
+  // universe, see docs/superpowers/specs/2026-08-01-add-trade-untracked-ticker-design.md.
+  // Deliberately NOT added to ADV_STRATEGIES/ADV_STRAT_KEY -- those drive the Advance/Trade-on
+  // filters, which only make sense for real strategy signals to filter on.
+  manual: "Manual",
 };
 
 export function stratLabel(key: string): string {

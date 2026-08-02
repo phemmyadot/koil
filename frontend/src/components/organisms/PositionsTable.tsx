@@ -41,7 +41,7 @@ function PositionRow({
     const price = parseFloat(exitPrice);
     const units = parseFloat(exitUnits);
     if (!Number.isFinite(price)) {
-      window.alert("Enter a valid exit price");
+      window.alert(isOption ? "Enter a valid exit option price" : "Enter a valid exit price");
       return;
     }
     if (!Number.isFinite(units) || units <= 0) {
@@ -115,7 +115,7 @@ function PositionRow({
               <input
                 type="number"
                 step={0.01}
-                placeholder="Exit price"
+                placeholder={isOption ? "Exit option price" : "Exit price"}
                 value={exitPrice}
                 onChange={(e) => setExitPrice(e.target.value)}
               />

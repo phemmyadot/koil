@@ -114,7 +114,7 @@ def _init_schema() -> None:
                 signal_date TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 fill_date TEXT NOT NULL,
-                price REAL NOT NULL,
+                price REAL,
                 units REAL NOT NULL,
                 instrument TEXT NOT NULL,
                 exit_reason TEXT,
@@ -132,6 +132,7 @@ def _init_schema() -> None:
     _migrate_universe_meta_date_to_epoch()
     _migrate_computed_results_fetch_epoch_to_bar_date()
     _migrate_taken_trades_to_positions_and_fills()
+    _migrate_position_fills_price_nullable()
     # trade_daily_marks/notifications table+index creation lives here, AFTER the migration
     # above, not in the main executescript -- a pre-migration DB still has these tables with
     # the old trade_id column at that point, and CREATE INDEX ... ON table(position_id) would
@@ -296,6 +297,57 @@ def _migrate_taken_trades_to_positions_and_fills() -> None:
             _conn.execute("ALTER TABLE notifications RENAME COLUMN trade_id TO position_id")
 
         _conn.execute("DROP TABLE taken_trades")
+
+
+def _migrate_position_fills_price_nullable() -> None:
+    """One-time migration: position_fills.price used to be REAL NOT NULL for every fill,
+    spot or option -- for options it held the underlying stock's price, which
+    docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md found is never actually
+    read anywhere except a since-fixed alert-math bug that compared it against average premium
+    (wrong units). Options now only ever use premium; price is spot-only and optional. SQLite
+    has no ALTER COLUMN, so this is the standard create-copy-drop-rename dance, matching the
+    style _migrate_taken_trades_to_positions_and_fills already uses for this table. A fresh DB
+    never hits this at all -- the CREATE TABLE IF NOT EXISTS above already declares price
+    nullable, so this only fires against a pre-existing DB whose price column is still NOT NULL."""
+    with _lock, _conn:
+        cols = _conn.execute("PRAGMA table_info(position_fills)").fetchall()
+        price_col = next((c for c in cols if c[1] == "price"), None)
+        if price_col is None or price_col[3] == 0:  # column[3] is "notnull"; 0 means already nullable
+            return
+        _conn.execute("""
+            CREATE TABLE position_fills_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id INTEGER NOT NULL,
+                strategy_key TEXT NOT NULL,
+                signal_date TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                fill_date TEXT NOT NULL,
+                price REAL,
+                units REAL NOT NULL,
+                instrument TEXT NOT NULL,
+                exit_reason TEXT,
+                opt_side TEXT,
+                opt_type TEXT,
+                strike REAL,
+                premium REAL,
+                expiry_date TEXT,
+                iv_at_entry REAL,
+                notes TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        _conn.execute("""
+            INSERT INTO position_fills_new (id, position_id, strategy_key, signal_date, kind,
+                fill_date, price, units, instrument, exit_reason, opt_side, opt_type, strike,
+                premium, expiry_date, iv_at_entry, notes, created_at)
+            SELECT id, position_id, strategy_key, signal_date, kind, fill_date, price, units,
+                instrument, exit_reason, opt_side, opt_type, strike, premium, expiry_date,
+                iv_at_entry, notes, created_at
+            FROM position_fills
+        """)
+        _conn.execute("DROP TABLE position_fills")
+        _conn.execute("ALTER TABLE position_fills_new RENAME TO position_fills")
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_position_fills_position ON position_fills(position_id)")
 
 
 _init_schema()

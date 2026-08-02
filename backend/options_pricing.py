@@ -6,7 +6,31 @@ option value computed here matches what the P/L Calculator would show for the sa
 """
 import math
 
-RISK_FREE_RATE = 0.045  # fixed assumption, matches static/index.html's RISK_FREE_RATE
+RISK_FREE_RATE = 0.045  # fallback for T beyond every tier below (>2y) -- also the value this
+                          # project used everywhere before the tiered lookup existed.
+
+# (days-to-expiry upper bound, rate) -- ordered ascending, first match wins. Matches U.S.
+# Treasury bill/note yields at tenors closest to common option expiries, so the model uses the
+# rate an option's own maturity actually corresponds to instead of one flat number for every
+# expiry. See docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
+RISK_FREE_RATE_TIERS = [
+    (30, 0.0378),   # ~1 month -- 4-Week T-Bill
+    (60, 0.0385),   # ~2 months -- 8-Week T-Bill
+    (90, 0.0377),   # ~3 months -- 13-Week T-Bill
+    (180, 0.0398),  # ~6 months -- 26-Week T-Bill
+    (365, 0.0406),  # ~1 year -- 52-Week T-Note
+    (730, 0.0430),  # ~2 years (LEAPS) -- 2-Year T-Note
+]
+
+
+def risk_free_rate_for(days_to_expiry: float) -> float:
+    """Rate for whichever tier's upper bound is the first to cover days_to_expiry. Beyond the
+    longest tier (2y), falls back to RISK_FREE_RATE rather than extrapolating or erroring --
+    LEAPS past 2 years are rare enough that a flat fallback is fine."""
+    for upper_bound, rate in RISK_FREE_RATE_TIERS:
+        if days_to_expiry <= upper_bound:
+            return rate
+    return RISK_FREE_RATE
 
 
 def _norm_cdf(x: float) -> float:

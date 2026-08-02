@@ -9,7 +9,7 @@ export interface AddFillFormProps {
     strategy_key: StrategyKey;
     signal_date: string;
     fill_date: string;
-    price: number;
+    price?: number;
     units: number;
     exit_reason?: ExitReason;
     opt_side?: "buy" | "sell";
@@ -48,9 +48,10 @@ export function AddFillForm({ instrument, onSubmit, onCancel }: AddFillFormProps
         strategy_key: strategyKey,
         signal_date: signalDate,
         fill_date: fillDate,
-        price: parseFloat(price),
         units: parseFloat(units),
         ...(kind === "exit" ? { exit_reason: exitReason } : {}),
+        // Options never need a stock price -- premium (the option's own price, whether this is
+        // an entry or an exit fill) is what drives P&L. price stays spot-only.
         ...(isOption
           ? {
               opt_side: optSide,
@@ -60,7 +61,7 @@ export function AddFillForm({ instrument, onSubmit, onCancel }: AddFillFormProps
               expiry_date: expiryDate,
               iv_at_entry: Number.isFinite(parseFloat(iv)) ? parseFloat(iv) / 100 : null,
             }
-          : {}),
+          : { price: parseFloat(price) }),
       });
     } catch (e) {
       setError(`Failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -82,10 +83,12 @@ export function AddFillForm({ instrument, onSubmit, onCancel }: AddFillFormProps
           <label>Fill Date</label>
           <input type="date" value={fillDate} onChange={(e) => setFillDate(e.target.value)} />
         </div>
-        <div className="form-row">
-          <label>Price</label>
-          <input type="number" step={0.01} value={price} onChange={(e) => setPrice(e.target.value)} />
-        </div>
+        {!isOption && (
+          <div className="form-row">
+            <label>Price</label>
+            <input type="number" step={0.01} value={price} onChange={(e) => setPrice(e.target.value)} />
+          </div>
+        )}
         <div className="form-row">
           <label>Units</label>
           <input type="number" step={1} value={units} onChange={(e) => setUnits(e.target.value)} />
@@ -133,7 +136,7 @@ export function AddFillForm({ instrument, onSubmit, onCancel }: AddFillFormProps
               <input type="number" step={0.5} value={strike} onChange={(e) => setStrike(e.target.value)} />
             </div>
             <div className="form-row">
-              <label>Premium ($/sh)</label>
+              <label>{kind === "exit" ? "Exit Premium ($/sh)" : "Premium ($/sh)"}</label>
               <input type="number" step={0.05} value={premium} onChange={(e) => setPremium(e.target.value)} />
             </div>
             <div className="form-row">

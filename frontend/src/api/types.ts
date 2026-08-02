@@ -115,7 +115,7 @@ export interface Fill {
   signal_date: string;
   kind: FillKind;
   fill_date: string;
-  price: number;
+  price: number | null; // spot-only; option fills carry their price in premium instead
   units: number;
   instrument: Instrument;
   exit_reason: ExitReason | null;
@@ -149,7 +149,9 @@ export interface CreatePositionBody {
   strategy_key: string;
   signal_date: string;
   fill_date: string;
-  price: number;
+  // Spot-only -- options carry their price in premium instead, see
+  // docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
+  price?: number;
   units: number;
   tp_price: number;
   stop_price: number;
@@ -169,7 +171,8 @@ export interface AddFillBody {
   strategy_key: string;
   signal_date: string;
   fill_date: string;
-  price: number;
+  // Spot-only -- options carry their price (entry or exit) in premium instead.
+  price?: number;
   units: number;
   exit_reason?: ExitReason;
   opt_side?: "buy" | "sell";

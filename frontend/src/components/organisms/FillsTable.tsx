@@ -5,20 +5,26 @@ import { fmtMoney } from "../../lib/format";
 
 export interface FillsTableProps {
   fills: Fill[];
-  onEdit: (fillId: number, body: { fill_date: string; price: number; units: number; exit_reason?: ExitReason }) => Promise<void>;
+  onEdit: (
+    fillId: number,
+    body: { fill_date: string; price?: number; premium?: number; units: number; exit_reason?: ExitReason },
+  ) => Promise<void>;
   onDelete: (fillId: number) => Promise<void>;
 }
 
 function FillEditRow({ fill, onSave, onCancel }: { fill: Fill; onSave: FillsTableProps["onEdit"]; onCancel: () => void }) {
+  const isOption = fill.instrument === "option";
   const [fillDate, setFillDate] = useState(fill.fill_date);
-  const [price, setPrice] = useState(String(fill.price));
+  // Options edit premium (their own price, entry or exit); spot edits price -- same field, one
+  // or the other is always null on a given fill depending on instrument.
+  const [amount, setAmount] = useState(String(isOption ? (fill.premium ?? "") : (fill.price ?? "")));
   const [units, setUnits] = useState(String(fill.units));
   const [exitReason, setExitReason] = useState<ExitReason>(fill.exit_reason ?? "manual");
 
   async function save() {
     await onSave(fill.id, {
       fill_date: fillDate,
-      price: parseFloat(price),
+      ...(isOption ? { premium: parseFloat(amount) } : { price: parseFloat(amount) }),
       units: parseFloat(units),
       ...(fill.kind === "exit" ? { exit_reason: exitReason } : {}),
     });
@@ -34,8 +40,8 @@ function FillEditRow({ fill, onSave, onCancel }: { fill: Fill; onSave: FillsTabl
               <input type="date" value={fillDate} onChange={(e) => setFillDate(e.target.value)} />
             </div>
             <div className="form-row">
-              <label>Price</label>
-              <input type="number" step={0.01} value={price} onChange={(e) => setPrice(e.target.value)} />
+              <label>{isOption ? "Option Price" : "Price"}</label>
+              <input type="number" step={0.01} value={amount} onChange={(e) => setAmount(e.target.value)} />
             </div>
             <div className="form-row">
               <label>Units</label>
@@ -96,7 +102,7 @@ export function FillsTable({ fills, onEdit, onDelete }: FillsTableProps) {
               <td>
                 <span className="strat-tag">{stratLabel(f.strategy_key)}</span>
               </td>
-              <td>{fmtMoney(f.price)}</td>
+              <td>{fmtMoney(f.instrument === "option" ? (f.premium ?? 0) : (f.price ?? 0))}</td>
               <td>{f.units}</td>
               <td>{f.exit_reason ?? "—"}</td>
               <td className="actions-cell">

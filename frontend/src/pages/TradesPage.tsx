@@ -65,7 +65,10 @@ export function TradesPage() {
     for (const id of positionIds) queryClient.invalidateQueries({ queryKey: ["position", id] });
   }
 
-  async function handleExit(positionId: number, price: number, units: number, exitReason: ExitReason) {
+  // `amount` is the exit price (spot) or exit option price (option) -- PositionsTable's single
+  // generic input, routed to the right field here since options carry their price in premium,
+  // never price. See docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
+  async function handleExit(positionId: number, amount: number, units: number, exitReason: ExitReason) {
     const fills = fillsByPosition[positionId] ?? [];
     const lastFill = fills[fills.length - 1];
     const position = positions?.find((p) => p.id === positionId);
@@ -76,9 +79,20 @@ export function TradesPage() {
       strategy_key: lastFill.strategy_key,
       signal_date: lastFill.signal_date,
       fill_date: todayIsoDate(),
-      price,
       units,
       exit_reason: exitReason,
+      // opt_side/opt_type/strike/expiry_date are required on every option fill, entry or exit
+      // (see backend's _FILL_OPTION_REQUIRED) -- carried over from the position's own open lot
+      // rather than re-collected here, since this form only asks for exit price/units/reason.
+      ...(position.instrument === "option"
+        ? {
+            premium: amount,
+            opt_side: lastFill.opt_side ?? undefined,
+            opt_type: lastFill.opt_type ?? undefined,
+            strike: lastFill.strike ?? undefined,
+            expiry_date: lastFill.expiry_date ?? undefined,
+          }
+        : { price: amount }),
     });
     invalidateAll();
   }

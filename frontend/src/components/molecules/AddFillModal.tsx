@@ -7,7 +7,7 @@ import "./TradeConfirmModal.css";
 
 export interface AddFillModalProps {
   position: Position;
-  stratKey: StrategyKey;
+  stratKey: StrategyKey | "manual";
   signalDate: string;
   currentPrice: number;
   onClose: () => void;
@@ -38,9 +38,10 @@ export function AddFillModal({ position, stratKey, signalDate, currentPrice, onC
       strategy_key: stratKey,
       signal_date: signalDate,
       fill_date: fillDate,
-      price: parseFloat(price),
       units: parseFloat(units),
       ...(kind === "exit" ? { exit_reason: exitReason } : {}),
+      // Options never need a stock price -- premium (entry or exit) is what drives P&L, see
+      // docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
       ...(isOption
         ? {
             opt_side: optSide,
@@ -50,7 +51,7 @@ export function AddFillModal({ position, stratKey, signalDate, currentPrice, onC
             expiry_date: expiryDate,
             iv_at_entry: Number.isFinite(parseFloat(iv)) ? parseFloat(iv) / 100 : null,
           }
-        : {}),
+        : { price: parseFloat(price) }),
     };
     setSubmitting(true);
     try {
@@ -82,10 +83,12 @@ export function AddFillModal({ position, stratKey, signalDate, currentPrice, onC
             <label>Fill Date</label>
             <input type="date" value={fillDate} onChange={(e) => setFillDate(e.target.value)} />
           </div>
-          <div className="form-row">
-            <label>Price</label>
-            <input type="number" step={0.01} value={price} onChange={(e) => setPrice(e.target.value)} />
-          </div>
+          {!isOption && (
+            <div className="form-row">
+              <label>Price</label>
+              <input type="number" step={0.01} value={price} onChange={(e) => setPrice(e.target.value)} />
+            </div>
+          )}
           <div className="form-row">
             <label>Units</label>
             <input type="number" step={1} value={units} onChange={(e) => setUnits(e.target.value)} />
@@ -124,7 +127,7 @@ export function AddFillModal({ position, stratKey, signalDate, currentPrice, onC
               <input type="number" step={0.5} value={strike} onChange={(e) => setStrike(e.target.value)} />
             </div>
             <div className="form-row">
-              <label>Premium ($/sh)</label>
+              <label>{kind === "exit" ? "Exit Premium ($/sh)" : "Premium ($/sh)"}</label>
               <input type="number" step={0.05} value={premium} onChange={(e) => setPremium(e.target.value)} />
             </div>
             <div className="form-row">
