@@ -77,9 +77,14 @@ export function computePnlSeries(
 }
 
 // $ P&L for one position at a given mark. Positions missing avg_cost (fully flat) contribute
-// nothing.
+// nothing. valueAtMark is always per-share (close_price or option_value); p.avg_cost from the
+// backend has the 100x contract multiplier already baked in for options (see replay_fills), so
+// it's scaled back down to per-share before comparing against valueAtMark -- multiplying by 100
+// again afterward (as this used to) double-counted the multiplier. See
+// docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
 export function positionDollarUnrealized(p: Position, valueAtMark: number, unitsRemaining: number): number {
   if (p.avg_cost == null || !unitsRemaining) return 0;
   const multiplier = p.instrument === "option" ? 100 : 1;
-  return (valueAtMark - p.avg_cost) * unitsRemaining * multiplier;
+  const avgCostPerShare = p.instrument === "option" ? p.avg_cost / 100 : p.avg_cost;
+  return (valueAtMark - avgCostPerShare) * unitsRemaining * multiplier;
 }

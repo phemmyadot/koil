@@ -35,7 +35,11 @@ function PositionRow({
   const values = marks.map((m) => (hasOptionValues ? (m.option_value as number) : m.close_price));
   const path = sparklinePath(values, 130, 32, 3);
   const last = marks.length ? values[values.length - 1] : (p.avg_cost ?? 0);
-  const pct = p.avg_cost ? ((last - p.avg_cost) / p.avg_cost) * 100 : 0;
+  // p.avg_cost has the 100x contract multiplier baked in for options (see replay_fills) --
+  // option_value/last is per-share, so scale avg_cost back down before comparing. See
+  // docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
+  const avgCostPerShare = p.avg_cost != null && isOption ? p.avg_cost / 100 : p.avg_cost;
+  const pct = avgCostPerShare ? ((last - avgCostPerShare) / avgCostPerShare) * 100 : 0;
 
   async function submitExit() {
     const price = parseFloat(exitPrice);

@@ -173,8 +173,10 @@ describe("positionDollarUnrealized", () => {
     expect(positionDollarUnrealized(makePosition({ avg_cost: 100 }), 110, 0)).toBe(0);
   });
 
-  it("scales by 100 for options", () => {
-    const p = makePosition({ instrument: "option", avg_cost: 5 });
+  it("scales by 100 for options, after converting avg_cost back to per-share", () => {
+    // avg_cost from the backend is per-contract (500 = $5.00/share premium paid, x100) -- the
+    // per-share comparison should use 5.00, not the raw 500.
+    const p = makePosition({ instrument: "option", avg_cost: 500 });
     expect(positionDollarUnrealized(p, 8, 2)).toBeCloseTo((8 - 5) * 2 * 100, 5);
   });
 
