@@ -533,6 +533,7 @@ def refresh_and_compute(force: bool = False) -> None:
     if not _refresh_pass_lock.acquire(blocking=False):
         print("app: refresh_and_compute() already running -- skipping this overlapping call.")
         return
+    cycle_start = time.time()
     try:
         try:
             candidates = build_universe.fetch_candidates()
@@ -549,7 +550,9 @@ def refresh_and_compute(force: bool = False) -> None:
 
         active = _active_tickers()
         fetch_time_before = data.last_fetch_time()
+        fetch_start = time.time()
         data.warm_cache(active, force=force)
+        fetch_seconds = time.time() - fetch_start
         fetch_time_after = data.last_fetch_time()
 
         with _compute_lock:
@@ -558,13 +561,18 @@ def refresh_and_compute(force: bool = False) -> None:
 
         if not force and fetch_time_before == fetch_time_after and compute_caught_up:
             print(f"app: nothing fetched this pass and compute is already caught up "
-                  f"({computed_count}/{len(active)}) -- skipping compute_all()'s per-ticker check entirely.")
+                  f"({computed_count}/{len(active)}) -- skipping compute_all()'s per-ticker check entirely. "
+                  f"fetch={fetch_seconds:.1f}s total={time.time() - cycle_start:.1f}s")
             return
+        compute_start = time.time()
         compute_all(force=force)
+        compute_seconds = time.time() - compute_start
         try:
             _update_trade_marks_and_alerts()
         except Exception as e:  # noqa: BLE001 - a bad pass here must not affect the fetch/compute cycle above
             print(f"app: _update_trade_marks_and_alerts() failed ({e}); will retry next pass.")
+        print(f"app: refresh_and_compute() cycle done -- {len(active)} tickers, "
+              f"fetch={fetch_seconds:.1f}s compute={compute_seconds:.1f}s total={time.time() - cycle_start:.1f}s")
     finally:
         _refresh_pass_lock.release()
 
