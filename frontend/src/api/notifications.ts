@@ -8,3 +8,7 @@ export function listNotifications(unreadOnly = false): Promise<Notification[]> {
 export function markNotificationRead(id: number): Promise<{ ok: true }> {
   return apiPost<{ ok: true }>(`/api/notifications/${id}/read`);
 }
+
+export function markAllNotificationsRead(): Promise<{ ok: true }> {
+  return apiPost<{ ok: true }>("/api/notifications/read-all");
+}

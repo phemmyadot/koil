@@ -1205,6 +1205,12 @@ def read_notification(notification_id: int):
     return {"ok": True}
 
 
+@app.post("/api/notifications/read-all")
+def read_all_notifications():
+    db.mark_all_notifications_read(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return {"ok": True}
+
+
 @app.get("/api/push/vapid-public-key")
 def push_vapid_public_key():
     key = os.environ.get("VAPID_PUBLIC_KEY")

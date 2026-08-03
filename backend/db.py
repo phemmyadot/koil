@@ -939,6 +939,11 @@ def mark_notification_read(notification_id: int, read_at: str) -> None:
         _conn.execute("UPDATE notifications SET read_at = ? WHERE id = ?", (read_at, notification_id))
 
 
+def mark_all_notifications_read(read_at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", (read_at,))
+
+
 # ─────────────────────────── push subscriptions ───────────────────────────
 
 def upsert_push_subscription(endpoint: str, p256dh: str, auth: str, now_iso: str) -> None:

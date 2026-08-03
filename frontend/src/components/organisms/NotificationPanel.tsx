@@ -1,8 +1,11 @@
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Modal } from "../atoms/Modal";
-import { useAllNotifications, useMarkNotificationRead } from "../../hooks/useNotifications";
+import { useAllNotifications, useMarkAllNotificationsRead, useMarkNotificationRead } from "../../hooks/useNotifications";
 import { usePush } from "../../hooks/usePush";
 import "./NotificationPanel.css";
+
+const AUTO_READ_DELAY_MS = 3000;
 
 function timeAgo(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -17,8 +20,17 @@ function timeAgo(iso: string): string {
 export function NotificationPanel({ onClose }: { onClose: () => void }) {
   const { data: notifications, isLoading } = useAllNotifications();
   const markRead = useMarkNotificationRead();
+  const markAllRead = useMarkAllNotificationsRead();
   const push = usePush();
   const navigate = useNavigate();
+
+  // Opening the panel is itself an acknowledgment -- auto-mark everything read shortly after,
+  // so the user doesn't have to click each row just to clear the unread badge.
+  useEffect(() => {
+    const timer = setTimeout(() => markAllRead.mutate(), AUTO_READ_DELAY_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function openNotification(n: NonNullable<typeof notifications>[number]) {
     if (!n.read_at) markRead.mutate(n.id);
