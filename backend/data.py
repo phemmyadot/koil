@@ -120,12 +120,19 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
     last_bar_date = None if force else db.get_last_bar_date(ticker)
     if last_bar_date:
         try:
-            start = (pd.Timestamp(last_bar_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+            last_bar_ts = pd.Timestamp(last_bar_date)
         except (ValueError, TypeError):
             last_bar_date = None
-            start = HISTORY_START
-    else:
-        last_bar_date = None
+        else:
+            if last_bar_ts.date() >= pd.Timestamp.now().date():
+                # Stored bar is today's (or later, clock skew) -- re-request FROM today, not
+                # today+1. A same-day 1d bar is a live, still-forming candle until market close,
+                # so re-fetching it (not skipping) is what picks up the latest close throughout
+                # the day; Yahoo overwrites that date's row with the now-more-current data.
+                start = last_bar_ts.strftime("%Y-%m-%d")
+            else:
+                start = (last_bar_ts + timedelta(days=1)).strftime("%Y-%m-%d")
+    if not last_bar_date:
         start = HISTORY_START
     try:
         df = yf.download(ticker, start=start, interval="1d", progress=False,
@@ -134,6 +141,8 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
             df.columns = df.columns.get_level_values(0)
         df = df.drop(columns=["Adj Close"], errors="ignore").dropna()
         if df.empty:
+            if last_bar_date:
+                return ticker, df, None
             return ticker, None, "insufficient history"
         # Fewer than 250 bars means strategy compute (VCP/VCPO/VEXH, all needing long lookback
         # windows) will likely score this ticker as None -- but the bars themselves are real and
