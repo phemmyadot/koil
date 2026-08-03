@@ -5,9 +5,17 @@ right after it inserts a notifications row, so in-app and push notifications alw
 VAPID_PRIVATE_KEY is stored in .env with literal \\n escapes (single-line, since the project's
 hand-rolled .env loader in build_universe.py is line-based and doesn't support multi-line
 values) -- unescaped back into a real PEM here before handing it to pywebpush.
+
+pywebpush's `vapid_private_key` param only accepts a file path, a Vapid instance, or a raw
+base64url-encoded key string -- NOT a PEM string (py_vapid.Vapid.from_string() strips newlines
+and base64url-decodes the result directly, so a "-----BEGIN..." header/footer corrupts the
+decode with an "ASN.1 parsing error"). A real PEM (headers, real line breaks) must go through
+cryptography's own PEM loader and be wrapped in a Vapid02 instance instead.
 """
 import os
 
+from cryptography.hazmat.primitives import serialization
+from py_vapid import Vapid02
 from pywebpush import WebPushException, webpush
 
 import backend.build_universe  # noqa: F401 -- import side effect loads .env into os.environ
@@ -17,6 +25,14 @@ import backend.db as db
 def _private_key_pem() -> str | None:
     raw = os.environ.get("VAPID_PRIVATE_KEY")
     return raw.replace("\\n", "\n") if raw else None
+
+
+def _vapid() -> "Vapid02 | None":
+    pem = _private_key_pem()
+    if not pem:
+        return None
+    key = serialization.load_pem_private_key(pem.encode(), password=None)
+    return Vapid02(private_key=key)
 
 
 def vapid_configured() -> bool:
@@ -33,7 +49,7 @@ def send_push_to_all(payload_json: str, now_iso: str) -> None:
         print("push: VAPID not configured (missing VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/"
               "VAPID_SUBJECT) -- push notification skipped, in-app only.")
         return
-    private_key = _private_key_pem()
+    vapid = _vapid()
     claims = {"sub": os.environ["VAPID_SUBJECT"]}
     subs = db.list_push_subscriptions()
     if not subs:
@@ -47,7 +63,7 @@ def send_push_to_all(payload_json: str, now_iso: str) -> None:
                     "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
                 },
                 data=payload_json,
-                vapid_private_key=private_key,
+                vapid_private_key=vapid,
                 vapid_claims=dict(claims),
             )
             db.touch_push_subscription(sub["endpoint"], now_iso)
