@@ -77,6 +77,11 @@ def _init_schema() -> None:
                 last_screened_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS background_loop_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_close_fetch_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS watchlist_tickers (
                 ticker TEXT PRIMARY KEY,
                 added_at REAL NOT NULL
@@ -696,6 +701,25 @@ def set_last_screened_at(epoch: float) -> None:
             INSERT INTO universe_meta (id, last_screened_at) VALUES (1, ?)
             ON CONFLICT(id) DO UPDATE SET last_screened_at=excluded.last_screened_at
         """, (epoch,))
+
+
+# ─────────────────────── background loop marker ───────────────────────
+# See docs/superpowers/specs/2026-08-03-market-hours-background-fetch-design.md.
+# Tracks the last time the background loop did its once-per-close-period fetch,
+# so a process restart doesn't forget it already ran today's and redo it immediately.
+
+def get_last_close_fetch_at() -> str | None:
+    with _lock:
+        row = _conn.execute("SELECT last_close_fetch_at FROM background_loop_meta WHERE id = 1").fetchone()
+    return row[0] if row else None
+
+
+def set_last_close_fetch_at(iso: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO background_loop_meta (id, last_close_fetch_at) VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET last_close_fetch_at=excluded.last_close_fetch_at
+        """, (iso,))
 
 
 # ─────────────────────────── positions ───────────────────────────

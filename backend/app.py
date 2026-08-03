@@ -19,7 +19,9 @@ refresh_and_compute():
      compute -> save results to DB.
 
 Runs when: no computed data exists yet (cold start, blocks until done);
-the user clicks Refresh; the background loop wakes (every CHECK_INTERVAL).
+the user clicks Refresh; the background loop wakes -- on a market-hours-aware cadence, see
+docs/superpowers/specs/2026-08-03-market-hours-background-fetch-design.md
+(MARKET_OPEN_FETCH_INTERVAL_SECONDS while open, once per close period while closed).
 A plain page load with existing computed data just reads it -- no cycle.
 """
 import json
@@ -57,6 +59,7 @@ import backend.csv_export as csv_export
 import backend.data as data
 import backend.db as db
 import backend.entry_estimate as entry_estimate
+import backend.market_hours as market_hours
 import backend.options_pricing as options_pricing
 import backend.pdf_export as pdf_export
 import backend.push as push
@@ -67,6 +70,14 @@ import backend.strategy_common as strategy_common
 import backend.strategy_vcp as strategy_vcp
 import backend.strategy_vcpo as strategy_vcpo
 import backend.strategy_vexh as strategy_vexh
+
+# See docs/superpowers/specs/2026-08-03-market-hours-background-fetch-design.md. Default (120
+# min) matches CHECK_INTERVAL's existing 2-hour cadence exactly -- this is a drop-in replacement
+# for the always-on interval during market hours, not a behavior change until tuned down.
+MARKET_OPEN_FETCH_INTERVAL_SECONDS = int(os.environ.get("MARKET_OPEN_FETCH_INTERVAL_MINUTES", 120)) * 60
+# How often the loop wakes just to check "is it time yet" while the market is closed -- cheap
+# (local clock + one DB read, no network call), so this can be short without cost concern.
+CLOSED_MARKET_POLL_SECONDS = 5 * 60
 
 
 @asynccontextmanager
@@ -576,12 +587,30 @@ def _on_startup():
             except Exception as e:  # noqa: BLE001 - the loop below still starts either way
                 print(f"app: eager startup compute_all() failed ({e}); will retry on the normal cadence.")
 
+        # Market-hours-aware cadence -- see
+        # docs/superpowers/specs/2026-08-03-market-hours-background-fetch-design.md. While the
+        # market is open, fetch on MARKET_OPEN_FETCH_INTERVAL_SECONDS. While closed, fetch
+        # exactly once per close period (tracked via db.get/set_last_close_fetch_at) and
+        # otherwise just poll cheaply to notice the next state change.
         while True:
-            time.sleep(data.CHECK_INTERVAL)
-            try:
-                refresh_and_compute()
-            except Exception as e:  # noqa: BLE001 - one bad pass must not permanently kill the refresh loop
-                print(f"app: background refresh loop pass failed ({e}); will retry next cycle instead of stopping.")
+            now = datetime.now(timezone.utc)
+            if market_hours.is_market_open(now):
+                time.sleep(MARKET_OPEN_FETCH_INTERVAL_SECONDS)
+                try:
+                    refresh_and_compute()
+                except Exception as e:  # noqa: BLE001 - one bad pass must not permanently kill the refresh loop
+                    print(f"app: background refresh loop pass failed ({e}); will retry next cycle instead of stopping.")
+            else:
+                boundary = market_hours.most_recent_close_boundary(now)
+                last_close_fetch = db.get_last_close_fetch_at()
+                stale = last_close_fetch is None or datetime.fromisoformat(last_close_fetch) < boundary
+                if stale:
+                    try:
+                        refresh_and_compute()
+                        db.set_last_close_fetch_at(now.isoformat())
+                    except Exception as e:  # noqa: BLE001 - one bad pass must not permanently kill the refresh loop
+                        print(f"app: background refresh loop close-fetch failed ({e}); will retry next cycle instead of stopping.")
+                time.sleep(CLOSED_MARKET_POLL_SECONDS)
     threading.Thread(target=loop, daemon=True).start()
 
 
