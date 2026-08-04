@@ -135,22 +135,25 @@ _STRATEGY_MODULES = {"vexh": strategy_vexh, "strategy_vcp": strategy_vcp, "strat
 _STRATEGY_LABELS = {"vexh": "VEXH", "strategy_vcp": "VCP", "strategy_vcpo": "VCPO"}
 
 # See docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md.
-# Collapses each strategy's own `verdict` string down to the 4-state lifecycle the dashboard
-# card already shows (NO SIGNAL -> PENDING -> OPEN -> TP -> NO SIGNAL) -- TAKE/SKIP both mean
-# "signal fired, not yet in the strategy's own simulated position," i.e. PENDING.
-_VERDICT_TO_STATE = {
+# Collapses each strategy's own `verdict` string down to the entry-side states the dashboard
+# card shows (NO SIGNAL -> PENDING -> OPEN) -- TAKE/SKIP both mean "signal fired, not yet in the
+# strategy's own simulated position," i.e. PENDING. TP HIT is deliberately NOT mapped here (left
+# untracked/None) -- a real trade's actual TP/stop progress already alerts via
+# _fire_threshold_alerts()/_update_trade_marks_and_alerts() below, scoped to the user's real
+# positions; tracking the strategy's own simulated TP here too would be a redundant, noisier
+# duplicate of that.
+_VERDICT_TO_ENTRY_STATE = {
     "NO SIGNAL": "NO SIGNAL",
     "TAKE": "PENDING",
     "SKIP": "PENDING",
     "IN TRADE": "OPEN",
-    "TP HIT": "TP",
 }
 
 
-def _strategy_state(strat_payload: dict | None) -> str | None:
+def _strategy_entry_state(strat_payload: dict | None) -> str | None:
     if strat_payload is None:
         return None
-    return _VERDICT_TO_STATE.get(strat_payload.get("verdict"))
+    return _VERDICT_TO_ENTRY_STATE.get(strat_payload.get("verdict"))
 
 
 def _fire_strategy_state_alert(ticker: str, strat_key: str, new_state: str, now_iso: str) -> None:
@@ -264,16 +267,26 @@ def compute_all(force: bool = False) -> None:
         always_include = set(db.get_watchlist_tickers()) | {p["ticker"] for p in db.list_positions("open")}
 
         filtered_tickers = []
+        # Strictly "passed passes_technical_filters()", NOT the broader filtered_tickers set --
+        # a watchlisted/traded ticker can be in filtered_tickers purely via always_include
+        # (has_data only, filter bypassed) without actually passing the technical filter. See
+        # docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md --
+        # Part A's entry-side alert must only fire for the real default-filter/dashboard
+        # universe, same population the dashboard itself shows.
+        passes_default_filter = set()
         for tk in _active_tickers():
             bars = data.get_bars(tk)
             has_data = bars is not None and not bars.empty
+            try:
+                technical_pass = has_data and build_universe.passes_technical_filters(bars)
+            except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
+                technical_pass = False
+            if technical_pass:
+                passes_default_filter.add(tk)
             if tk in always_include:
                 passes = has_data
             else:
-                try:
-                    passes = has_data and build_universe.passes_technical_filters(bars)
-                except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
-                    passes = False
+                passes = technical_pass
             if passes:
                 filtered_tickers.append(tk)
 
@@ -334,11 +347,11 @@ def compute_all(force: bool = False) -> None:
                         except Exception as e:  # noqa: BLE001
                             print(f"app: db.upsert_computed failed for {tk} ({e}); "
                                   f"continuing with the rest of this pass.")
-                    if payload is not None:
+                    if payload is not None and tk in passes_default_filter:
                         prior_payload = prior_by_ticker.get(tk)
                         for strat_key in _STRATEGY_MODULES:
-                            prior_state = _strategy_state((prior_payload or {}).get(strat_key))
-                            new_state = _strategy_state(payload.get(strat_key))
+                            prior_state = _strategy_entry_state((prior_payload or {}).get(strat_key))
+                            new_state = _strategy_entry_state(payload.get(strat_key))
                             if prior_state is not None and new_state is not None and new_state != prior_state:
                                 try:
                                     _fire_strategy_state_alert(tk, strat_key, new_state, _computed_asof)
