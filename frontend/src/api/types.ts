@@ -188,9 +188,9 @@ export interface AddFillBody {
 
 export interface Notification {
   id: number;
-  position_id: number;
-  kind: "tp_progress" | "stop_progress";
-  pct: number;
+  position_id: number | null;
+  kind: "tp_progress" | "stop_progress" | "strategy_state";
+  pct: number | null;
   message: string;
   created_at: string;
   read_at: string | null;

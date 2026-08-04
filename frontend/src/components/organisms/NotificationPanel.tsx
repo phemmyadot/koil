@@ -35,7 +35,9 @@ export function NotificationPanel({ onClose }: { onClose: () => void }) {
   function openNotification(n: NonNullable<typeof notifications>[number]) {
     if (!n.read_at) markRead.mutate(n.id);
     onClose();
-    navigate(`/trades/${n.position_id}`);
+    // Strategy state-change alerts have no real position to deep-link to -- the message already
+    // says everything (ticker + strategy + state), so just close the panel.
+    if (n.position_id != null) navigate(`/trades/${n.position_id}`);
   }
 
   return (

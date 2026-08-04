@@ -158,9 +158,9 @@ def _init_schema() -> None:
 
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                position_id INTEGER NOT NULL,
+                position_id INTEGER,
                 kind TEXT NOT NULL,
-                pct REAL NOT NULL,
+                pct REAL,
                 message TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 read_at TEXT
@@ -179,6 +179,7 @@ def _init_schema() -> None:
                 last_seen_at TEXT NOT NULL
             );
         """)
+    _migrate_notifications_position_id_nullable()
 
 
 def _migrate_universe_meta_date_to_epoch() -> None:
@@ -353,6 +354,39 @@ def _migrate_position_fills_price_nullable() -> None:
         _conn.execute("DROP TABLE position_fills")
         _conn.execute("ALTER TABLE position_fills_new RENAME TO position_fills")
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_position_fills_position ON position_fills(position_id)")
+
+
+def _migrate_notifications_position_id_nullable() -> None:
+    """One-time migration: notifications.position_id/pct used to be NOT NULL, back when every
+    notification was a TP/stop progress alert tied to a real Trades-tab position. See
+    docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md --
+    strategy state-change alerts (PENDING/OPEN/TP/NO SIGNAL on a ticker's own backtested signal,
+    not a real position) have no position to attach to and no meaningful pct. Same
+    create-copy-drop-rename dance as _migrate_position_fills_price_nullable; a fresh DB never
+    hits this since CREATE TABLE IF NOT EXISTS above already declares both nullable."""
+    with _lock, _conn:
+        cols = _conn.execute("PRAGMA table_info(notifications)").fetchall()
+        position_id_col = next((c for c in cols if c[1] == "position_id"), None)
+        if position_id_col is None or position_id_col[3] == 0:  # column[3] is "notnull"
+            return
+        _conn.execute("""
+            CREATE TABLE notifications_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id INTEGER,
+                kind TEXT NOT NULL,
+                pct REAL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                read_at TEXT
+            )
+        """)
+        _conn.execute("""
+            INSERT INTO notifications_new (id, position_id, kind, pct, message, created_at, read_at)
+            SELECT id, position_id, kind, pct, message, created_at, read_at FROM notifications
+        """)
+        _conn.execute("DROP TABLE notifications")
+        _conn.execute("ALTER TABLE notifications_new RENAME TO notifications")
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read_at)")
 
 
 _init_schema()
@@ -933,7 +967,7 @@ def get_trade_daily_marks_bulk(position_ids: list[int]) -> dict[int, list[dict]]
 
 # ─────────────────────────── notifications ───────────────────────────
 
-def insert_notification(position_id: int, kind: str, pct: float, message: str, created_at: str) -> int:
+def insert_notification(position_id: int | None, kind: str, pct: float | None, message: str, created_at: str) -> int:
     with _lock, _conn:
         cur = _conn.execute("""
             INSERT INTO notifications (position_id, kind, pct, message, created_at)

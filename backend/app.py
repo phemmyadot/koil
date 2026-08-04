@@ -132,6 +132,33 @@ def compute_progress() -> dict[str, int] | None:
         return dict(_compute_progress) if _compute_progress is not None else None
 
 _STRATEGY_MODULES = {"vexh": strategy_vexh, "strategy_vcp": strategy_vcp, "strategy_vcpo": strategy_vcpo}
+_STRATEGY_LABELS = {"vexh": "VEXH", "strategy_vcp": "VCP", "strategy_vcpo": "VCPO"}
+
+# See docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md.
+# Collapses each strategy's own `verdict` string down to the 4-state lifecycle the dashboard
+# card already shows (NO SIGNAL -> PENDING -> OPEN -> TP -> NO SIGNAL) -- TAKE/SKIP both mean
+# "signal fired, not yet in the strategy's own simulated position," i.e. PENDING.
+_VERDICT_TO_STATE = {
+    "NO SIGNAL": "NO SIGNAL",
+    "TAKE": "PENDING",
+    "SKIP": "PENDING",
+    "IN TRADE": "OPEN",
+    "TP HIT": "TP",
+}
+
+
+def _strategy_state(strat_payload: dict | None) -> str | None:
+    if strat_payload is None:
+        return None
+    return _VERDICT_TO_STATE.get(strat_payload.get("verdict"))
+
+
+def _fire_strategy_state_alert(ticker: str, strat_key: str, new_state: str, now_iso: str) -> None:
+    label = _STRATEGY_LABELS.get(strat_key, strat_key)
+    message = f"{ticker} — {label} is now {new_state}"
+    db.insert_notification(None, "strategy_state", None, message, now_iso)
+    payload = json.dumps({"title": f"{ticker} — {label}", "body": message, "ticker": ticker})
+    push.send_push_to_all(payload, now_iso)
 
 
 def _eval_strategy(module, ticker: str, bars, ind: dict | None) -> dict | None:
@@ -307,6 +334,16 @@ def compute_all(force: bool = False) -> None:
                         except Exception as e:  # noqa: BLE001
                             print(f"app: db.upsert_computed failed for {tk} ({e}); "
                                   f"continuing with the rest of this pass.")
+                    if payload is not None:
+                        prior_payload = prior_by_ticker.get(tk)
+                        for strat_key in _STRATEGY_MODULES:
+                            prior_state = _strategy_state((prior_payload or {}).get(strat_key))
+                            new_state = _strategy_state(payload.get(strat_key))
+                            if prior_state is not None and new_state is not None and new_state != prior_state:
+                                try:
+                                    _fire_strategy_state_alert(tk, strat_key, new_state, _computed_asof)
+                                except Exception as e:  # noqa: BLE001 - one bad alert must not break the pass
+                                    print(f"app: strategy state alert failed for {tk}/{strat_key} ({e}).")
         finally:
             with _compute_lock:
                 _compute_progress = None
