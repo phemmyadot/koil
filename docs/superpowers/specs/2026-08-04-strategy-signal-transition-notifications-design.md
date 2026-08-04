@@ -1,131 +1,170 @@
 # Strategy state-change notification — design
 
-## What's wanted
+## Revision 2: scoped down after real-world noise
 
-One notification whenever a strategy's state on a ticker changes, for any
-ticker in the universe (not just watchlisted/traded ones), covering the
-full lifecycle in order:
+Revision 1 (implemented, then reverted from "fire for everything") alerted
+on every (ticker, strategy) state change across the full active universe —
+~1400 tickers × 3 strategies. In practice this produced far too many
+alerts to be useful. Scoped down per the user's correction:
 
+- **OPEN / PENDING** (the entry side): only for tickers that pass the
+  dashboard's own default technical filter — i.e. the same universe already
+  shown on the dashboard, not the full unfiltered active-ticker set.
+- **TP / exit** (the closing side): only for the user's own real,
+  confirmed trades (the `positions` table) — **this already exists** and
+  needs no new work; see below.
+
+## Flow
+
+```mermaid
+flowchart TD
+    A["compute_all() pass:<br/>ticker recomputed"] --> B{"Passes<br/>passes_technical_filters()?<br/>(Part A gate)"}
+    B -->|No| B1["No entry-side alert.<br/>(Ticker just isn't on the<br/>dashboard's default view.)"]
+    B -->|Yes| C["Compare this strategy's<br/>new verdict-derived state<br/>to last pass's state"]
+    C --> D{"State changed?<br/>NO SIGNAL / PENDING / OPEN"}
+    D -->|No| D1[No alert]
+    D -->|"Yes (TP HIT is<br/>untracked -- no compare)"| E["Fire kind: strategy_state<br/>'{ticker} — {strategy} is now {state}'<br/>position_id: null"]
+
+    F["_update_trade_marks_and_alerts()<br/>every pass, independent of the above"] --> G{"Ticker has an OPEN<br/>real position?<br/>(db.list_positions)"}
+    G -->|No| G1[Not checked here at all]
+    G -->|"Yes (filter-independent —<br/>always checked, even if the<br/>ticker fails the technical filter)"| H["Compute pct_to_tp / pct_to_stop<br/>from real avg_cost vs tp_price/stop_price"]
+    H --> I{"Crossed a new<br/>threshold band?<br/>30/50/70/80/90/95%"}
+    I -->|No| I1[No alert]
+    I -->|Yes| J["Fire kind: tp_progress / stop_progress<br/>'{ticker} is {pct}% of the way to TP/stop'<br/>position_id: real"]
+
+    style E fill:#2554c7,color:#fff
+    style J fill:#157f3d,color:#fff
+    style B1 fill:#666,color:#fff
+    style G1 fill:#666,color:#fff
 ```
-NO SIGNAL -> PENDING -> Open -> TP -> NO SIGNAL (exit)
+
+Part A (top) and Part B (bottom) run independently, once per `compute_all()`
+pass, and never gate each other — a ticker can fire both, one, or neither
+in the same pass depending on whether it passes the technical filter
+(Part A only) and whether it has a real open position (Part B only).
+
+## Part A — OPEN/PENDING, filtered to the default-filter universe
+
+### What "default filter" means
+
+`backend/build_universe.py::passes_technical_filters(df)` — already the
+exact gate `compute_all()` uses to decide `filtered_tickers`, i.e. the
+tickers actually shown on the dashboard today:
+
+```python
+def passes_technical_filters(df: pd.DataFrame) -> bool:
+    return matches_vexh_setup(df) or matches_vcp_setup(df) or matches_vcpo_setup(df)
 ```
 
-Basic version: no per-transition wording, no separate notification kinds —
-just "this strategy's state changed, here's what it is now."
+This is a ticker-level pass/fail (true if it matches ANY strategy's entry
+setup), already computed once per pass inside `compute_all()`
+(`backend/app.py`, the `filtered_tickers` loop, ~line 239-251) — no new
+computation needed, just gating the alert on a value already sitting in
+scope at the exact point the state comparison happens.
 
-## The state, precisely
+### Revised rule
 
-Every strategy (`strategy_vcp.py`, `strategy_vcpo.py`, `strategy_vexh.py`)
-already computes everything needed on every pass, via
-`strategy_common.evaluate_strategy()`. Two fields in each strategy's payload
-fully determine the dashboard's own displayed state
-(`TickerCard.tsx`/`StrategyBadgeRow.tsx` already derive the same thing for
-the badge shown on screen):
+Fire a `PENDING`/`OPEN` state-change alert for (ticker, strategy) only if
+that ticker is in `filtered_tickers` this pass (i.e. passed
+`passes_technical_filters()`) — same population already visible on the
+dashboard, nothing hidden/filtered-out ever alerts. A ticker that's only in
+`_active_tickers()` because it's watchlisted or has an open position, but
+currently fails the technical filter, does NOT get entry-side alerts (it
+may still get real-trade TP/exit alerts via Part B if it has an open
+position — that's a separate, unrelated gate).
 
-- `signal_today: bool`
-- `open_position: dict | None` (has `days_held`, `to_tp_pct`, etc. when set)
-- `verdict: str` — `"NO SIGNAL"`, `"TAKE"`, `"SKIP"`, `"IN TRADE"`, `"TP HIT"`
+`TP`/`NO SIGNAL` transitions (the exit side of a strategy's own simulated
+signal, NOT a real trade) are dropped entirely per the scoping below — Part
+B already covers the real, user-facing version of "this closed."
 
-`verdict` alone is a clean single string that already encodes the whole
-state machine except PENDING, which the backend doesn't currently model as
-part of `verdict` (`TAKE`/`SKIP` covers "fresh signal today, not yet in the
-strategy's simulated position" — that IS what the dashboard calls PENDING,
-just under two different verdict names depending on whether the ticker's
-own backtest history shows an edge). For this notification, collapse to one
-`state` label per (ticker, strategy):
+### Detecting the change (updated)
+
+```python
+# filtered_tickers already computed earlier in compute_all() -- the set of
+# tickers that pass the dashboard's own default technical filter this pass.
+filtered_set = set(filtered_tickers)
+
+# inside the per-ticker recompute loop, once the new payload is built:
+if tk in filtered_set:
+    for strat_key in _STRATEGY_MODULES:
+        prior_state = _strategy_entry_state((prior_by_ticker.get(tk) or {}).get(strat_key))
+        new_state = _strategy_entry_state(payload.get(strat_key))
+        if prior_state is not None and new_state is not None and new_state != prior_state:
+            _fire_strategy_state_alert(tk, strat_key, new_state, now_iso)
+```
+
+`_strategy_entry_state()` replaces the old 4-branch `_strategy_state()` —
+now only 3 branches, TP HIT is no longer a state this alert tracks:
 
 | `state` | Condition |
 |---|---|
 | `NO SIGNAL` | `verdict == "NO SIGNAL"` |
-| `PENDING` | `verdict in ("TAKE", "SKIP")` (signal fired, not in simulated position yet) |
+| `PENDING` | `verdict in ("TAKE", "SKIP")` |
 | `OPEN` | `verdict == "IN TRADE"` |
-| `TP` | `verdict == "TP HIT"` |
 
-This is a straight relabeling of the existing `verdict` string — no new
-computation, just a 4-branch mapping used only at the notification-fire
-point.
+`verdict == "TP HIT"` maps to `None` (untracked) rather than a 4th state —
+so a transition INTO or OUT OF `TP HIT` is invisible to this function
+entirely; it's simply not compared. (A ticker sitting at `IN TRADE` that
+becomes `TP HIT` produces `new_state = None`, which the `is not None` guard
+already skips — no accidental alert, no accidental gap in the OPEN state
+either, since OPEN→TP HIT→open-position-still-truthy is naturally silent,
+matching "we don't alert on the strategy's own TP, only a real trade's.")
 
-## Detecting a change
+## Part B — TP/exit, already implemented via real trades
 
-`compute_all()` (`backend/app.py`) already holds the previous pass's full
-payload set in memory at exactly the point each ticker gets recomputed
-(`prior_by_ticker`, used today for the reuse-vs-recompute decision) — no
-new storage needed:
+Confirmed: `_update_trade_marks_and_alerts()` (`backend/app.py`) already
+does exactly this, and has since before this whole notification thread
+started:
 
-```python
-prior_by_ticker = {p["ticker"]: p for p in _computed}  # already exists
+- Iterates `db.list_positions("open")` — only the user's own real,
+  confirmed Trades-tab positions, never the full ticker universe.
+- **No technical-filter dependency at all** — `price_by_ticker` is sourced
+  from `_computed` (every successfully-computed ticker), not
+  `filtered_tickers`. A real trade that's lost momentum and no longer
+  passes `passes_technical_filters()` still gets checked every pass; this
+  was the exact guarantee fixed and verified earlier this session (the
+  CBRS "insufficient history shouldn't stop the trade" thread) — Part A's
+  new filter gate must never be applied here. TP/exit fires regardless of
+  whether the ticker is currently "on the dashboard" or not.
+- `_fire_threshold_alerts()` fires progress notifications
+  (`tp_progress`/`stop_progress`, `TP_STOP_ALERT_THRESHOLDS = [30, 50, 70,
+  80, 90, 95]`) as a real position's price approaches TP or stop.
+- This is a different notion of "TP" than Part A's strategy-level `TP HIT`
+  verdict — Part B is the REAL position's actual price progress toward the
+  REAL tp_price/stop_price the user set, not the strategy's own backtested
+  simulation.
 
-# inside the per-ticker recompute loop, once the new payload is built:
-for strat_key in _STRATEGY_MODULES:
-    prior_state = _strategy_state((prior_by_ticker.get(tk) or {}).get(strat_key))
-    new_state = _strategy_state(payload.get(strat_key))
-    if prior_state is not None and new_state != prior_state:
-        _fire_strategy_state_alert(tk, strat_key, new_state, now_iso)
-```
+**No new work needed for this half.** It already exists, already correctly
+scoped to real trades only. This doc's earlier "TP/NO SIGNAL (exit)" states
+for the strategy-signal side are dropped from Part A's tracked states
+(see table above) specifically because Part B already owns "did a real
+trade hit TP/exit" — tracking it twice (once per fake strategy signal, once
+per real position) is the redundancy being removed here.
 
-`_strategy_state(s)` is the 4-branch mapping above, `None` if `s` is `None`
-(ticker had no prior payload at all — e.g. its very first successful
-compute; nothing to compare against, so no alert fires on that first pass).
+## What changes vs. the original implementation
 
-Only runs for tickers actually recomputed this pass (the `to_compute`
-branch) — a reused payload (bars checksum unchanged) can't have a state
-change by construction, so it's correctly skipped without an extra check.
-
-## Which tickers / strategies
-
-All of them — every ticker in `_active_tickers()` that gets recomputed,
-across all three strategies (VEXH, VCP, VCPO) independently. Matches "any
-strategy," not scoped to watchlist/traded-only. (Noise at full-universe
-scale is a real concern — flagged below, but the basic version as
-requested doesn't scope it down.)
-
-## Notification content
-
-Same delivery mechanism the app already has —
-`db.insert_notification()` + `push.send_push_to_all()`, same pattern
-`_fire_threshold_alerts()` uses today for TP/stop progress on real
-positions.
-
-**`kind`**: `"strategy_state"` (one kind for all four states — the state
-itself is in the message, not encoded as separate kinds, per "basic" scope).
-
-**Message**: `"{ticker} — {strategy} is now {state}"`, e.g.
-`"NVDA — VCPO is now PENDING"`, `"NVDA — VCPO is now OPEN"`,
-`"NVDA — VCPO is now TP"`, `"NVDA — VCPO is now NO SIGNAL"`.
-
-`{strategy}` = existing human label (`stratLabel()` on the frontend side —
-"VCPO", "VCP", "VEXH").
-
-### `position_id` — doesn't apply here
-
-`db.insert_notification()`'s current signature is `(position_id, kind, pct,
-message, now_iso)` — built for real Trades-tab positions. A strategy state
-alert has no real position to attach to (this is explicitly about
-NOT-yet-confirmed signals). Simplest fix: make `position_id` nullable, and
-`NotificationPanel`'s row click links to the ticker's dashboard card
-(`/?ticker=X` or however the dashboard already deep-links, if it does)
-instead of `/trades/{id}` when `position_id` is null. `pct` also doesn't
-apply — pass `None`.
-
-## Where this lives
-
-Inside `compute_all()`'s per-ticker loop (`backend/app.py`), right where
-the fresh payload is finalized and compared for reuse — same place
-`prior_by_ticker` is already read. New helpers:
-
-- `_strategy_state(payload: dict | None) -> str | None`
-- `_fire_strategy_state_alert(ticker: str, strat_key: str, new_state: str, now_iso: str) -> None`
+- `_strategy_state()` → `_strategy_entry_state()`, drops the `TP HIT` →
+  `"TP"` branch (now maps to `None`, untracked).
+- The alert-fire call gets one new guard: `if tk in filtered_set` (or
+  equivalent — could also be expressed as re-deriving
+  `passes_technical_filters()` per ticker at the fire point, but reusing
+  the already-computed `filtered_tickers` set from earlier in the same
+  `compute_all()` pass is free and avoids a second technical-filter
+  evaluation).
+- Message wording: no `TP` case left to word — `"{ticker} — {strategy} is
+  now {state}"` still applies to the remaining 3 states.
+- Everything else (nullable `position_id`/`pct` migration, `kind:
+  "strategy_state"`, delivery mechanism, silent-on-cold-start rule) is
+  unchanged from the original implementation and doesn't need to be
+  reverted or redone — only the state set and the filter gate change.
 
 ## Open questions for the user
 
-1. **Noise at scale**: ~1400 tickers × 3 strategies, transitioning in and
-   out of PENDING/OPEN/TP/NO SIGNAL independently all day — this is a much
-   higher-volume notification stream than today's (which only watches the
-   user's own handful of real positions). Is full-universe scope actually
-   wanted for v1, or should this start out watchlist-only and expand later?
-2. **`position_id` nullable, or separate table?** Touches the existing
-   `notifications` schema/API — confirming nullable is fine before I change
-   a contract other code already depends on.
-3. Silent on the very first compute after a cold start/restart (no prior
-   payload to compare against) — confirming that's the right call, since
-   otherwise every ticker would fire once on every process restart.
+1. Confirmed noise fix is "filtered_tickers only" for entry-side alerts —
+   is that filtered-down volume expected to be low enough now, or does the
+   user want to watch it live for a day before deciding if watchlist-only
+   is still needed on top of this?
+2. Since `TP HIT` is now untracked by Part A, is there any remaining
+   interest in a strategy-level (not real-trade) "this simulated signal
+   fully closed" alert at all, or is dropping it entirely (relying only on
+   Part B for real trades) the whole intent?
