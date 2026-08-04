@@ -156,6 +156,27 @@ def _strategy_entry_state(strat_payload: dict | None) -> str | None:
     return _VERDICT_TO_ENTRY_STATE.get(strat_payload.get("verdict"))
 
 
+# Mirrors the dashboard's own default Advance Filter (frontend/src/constants/filterDefaults.ts:
+# ADV_WR_DEFAULT_INDEX/ADV_PF_DEFAULT_INDEX -> WR_STEPS[70]/PF_STEPS[2.5]) and its Min Trades
+# floor (frontend/src/lib/filters.ts::matchesMinTrades, default 15) -- these are today
+# frontend-only UI state with no backend representation, so the alert gate re-derives the same
+# check per strategy directly from win_rate/profit_factor/n_trades already in the payload. See
+# docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md.
+_ALERT_MIN_WIN_RATE = 70
+_ALERT_MIN_PROFIT_FACTOR = 2.5
+_ALERT_MIN_TRADES = 15
+
+
+def _passes_alert_quality_bar(strat_payload: dict | None) -> bool:
+    if strat_payload is None:
+        return False
+    return (
+        strat_payload.get("n_trades", 0) >= _ALERT_MIN_TRADES
+        and strat_payload.get("win_rate", 0) >= _ALERT_MIN_WIN_RATE
+        and strat_payload.get("profit_factor", 0) >= _ALERT_MIN_PROFIT_FACTOR
+    )
+
+
 def _fire_strategy_state_alert(ticker: str, strat_key: str, new_state: str, now_iso: str) -> None:
     label = _STRATEGY_LABELS.get(strat_key, strat_key)
     message = f"{ticker} — {label} is now {new_state}"
@@ -267,26 +288,16 @@ def compute_all(force: bool = False) -> None:
         always_include = set(db.get_watchlist_tickers()) | {p["ticker"] for p in db.list_positions("open")}
 
         filtered_tickers = []
-        # Strictly "passed passes_technical_filters()", NOT the broader filtered_tickers set --
-        # a watchlisted/traded ticker can be in filtered_tickers purely via always_include
-        # (has_data only, filter bypassed) without actually passing the technical filter. See
-        # docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md --
-        # Part A's entry-side alert must only fire for the real default-filter/dashboard
-        # universe, same population the dashboard itself shows.
-        passes_default_filter = set()
         for tk in _active_tickers():
             bars = data.get_bars(tk)
             has_data = bars is not None and not bars.empty
-            try:
-                technical_pass = has_data and build_universe.passes_technical_filters(bars)
-            except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
-                technical_pass = False
-            if technical_pass:
-                passes_default_filter.add(tk)
             if tk in always_include:
                 passes = has_data
             else:
-                passes = technical_pass
+                try:
+                    passes = has_data and build_universe.passes_technical_filters(bars)
+                except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
+                    passes = False
             if passes:
                 filtered_tickers.append(tk)
 
@@ -347,11 +358,14 @@ def compute_all(force: bool = False) -> None:
                         except Exception as e:  # noqa: BLE001
                             print(f"app: db.upsert_computed failed for {tk} ({e}); "
                                   f"continuing with the rest of this pass.")
-                    if payload is not None and tk in passes_default_filter:
+                    if payload is not None:
                         prior_payload = prior_by_ticker.get(tk)
                         for strat_key in _STRATEGY_MODULES:
+                            strat_payload = payload.get(strat_key)
+                            if not _passes_alert_quality_bar(strat_payload):
+                                continue
                             prior_state = _strategy_entry_state((prior_payload or {}).get(strat_key))
-                            new_state = _strategy_entry_state(payload.get(strat_key))
+                            new_state = _strategy_entry_state(strat_payload)
                             if prior_state is not None and new_state is not None and new_state != prior_state:
                                 try:
                                     _fire_strategy_state_alert(tk, strat_key, new_state, _computed_asof)
