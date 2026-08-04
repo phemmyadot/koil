@@ -2,15 +2,19 @@
 
 ## What's wanted
 
-A new feature, behind a feature flag: a button that triggers a "daily
-review" — Claude looks at the user's current trades, the app's strategy/
-screener data, and the user's own investment-philosophy document (a PDF
-they already have, brought into the app once), and produces a summary
-judgment. The user can then ask follow-up questions in a chat thread tied
-to that day's review. Reviews and their chats persist day over day, so the
-bot can reference "last Tuesday you were worried about X" — but the whole
-thing has to stay cheap: context has to be actively managed, not just piled
-up and resent every turn, or token cost grows unbounded with usage.
+A new feature, behind a feature flag: a new dedicated page ("Analyzer")
+with a button that triggers a "daily review" — Claude looks at the user's
+current trades, the app's strategy/screener data, and the user's own
+investment-philosophy document (a PDF/doc/markdown file they already
+have, brought into the app once), and produces a summary judgment. The
+user can then ask follow-up questions in a chat thread tied to that
+review. There is always exactly **one** active chat context — a fresh one
+each trading day, gated to when the day's closing data is actually final
+(see Part 7 for the precise time-window state machine). Reviews and their
+chats persist day over day, so the bot can reference "last Tuesday you
+were worried about X" — but the whole thing has to stay cheap: context
+has to be actively managed, not just piled up and resent every turn, or
+token cost grows unbounded with usage.
 
 This doc has nothing to do with `backend/pdf_export.py` (the app's own
 report-generation module, which writes PDFs, never reads them) — that's a
@@ -124,23 +128,72 @@ re-attachment. This is also exactly why Part 3 (retrieval) exists.
 
 ### Parsing and chunking, once, at upload time
 
-1. User uploads the PDF once via a new (feature-flagged) settings/upload
-   endpoint.
-2. Backend extracts text. `pypdf`/`pdfplumber` (new Python dependency —
-   neither is in `requirements.txt` today) for a text-based PDF; if the
-   document turns out to be scanned/image-based, the Claude API's own
-   native PDF support (`document` content block, one-time call, NOT
-   repeated per chat turn) can be used instead for this one-time
-   extraction pass, trading a single moderate one-time cost for reliable
-   text.
-3. Chunk the extracted text — target ~500–800 tokens per chunk, with
+1. User uploads the philosophy document once, via a new (feature-flagged)
+   settings/upload endpoint. **Accepted formats: `.pdf`, `.docx`, `.md`/
+   `.txt`** — dispatch on file extension/MIME type to the right extractor:
+   `pypdf`/`pdfplumber` for PDF, `python-docx` for Word, plain read for
+   Markdown/text. If a PDF turns out to be scanned/image-based, fall back
+   to the Claude API's native PDF support (`document` content block,
+   one-time call, NOT repeated per chat turn) for that one-time extraction
+   pass.
+2. Chunk the extracted text — target ~500–800 tokens per chunk, with
    modest overlap (~50–100 tokens) so a concept split across a chunk
    boundary isn't lost entirely in either chunk. Simple paragraph/heading-
    aware chunking is enough here; this is a personal philosophy document,
    not a large corpus needing sophisticated semantic chunking.
-4. Each chunk is embedded once (see Part 3) and stored.
+3. Each chunk is embedded once (see Part 3) and stored with
+   `source = 'upload'` (see below — distinguishes original-document chunks
+   from later enrichment chunks).
 
-### New DB tables
+### The document is a living memory store, not a static one-time upload
+
+Per the user's clarification: **upload happens once**, but what's
+retrievable keeps growing afterward — the same `document_chunks` table
+that holds the original document's chunks also holds later **enrichment
+chunks**, added two ways:
+
+- **Automatic**: after each daily review is generated (Part 4), a small
+  extraction step asks "is there anything here specific and durable
+  enough to remember going forward?" (a trade-specific observation, a
+  stated preference, a pattern worth flagging) and, if so, appends it as
+  a new chunk — same embedding/retrieval path as the original document,
+  just tagged with a different `source`.
+- **User-triggered**: mid-chat, the user can explicitly ask the bot to
+  remember something ("remember that I don't want to average down on
+  biotech names") — recognized via a dedicated tool call (see Part 6)
+  rather than parsed from free text, so it's a clear, auditable action
+  with its own DB row, not a heuristic guess at intent.
+
+This means `document_chunks.document_id` becomes nullable — an
+enrichment chunk isn't tied to the original uploaded file, it's tied to
+the review or chat message that produced it instead:
+
+```sql
+-- document_chunks, updated:
+CREATE TABLE document_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    document_id INTEGER REFERENCES user_documents(id),   -- NULL for enrichment chunks
+    source TEXT NOT NULL,             -- 'upload' | 'auto_enrichment' | 'user_enrichment'
+    source_review_id INTEGER REFERENCES daily_reviews(id),  -- set for enrichment chunks, NULL for 'upload'
+    chunk_index INTEGER,              -- order within the document; NULL for enrichment chunks
+    content TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_document_chunks_document ON document_chunks(document_id);
+CREATE INDEX idx_document_chunks_user ON document_chunks(user_id);
+```
+
+Retrieval (Part 3) doesn't need to treat `source` specially — an
+enrichment chunk about "I don't average down on biotech" is exactly as
+retrievable, by the same cosine-similarity search, as an original
+philosophy-document chunk about position sizing. The `source` column
+exists for transparency/debugging (so the user or a future settings UI
+can tell what came from the original upload vs. what the bot learned
+later), not to change retrieval behavior.
+
+### New DB table (document metadata only — see above for `document_chunks`)
 
 ```sql
 CREATE TABLE user_documents (
@@ -148,29 +201,63 @@ CREATE TABLE user_documents (
     user_id INTEGER NOT NULL,        -- DEFAULT_USER_ID today; real FK once auth lands
     filename TEXT NOT NULL,
     file_path TEXT NOT NULL,        -- path under the persistent volume
+    file_type TEXT NOT NULL,        -- 'pdf' | 'docx' | 'md' | 'txt'
     uploaded_at TEXT NOT NULL,
     status TEXT NOT NULL             -- 'processing' | 'ready' | 'failed'
 );
 CREATE INDEX idx_user_documents_user ON user_documents(user_id);
-
-CREATE TABLE document_chunks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,        -- denormalized from user_documents, avoids a join on every retrieval query
-    document_id INTEGER NOT NULL REFERENCES user_documents(id),
-    chunk_index INTEGER NOT NULL,    -- order within the document
-    content TEXT NOT NULL,
-    embedding BLOB NOT NULL,         -- see Part 3 for format
-    created_at TEXT NOT NULL
-);
-CREATE INDEX idx_document_chunks_document ON document_chunks(document_id);
-CREATE INDEX idx_document_chunks_user ON document_chunks(user_id);
 ```
 
-Re-uploading a new version of the document (the user revises their
-philosophy) creates a new `user_documents` row and new chunks — old chunks
-stay (for the review history that referenced them) unless explicitly
-pruned; the "active" document per user is whichever `status='ready'` row
-is most recent for that `user_id`.
+Per the user's decision (upload once, no version-management UI): a
+`user_documents` row is created once per user and not expected to be
+replaced routinely. If the user does re-upload, the newer `status='ready'`
+row becomes active; old chunks are not deleted (kept for the review
+history that already referenced them), but this is not a designed/exposed
+workflow for v1 — just a consequence of not hard-blocking a second upload.
+
+### First-visit onboarding prompt — once per user's lifecycle, ever
+
+The very first time the Analyzer page is opened, the user sees an
+upload-or-skip prompt: upload the philosophy document now, or explicitly
+choose "start clean" (no document — the bot works from app data +
+whatever gets enriched into memory over time, per Part 6, without an
+initial philosophy baseline). Whichever path they pick, **this prompt
+must never appear again** — not "until they upload," but permanently,
+for the lifetime of their account.
+
+This can't be gated on "does a `user_documents` row exist," because
+"start clean" is a valid, permanent choice that deliberately produces no
+row — checking for a row's existence can't distinguish "hasn't decided
+yet" from "decided to skip." A separate decision marker is needed, and
+since there's no real per-user account system yet (same
+`DEFAULT_USER_ID` situation as everywhere else in this design), the
+simplest correct answer for now is an **env var, toggled manually**:
+
+```
+# .env
+DAILY_REVIEW_ONBOARDED=false   # flip to true by hand, once, after the
+                                 # user uploads or explicitly skips
+```
+
+- `GET /api/review/status` (or a small dedicated
+  `GET /api/review/onboarding-status`) reports this flag's current value
+  to the frontend; the Analyzer page shows the upload-or-skip prompt only
+  when it's `false`.
+- There is deliberately **no API endpoint that flips it** — per "manual,"
+  this is a human action (edit `.env`, restart), same operational model
+  as every other flag in this app today. The frontend's "start clean"
+  button doesn't call an endpoint that sets a DB row and moves on; it
+  surfaces a one-time instruction ("tell your operator to set
+  `DAILY_REVIEW_ONBOARDED=true`" — or, more realistically for a
+  single-operator app, this is the point where flipping the var by hand
+  in the deployed `.env` is just the actual next step, not something the
+  UI needs to fully automate for v1).
+- **This is explicitly a placeholder for real per-user state.** Once
+  actual accounts exist (`docs/superpowers/specs/2026-08-04-multi-user-trades-design.md`),
+  this single global boolean is replaced by a real
+  `users.onboarded_at` column (or similar) — same "hardcoded env var
+  today, real per-user column later" pattern as `DEFAULT_USER_ID` itself,
+  not a new kind of technical debt this feature introduces on its own.
 
 ## Part 2 — Getting current app data into the review
 
@@ -302,19 +389,23 @@ The **query** used for retrieval is different at each point:
 CREATE TABLE daily_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,           -- DEFAULT_USER_ID today
-    review_date TEXT NOT NULL,          -- one review per user per calendar day
+    review_date TEXT NOT NULL,          -- the TRADING date this review covers -- the date whose
+                                          -- 4pm close data was used, NOT the calendar date of every
+                                          -- chat message (a review started Tue 4pm and chatted on
+                                          -- through Wed 6am is still "Tuesday's review" -- see Part 7)
+    status TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'locked' -- see Part 7
     summary_text TEXT NOT NULL,          -- Claude's generated review
     embedding BLOB NOT NULL,             -- for future similarity search
     snapshot_json TEXT NOT NULL,         -- the Part 2 snapshot, frozen at generation time
     created_at TEXT NOT NULL,
-    UNIQUE (user_id, review_date)        -- was a bare UNIQUE on review_date -- must be per-user
+    UNIQUE (user_id, review_date)        -- one review per user per TRADING date
 );
 CREATE INDEX idx_daily_reviews_user ON daily_reviews(user_id);
 
 CREATE TABLE review_chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     review_id INTEGER NOT NULL REFERENCES daily_reviews(id),
-    role TEXT NOT NULL,                  -- 'user' | 'assistant'
+    role TEXT NOT NULL,                  -- 'user' | 'assistant' | 'system' -- see Part 7's lock notice
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -326,11 +417,12 @@ same "inherit scoping through the parent" pattern the multi-user doc
 already uses for `position_fills`/`trade_daily_marks` (no denormalized
 column needed; a chat message never exists without its owning review).
 
-Chat messages are scoped to one day's review — asking a follow-up on
-Tuesday's review is a conversation about Tuesday's snapshot, not a single
-endless thread. This bounds an individual conversation's natural length
-(one trading day's worth of Q&A) without needing to invent an arbitrary
-cutoff.
+Chat messages are scoped to one review cycle (one trading date's close
+data) — asking a follow-up any time from 4pm through the next 7am is a
+conversation about the same fixed snapshot, never a single endless
+thread, and never mixes two different trading dates' data. This bounds
+an individual conversation's natural length without needing to invent an
+arbitrary cutoff — see Part 7 for exactly when a cycle opens and locks.
 
 ### The rolling memory summary (past patterns)
 
@@ -424,6 +516,179 @@ beta) on that one day's `review_chat_messages` thread specifically —
 scoped to a single day's conversation, not attempted across days (which
 the architecture above already prevents from ever needing to happen).
 
+## Part 6 — Memory enrichment: writing back into the document store
+
+Parts 1–5 cover reading from the memory store (philosophy doc + past
+reviews). This part covers the two ways new content gets **written** into
+it after the initial upload.
+
+### Automatic: post-review extraction
+
+Right after a daily review's `summary_text` is generated (Part 4), one
+extra Claude call — same request or a cheap follow-up, `claude-sonnet-5`
+— is asked a narrow question: *"Is there anything in this review worth
+remembering as a standing fact about this user's trading, independent of
+today specifically? If yes, state it in one or two sentences. If no,
+say nothing."* This is deliberately narrow (not "summarize the review,"
+which is what `review_memory_summary`/Part 4 already does) — it's asking
+for durable, specific, retrievable facts (a stated rule, a recurring
+behavior pattern, a named ticker-specific concern), the same kind of
+content the original philosophy document itself contains, so it belongs
+in the same retrievable chunk store, not just folded into the rolling
+prose summary.
+
+If the model returns something, it's embedded and inserted as one new
+`document_chunks` row: `source='auto_enrichment'`, `document_id=NULL`,
+`source_review_id=<this review's id>`.
+
+### User-triggered: explicit "remember this"
+
+Mid-chat, the user can ask the bot to remember something specific. This
+is implemented as a **tool** the model can call during the chat
+conversation (Claude API tool use — see `shared/tool-use-concepts.md`),
+not free-text pattern matching on the user's message:
+
+```json
+{
+  "name": "remember_fact",
+  "description": "Save a specific, durable fact about the user's trading style, preferences, or a particular ticker/situation, for retrieval in future reviews and conversations. Use this when the user explicitly asks you to remember something, or states a clear standing preference/rule they want applied going forward.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "fact": {"type": "string", "description": "The fact to remember, written as a standalone statement (it will be retrieved later without today's conversation for context)."}
+    },
+    "required": ["fact"]
+  }
+}
+```
+
+When called, the backend embeds `fact` and inserts a `document_chunks`
+row: `source='user_enrichment'`, `document_id=NULL`,
+`source_review_id=<the review this chat belongs to>`. The tool result
+confirms back to the model ("Saved.") so it can acknowledge to the user
+in the same turn.
+
+Both paths write to the same table Part 3's retrieval already reads from
+— no separate retrieval logic needed for enrichment vs. original-document
+content.
+
+## Part 7 — Review-cycle gating: when the button/chat are live
+
+This is a **new page** ("Analyzer" or similar — not a modal off an
+existing page), with one review cycle live at a time. The gating is time-
+window-based, keyed off the same close-boundary/last-fetch machinery the
+market-hours background loop (`backend/market_hours.py`,
+`db.get_last_close_fetch_at()`) already tracks for itself — no new
+scheduling infrastructure needed, this feature just reads state that
+already exists.
+
+### The four windows
+
+| Window (America/New_York) | Button | Existing chat | Why |
+|---|---|---|---|
+| 7:00am – 4:00pm | Disabled | Locked, unreachable | Market open — price/position data is changing intraday, a review generated now would be stale by the time it's read |
+| 4:00pm – (post-close fetch lands) | Disabled | N/A (nothing started yet) | Close has happened but the background loop hasn't yet run its once-per-close-period fetch (`db.get_last_close_fetch_at()` still older than today's close boundary) — data isn't final yet |
+| (post-close fetch lands) – 11:59pm | **Enabled** | Live, if already started | Close data is fetched and fixed for the rest of the cycle — safe to review and discuss |
+| 12:00am – 6:59am | Disabled (new trigger) | **Still live**, if started the evening before | Same trading date's data, still fixed — a review started at 9pm Tuesday is still "Tuesday's review" at 5am Wednesday, so the button to START a NEW one is off (nothing new to review, market hasn't opened) but the EXISTING chat keeps working |
+
+Two independent things are being gated, not one:
+1. **Can the user START a new review right now?** — only true in the
+   narrow "post-close fetch landed" → 11:59pm window.
+2. **Can the user CONTINUE an existing chat right now?** — true from
+   whenever it was started through 6:59am the next morning, regardless
+   of calendar-date rollover, as long as it hasn't been explicitly
+   locked (see below).
+
+### Why the button isn't just "is the market closed"
+
+A naive `not is_market_open(now)` check would enable the button the
+instant the clock hits 4:00pm — but the background loop's own
+once-per-close-period fetch (Part of the market-hours design,
+`2026-08-03-market-hours-background-fetch-design.md`) takes real time to
+run (fetch + compute across the whole active ticker universe — measured
+at ~35 minutes on the real production server per that doc's own timing
+data). Enabling the button at 4:00:01pm would let the user trigger a
+review against **stale, pre-close** data. The actual readiness check is:
+
+```python
+def review_available_to_start(now: datetime) -> bool:
+    if market_hours.is_market_open(now):
+        return False
+    boundary = market_hours.most_recent_close_boundary(now)
+    last_close_fetch = db.get_last_close_fetch_at()
+    if last_close_fetch is None:
+        return False
+    return datetime.fromisoformat(last_close_fetch) >= boundary
+```
+
+This is exactly the same staleness check `_on_startup`'s background loop
+already runs on itself (`backend/app.py`, the market-hours dispatch
+block) — reused here, not reimplemented. Additionally gated to the
+4:00pm–11:59pm window specifically (not "any time after the fetch is
+fresh," which would also be true at 3am) — a fresh `last_close_fetch_at`
+plus `now.time() < time(0, 0)` gates out the post-midnight case where a
+*new* review shouldn't start even though the data is technically still
+fresh (Part of the design: a new review only makes sense once per
+trading day, right after that day's close).
+
+### Locking an active chat at 7am
+
+If a chat is still open when 7:00am arrives (whether the user is
+actively typing or it's just sitting idle since 9pm the night before),
+the NEXT interaction (or a background check — see open question below)
+must:
+1. Insert one final `role='system'` message into that review's
+   `review_chat_messages` (visible in the transcript, distinct from
+   `'assistant'` so the frontend can style it differently — a system
+   notice, not something Claude generated) stating the session has
+   ended for the day.
+2. Set `daily_reviews.status = 'locked'` for that review.
+3. Reject any further `POST /api/review/daily/{date}/chat` calls against
+   a `locked` review with a clear error, not a silent no-op.
+
+### Flow
+
+```mermaid
+flowchart TD
+    A["7:00am"] -->|"market opens"| B["7:00am - 4:00pm<br/>DISABLED<br/>no new review, no chat"]
+    B -->|"4:00pm, market closes"| C["4:00pm - fetch lands<br/>DISABLED<br/>waiting on post-close fetch/compute"]
+    C -->|"background loop's once-per-close-period<br/>fetch+compute completes<br/>(db.get_last_close_fetch_at() >= today's close boundary)"| D["ENABLED<br/>button live"]
+    D -->|"user clicks button"| E["Fresh chat starts<br/>new daily_reviews row (status=active)<br/>review_date = today's trading date"]
+    E -->|"user sends messages"| F["Chat continues<br/>4:00pm -> 6:59am next day<br/>same trading date's fixed data"]
+    D -->|"11:59pm passes, no click"| G["Cycle simply never started<br/>-- no review row created"]
+    F -->|"7:00am arrives"| H["Bot posts lock notice<br/>(role='system' message)<br/>daily_reviews.status = 'locked'"]
+    H --> B
+
+    style D fill:#157f3d,color:#fff
+    style B fill:#666,color:#fff
+    style C fill:#666,color:#fff
+    style H fill:#b3261e,color:#fff
+```
+
+### Open question this raises
+
+**Who actually fires the 7am lock?** Two options:
+1. **Lazy, on next access** — the lock check runs whenever
+   `GET /api/review/daily/{date}` or the chat endpoint is next called
+   after 7am; if the review is still `active` and it's past 7am, lock it
+   right then before processing the request. Simple, no new background
+   job, but the system-message notice only appears once the user
+   actually reopens the page — if they never come back, the row just
+   sits `active` forever with no notice ever inserted (harmless, but the
+   "locked" state technically never gets set until someone looks).
+2. **Proactive, background-loop-driven** — piggyback on the existing
+   7am-ish background wake (the market-hours loop already wakes around
+   market open) to lock any still-`active` review and insert the notice
+   even if the user isn't looking. Guarantees the notice exists whenever
+   they do come back, at the cost of one more thing riding on the
+   background loop.
+
+Leaning toward (1) for v1 — simpler, and the practical difference is only
+whether the lock notice is inserted eagerly vs. lazily; the user
+experience (can't send new messages after 7am) is identical either way.
+Flagging as a build-time decision, not re-opening the whole design for
+it.
+
 ## Feature flag
 
 Per `.env`'s existing (currently unused) `SHOW_*` boolean convention —
@@ -437,30 +702,29 @@ new var `ENABLE_DAILY_REVIEW` (default `false`), gating:
 ## New dependencies
 
 ```
-pypdf                    # or pdfplumber -- PDF text extraction at upload time
+pypdf                    # PDF text extraction at upload time
+python-docx               # .docx text extraction at upload time
 sentence-transformers    # local embeddings, no external API dependency
 anthropic                # Claude API client -- not currently a dependency at all
 numpy                    # already a dependency (via pandas/backtesting) -- no new addition
 ```
 
-## Open questions for whenever this is picked up
+`.md`/`.txt` uploads need no extraction library — read as plain text.
 
-1. **Model choice for the review itself.** Per this skill's defaults,
-   `claude-opus-5` unless there's a reason to go cheaper — a once-daily
-   trigger plus a handful of follow-ups is low enough volume that Opus-
-   tier quality is affordable regardless. Sonnet only if cost becomes a
-   real concern at higher usage.
-2. **Who triggers the daily review** — purely a manual button click (as
-   asked), or should it also fire automatically once/day (e.g. tied to
-   the market-hours background loop from the earlier design doc)? The
-   request says "triggered by button," so manual-only is what's designed
-   above; flagging in case an automatic daily trigger is also wanted
-   later.
-3. **PDF re-upload / versioning UX** — does the user want to see/manage
-   multiple past versions of their philosophy doc, or just always
-   overwrite with the latest?
-4. **Rolling memory summary's own audit trail** — should old versions of
-   `review_memory_summary` be kept (a lightweight version history, similar
-   to how `memory_versions` work in Managed Agents) so the user can see
-   how "what the bot thinks it knows about my patterns" evolved, or is
-   the current single-row-overwritten version enough?
+## Decisions (resolved)
+
+1. **Model: `claude-sonnet-5`** for the review generation and follow-up
+   chat (user's explicit choice, overriding this skill's Opus-first
+   default).
+2. **Trigger: button only.** No automatic/scheduled daily review — matches
+   the original ask exactly, not tied to the market-hours background loop.
+3. **Document upload: once, offered via a first-visit onboarding prompt
+   (upload now or explicitly "start clean"), gated so it never appears
+   again via a manually-toggled `DAILY_REVIEW_ONBOARDED` env var** — see
+   "First-visit onboarding prompt" above. No version-management UI. The
+   document itself is a **living memory store** — see "The document is a
+   living memory store" above — enriched over time via automatic
+   post-review extraction and explicit user "remember this" requests,
+   both appended as new `document_chunks` rows (`source` column
+   distinguishes them from the original upload).
+4. **Rolling memory summary: overwrite only, no version history** for v1.
