@@ -976,19 +976,39 @@ def insert_notification(position_id: int | None, kind: str, pct: float | None, m
         return cur.lastrowid
 
 
+NOTIFICATIONS_LIST_MIN = 20  # see list_notifications's own docstring
+
+
 def list_notifications(unread_only: bool = False) -> list[dict]:
+    """unread_only=True: every unread row, no cap (this is what drives the bell's badge count,
+    which must always be a true count). unread_only=False: all unread rows are ALWAYS included
+    (never trimmed to fit a limit), topped up with the most recent read rows until the total
+    reaches NOTIFICATIONS_LIST_MIN (20) -- so >=20 unread shows exactly those with no read rows
+    mixed in, and <20 unread fills the rest of the panel with recent history instead of leaving
+    it looking sparse. See
+    docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md."""
+    cols = ["id", "position_id", "kind", "pct", "message", "created_at", "read_at"]
     with _lock:
         if unread_only:
             rows = _conn.execute(
                 "SELECT id, position_id, kind, pct, message, created_at, read_at "
                 "FROM notifications WHERE read_at IS NULL ORDER BY created_at DESC"
             ).fetchall()
-        else:
-            rows = _conn.execute(
+            return [dict(zip(cols, r)) for r in rows]
+
+        unread_rows = _conn.execute(
+            "SELECT id, position_id, kind, pct, message, created_at, read_at "
+            "FROM notifications WHERE read_at IS NULL ORDER BY created_at DESC"
+        ).fetchall()
+        read_needed = max(NOTIFICATIONS_LIST_MIN - len(unread_rows), 0)
+        read_rows = []
+        if read_needed:
+            read_rows = _conn.execute(
                 "SELECT id, position_id, kind, pct, message, created_at, read_at "
-                "FROM notifications ORDER BY created_at DESC"
+                "FROM notifications WHERE read_at IS NOT NULL ORDER BY created_at DESC LIMIT ?",
+                (read_needed,),
             ).fetchall()
-    cols = ["id", "position_id", "kind", "pct", "message", "created_at", "read_at"]
+    rows = sorted(unread_rows + read_rows, key=lambda r: r[5], reverse=True)  # r[5] = created_at
     return [dict(zip(cols, r)) for r in rows]
 
 
