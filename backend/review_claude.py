@@ -163,11 +163,17 @@ def generate_daily_review(snapshot: dict, retrieved_chunks: list[dict], memory_s
     content.append({"type": "text", "text": "Give today's review."})
     response = _client().messages.create(
         model=MODEL,
-        max_tokens=2000,
+        # A review with several open positions and pending signals (each getting its own
+        # paragraph of commentary) can run well past 2000 tokens -- raised to leave real
+        # headroom rather than risk a silent mid-sentence cutoff.
+        max_tokens=4000,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": content}],
     )
-    return "".join(b.text for b in response.content if b.type == "text")
+    text = "".join(b.text for b in response.content if b.type == "text")
+    if response.stop_reason == "max_tokens":
+        text += "\n\n*(Note: this review was cut off before finishing -- it hit its length limit. Ask a follow-up if something you needed isn't here.)*"
+    return text
 
 
 def chat_reply(

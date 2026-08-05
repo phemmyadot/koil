@@ -180,9 +180,18 @@ def _passes_alert_quality_bar(payload: dict | None, strat_key: str, strat_payloa
     return quality_filter.passes_default_filter(payload, strat_payload)
 
 
-def _fire_strategy_state_alert(ticker: str, strat_key: str, new_state: str, now_iso: str) -> None:
+def _fire_strategy_state_alert(ticker: str, strat_key: str, prior_state: str, new_state: str, now_iso: str) -> None:
     label = _STRATEGY_LABELS.get(strat_key, strat_key)
-    message = f"{ticker} — {label} is now {new_state}"
+    # A transition INTO "NO SIGNAL" means two different things depending on where it came from --
+    # OPEN->NO SIGNAL is a real exit; PENDING->NO SIGNAL is a signal that expired before ever
+    # being entered. Only the former is an "EXIT."
+    if new_state == "NO SIGNAL" and prior_state == "OPEN":
+        display_state = "EXIT"
+    elif new_state == "NO SIGNAL" and prior_state == "PENDING":
+        display_state = "NO SIGNAL (pending signal expired)"
+    else:
+        display_state = new_state
+    message = f"{ticker} — {label} is now {display_state}"
     db.insert_notification(None, "strategy_state", None, message, now_iso)
     payload = json.dumps({"title": f"{ticker} — {label}", "body": message, "ticker": ticker})
     push.send_push_to_all(payload, now_iso)
@@ -376,7 +385,7 @@ def compute_all(force: bool = False) -> None:
                             new_state = _strategy_entry_state(strat_payload)
                             if prior_state is not None and new_state is not None and new_state != prior_state:
                                 try:
-                                    _fire_strategy_state_alert(tk, strat_key, new_state, _computed_asof)
+                                    _fire_strategy_state_alert(tk, strat_key, prior_state, new_state, _computed_asof)
                                 except Exception as e:  # noqa: BLE001 - one bad alert must not break the pass
                                     print(f"app: strategy state alert failed for {tk}/{strat_key} ({e}).")
         finally:

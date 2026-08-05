@@ -102,7 +102,26 @@
 .analyzer-chat-msg p {
   margin: 2px 0 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.5;
+}
+.analyzer-chat-msg table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 13px;
+}
+.analyzer-chat-msg th,
+.analyzer-chat-msg td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+.analyzer-chat-msg th {
+  color: var(--muted);
+  font-weight: 600;
 }
 .analyzer-chat-role {
   font-size: 10.5px;
@@ -127,6 +146,41 @@
 .analyzer-chat-msg-system p {
   color: var(--muted);
   font-style: italic;
+}
+
+.analyzer-thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+.analyzer-thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: analyzer-thinking-bounce 1.2s infinite ease-in-out;
+}
+.analyzer-thinking-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.analyzer-thinking-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes analyzer-thinking-bounce {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .analyzer-thinking-dots span {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 
 .analyzer-chat-input-row {

@@ -210,7 +210,7 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [review?.chat_messages.length]);
+  }, [review?.chat_messages.length, sendMessage.isPending]);
 
   if (isLoading || !review) {
     return <p className="analyzer-loading">Loading&hellip;</p>;
@@ -238,6 +238,16 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
             <LightMarkdown text={m.content} />
           </div>
         ))}
+        {sendMessage.isPending && (
+          <div className="analyzer-chat-msg analyzer-chat-msg-assistant analyzer-chat-msg-thinking">
+            <span className="analyzer-chat-role">Analyzer</span>
+            <span className="analyzer-thinking-dots" aria-label="Analyzer is thinking">
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+        )}
       </div>
       <div className="analyzer-chat-input-row">
         <input
