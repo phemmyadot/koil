@@ -11,6 +11,10 @@ import anthropic
 
 MODEL = "claude-sonnet-5"
 
+
+class ReviewTruncatedError(Exception):
+    """Raised when generate_daily_review()'s response hit max_tokens before finishing."""
+
 SYSTEM_PROMPT = """You are a trading review assistant for a single user's personal trading \
 app. Each trading day, once the market has closed and that day's data is final, you produce a \
 review of the user's current open positions and today's new entry signals, grounded in their \
@@ -178,17 +182,21 @@ def generate_daily_review(snapshot: dict, retrieved_chunks: list[dict], memory_s
     content.append({"type": "text", "text": "Give today's review."})
     response = _client().messages.create(
         model=MODEL,
-        # A review with several open positions, pending signals, and open_signals (each getting
-        # its own paragraph of commentary) can run well past 4000 tokens -- raised again to
-        # leave real headroom rather than risk a silent mid-sentence cutoff.
-        max_tokens=6000,
+        max_tokens=4000,
+        # Sonnet 5 runs adaptive thinking by default when `thinking` is omitted (unlike prior
+        # Sonnet models) -- this task is a structured writeup from data already in hand, not
+        # open-ended reasoning, so thinking is disabled outright rather than left to spend a
+        # large, unpredictable share of max_tokens (measured: over half the output budget went
+        # to invisible thinking tokens before any review text was written).
+        thinking={"type": "disabled"},
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": content}],
     )
-    text = "".join(b.text for b in response.content if b.type == "text")
     if response.stop_reason == "max_tokens":
-        text += "\n\n*(Note: this review was cut off before finishing -- it hit its length limit. Ask a follow-up if something you needed isn't here.)*"
-    return text
+        # Don't save a truncated review -- the caller should surface this as a clean failure
+        # so the user can retry, rather than persisting broken/incomplete output for the day.
+        raise ReviewTruncatedError("review generation hit its length limit before finishing")
+    return "".join(b.text for b in response.content if b.type == "text")
 
 
 def chat_reply(
@@ -213,9 +221,12 @@ def chat_reply(
     messages.append({"role": "user", "content": user_message})
 
     client = _client()
+    # thinking disabled -- see generate_daily_review()'s note; same latency/truncation risk
+    # applies to chat replies, and this isn't open-ended reasoning either.
     response = client.messages.create(
         model=MODEL,
         max_tokens=1500,
+        thinking={"type": "disabled"},
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[REMEMBER_FACT_TOOL],
         messages=messages,
@@ -239,6 +250,7 @@ def chat_reply(
         response = client.messages.create(
             model=MODEL,
             max_tokens=1500,
+            thinking={"type": "disabled"},
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
             tools=[REMEMBER_FACT_TOOL],
             messages=messages,
@@ -255,6 +267,7 @@ def extract_enrichment_fact(review_summary_text: str) -> str | None:
     response = _client().messages.create(
         model=MODEL,
         max_tokens=200,
+        thinking={"type": "disabled"},
         messages=[{
             "role": "user",
             "content": (
@@ -281,6 +294,7 @@ def update_rolling_memory(prior_summary: str | None, new_review_text: str) -> st
     response = _client().messages.create(
         model=MODEL,
         max_tokens=500,
+        thinking={"type": "disabled"},
         messages=[{
             "role": "user",
             "content": (

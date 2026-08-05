@@ -1,19 +1,11 @@
 # Bugs
 
-All fixed and verified live (real API calls, real browser via Playwright):
-
-- [x] "no signal" alert on an exit was indistinguishable from a ticker that never had a signal.
-  Now says "EXIT" when the prior state was OPEN, and "NO SIGNAL (pending signal expired)" when
-  the prior state was PENDING -- two different events, two different messages.
-- [x] Chat message not appearing until refresh. useSendReviewChatMessage now optimistically
-  appends the user's message to the cache on send, instead of waiting for the full round-trip
-  to invalidate/refetch.
-- [x] Chat message area overflow/width. Added `overflow-wrap: anywhere` on message text, and
-  discovered the underlying cause was deeper: LightMarkdown had no table support at all, so
-  every `| cell | cell |` row rendered as its own broken paragraph. Added real `<table>`
-  rendering with horizontal scroll on its own container.
-- [x] Partial/cut-off review summary. `generate_daily_review()`'s `max_tokens` was too low
-  (2000) for a review covering multiple positions and signals with per-item commentary; raised
-  to 4000, plus a visible note appended if a response ever does hit the limit again.
-- [x] No thinking animation while the chatbot is processing. Added an animated three-dot
-  indicator bubble shown while a chat reply is pending, respecting `prefers-reduced-motion`.
+- [x] Review generation was slow (45s+) and sometimes hit its length limit mid-review, leaving
+  a stuck "cut off" note permanently saved with no way to regenerate. Root cause: Claude Sonnet 5
+  runs adaptive thinking by default when `thinking` isn't set (unlike prior Sonnet models) --
+  over half the output budget was going to invisible thinking tokens before any review text was
+  written. Fixed by explicitly disabling thinking on all review_claude.py calls (this is
+  structured writeup from data already in hand, not open-ended reasoning) -- cut real generation
+  time from 48s to ~18-21s. Also stopped saving a truncated review at all: generate_daily_review()
+  now raises ReviewTruncatedError instead of appending a note, and the trigger endpoint returns a
+  502 so the user can just retry rather than being stuck with broken output for the day.

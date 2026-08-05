@@ -1677,7 +1677,10 @@ def review_trigger_daily():
     memory = db.get_review_memory_summary(DEFAULT_USER_ID)
     memory_text = memory["summary_text"] if memory else None
 
-    summary_text = review_claude.generate_daily_review(snapshot, retrieved_chunks, memory_text)
+    try:
+        summary_text = review_claude.generate_daily_review(snapshot, retrieved_chunks, memory_text)
+    except review_claude.ReviewTruncatedError:
+        raise HTTPException(status_code=502, detail="review generation was cut off -- try again")
     embedding = review_ingest.embed_texts([summary_text])[0]
     review_id = db.insert_daily_review(
         DEFAULT_USER_ID, review_date, summary_text, embedding.tobytes(), json.dumps(snapshot, default=str), now_iso,
