@@ -14,6 +14,7 @@ import {
 } from "../../constants/filterDefaults";
 import { ADV_STRATEGIES, type StrategyShortKey } from "../../constants/strategy";
 import type { AdvFilterState, PrebreakFilterState } from "../../lib/filters";
+import type { FilterDefaultsResponse } from "../../api/types";
 import "./FilterBar.css";
 
 export interface FilterBarState {
@@ -33,6 +34,18 @@ export function defaultFilterBarState(): FilterBarState {
     adv: { strategy: ADV_STRATEGY_DEFAULT, wrMin: WR_STEPS[ADV_WR_DEFAULT_INDEX], pfMin: PF_STEPS[ADV_PF_DEFAULT_INDEX] },
     tradeOnStrats: [],
     prebreak: { phaseMin: PHASE_STEPS[PHASE_DEFAULT_INDEX][1], coilMin: COIL_STEPS[COIL_DEFAULT_INDEX], switches: {} },
+  };
+}
+
+// Builds FilterBarState from backend/quality_filter.py's DEFAULT_FILTER.
+export function filterBarStateFromDefaults(defaults: FilterDefaultsResponse): FilterBarState {
+  const strategy = (defaults.strategies[0] ?? ADV_STRATEGY_DEFAULT) as StrategyShortKey;
+  return {
+    tickerSearch: "",
+    minTrades: defaults.min_trades,
+    adv: { strategy, wrMin: defaults.min_win_rate, pfMin: defaults.min_profit_factor },
+    tradeOnStrats: [],
+    prebreak: { phaseMin: defaults.min_phase_score, coilMin: defaults.min_coil_bars, switches: {} },
   };
 }
 

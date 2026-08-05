@@ -10,6 +10,16 @@ export interface MetaResponse {
   daily_review_enabled: boolean;
 }
 
+// backend/quality_filter.py's DEFAULT_FILTER.
+export interface FilterDefaultsResponse {
+  strategies: string[];
+  min_win_rate: number;
+  min_profit_factor: number;
+  min_trades: number;
+  min_phase_score: number;
+  min_coil_bars: number;
+}
+
 export interface OpenPosition {
   entry_date: string;
   entry_price: number;

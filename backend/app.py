@@ -70,6 +70,7 @@ import backend.market_hours as market_hours
 import backend.options_pricing as options_pricing
 import backend.pdf_export as pdf_export
 import backend.push as push
+import backend.quality_filter as quality_filter
 import backend.review_claude as review_claude
 import backend.review_gating as review_gating
 import backend.review_ingest as review_ingest
@@ -166,25 +167,17 @@ def _strategy_entry_state(strat_payload: dict | None) -> str | None:
     return _VERDICT_TO_ENTRY_STATE.get(strat_payload.get("verdict"))
 
 
-# Mirrors the dashboard's own default Advance Filter (frontend/src/constants/filterDefaults.ts:
-# ADV_WR_DEFAULT_INDEX/ADV_PF_DEFAULT_INDEX -> WR_STEPS[70]/PF_STEPS[2.5]) and its Min Trades
-# floor (frontend/src/lib/filters.ts::matchesMinTrades, default 15) -- these are today
-# frontend-only UI state with no backend representation, so the alert gate re-derives the same
-# check per strategy directly from win_rate/profit_factor/n_trades already in the payload. See
-# docs/superpowers/specs/2026-08-04-strategy-signal-transition-notifications-design.md.
-_ALERT_MIN_WIN_RATE = 70
-_ALERT_MIN_PROFIT_FACTOR = 2.5
-_ALERT_MIN_TRADES = 15
+# strat_key is a wire key (e.g. "strategy_vcpo") -- compare against the wire-key form of
+# quality_filter.DEFAULT_FILTER["strategies"].
+_DEFAULT_FILTER_WIRE_STRATEGIES = {
+    quality_filter.STRATEGY_WIRE_KEY[s] for s in quality_filter.DEFAULT_FILTER["strategies"]
+}
 
 
-def _passes_alert_quality_bar(strat_payload: dict | None) -> bool:
-    if strat_payload is None:
+def _passes_alert_quality_bar(payload: dict | None, strat_key: str, strat_payload: dict | None) -> bool:
+    if strat_key not in _DEFAULT_FILTER_WIRE_STRATEGIES:
         return False
-    return (
-        strat_payload.get("n_trades", 0) >= _ALERT_MIN_TRADES
-        and strat_payload.get("win_rate", 0) >= _ALERT_MIN_WIN_RATE
-        and strat_payload.get("profit_factor", 0) >= _ALERT_MIN_PROFIT_FACTOR
-    )
+    return quality_filter.passes_default_filter(payload, strat_payload)
 
 
 def _fire_strategy_state_alert(ticker: str, strat_key: str, new_state: str, now_iso: str) -> None:
@@ -372,7 +365,7 @@ def compute_all(force: bool = False) -> None:
                         prior_payload = prior_by_ticker.get(tk)
                         for strat_key in _STRATEGY_MODULES:
                             strat_payload = payload.get(strat_key)
-                            if not _passes_alert_quality_bar(strat_payload):
+                            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
                                 continue
                             prior_state = _strategy_entry_state((prior_payload or {}).get(strat_key))
                             new_state = _strategy_entry_state(strat_payload)
@@ -713,6 +706,11 @@ def meta():
     }
 
 
+@app.get("/api/filter-defaults")
+def filter_defaults():
+    return quality_filter.DEFAULT_FILTER
+
+
 @app.get("/api/debug/memory")
 def debug_memory():
     """Live process memory breakdown; not secured, fine for a LAN-only box with no public route to this path."""
@@ -862,7 +860,6 @@ def api_estimate_entry(body: dict):
 
     result = entry_estimate.estimate_entry(
         current_price=payload["price"],
-        entry_price=open_position["entry_price"],
         avg_mae_wins_pct=avg_mae_wins_pct,
         support_levels=nearest_price,
     )
@@ -1108,6 +1105,16 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
                 strat_payload = payload.get(strat_key)
                 strategy_verdicts[strat_key] = strat_payload.get("verdict") if strat_payload else None
 
+        marks = db.get_trade_daily_marks(position["id"])
+        prior_day = None
+        if len(marks) >= 2 and current_price is not None:
+            prior_close = marks[-2]["close_price"]
+            prior_day = {
+                "mark_date": marks[-2]["mark_date"],
+                "close_price": prior_close,
+                "price_change_pct": round((current_price - prior_close) / prior_close * 100, 2) if prior_close else None,
+            }
+
         open_positions.append({
             "ticker": ticker,
             "instrument": state["instrument"],
@@ -1121,7 +1128,51 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
             "stop_price": position["stop_price"],
             "realized_pnl": round(state["realized_pnl"], 2),
             "strategy_verdicts": strategy_verdicts,
+            "prior_day": prior_day,
         })
+
+    pending_signals = []
+    with _compute_lock:
+        computed_snapshot = list(_computed)
+    for payload in computed_snapshot:
+        ticker = payload["ticker"]
+        current_price = payload.get("price")
+        for strat_key in _STRATEGY_MODULES:
+            strat_payload = payload.get(strat_key)
+            if not strat_payload or strat_payload.get("verdict") != "TAKE" or current_price is None:
+                continue
+
+            avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
+            entry_plan = None
+            if avg_mae_wins_pct is not None:
+                atr_length = 14 if strat_key == "vexh" else support_resistance.DEFAULT_ATR_LENGTH
+                bars = data.get_bars(ticker)
+                sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
+                             if bars is not None else {"support": [], "resistance": []})
+                support_levels = [p for p, _ in sr_levels["support"][:1]]
+                entry_plan = entry_estimate.estimate_entry(
+                    current_price=current_price,
+                    avg_mae_wins_pct=avg_mae_wins_pct,
+                    support_levels=support_levels,
+                )
+
+            plan = entry_estimate.order_plan(
+                passes_quality_bar=_passes_alert_quality_bar(payload, strat_key, strat_payload),
+                instrument="spot",
+            )
+
+            pending_signals.append({
+                "ticker": ticker,
+                "strategy": strat_key,
+                "current_price": current_price,
+                "score": score.compute_score(payload, strat_key),
+                "n_trades": strat_payload.get("n_trades"),
+                "win_rate": strat_payload.get("win_rate"),
+                "profit_factor": strat_payload.get("profit_factor"),
+                "entry_plan": entry_plan,
+                "watch_only": plan["watch_only"],
+                "order_method": plan["method"],
+            })
 
     today_iso_date = datetime.now(timezone.utc).date().isoformat()
     today_start = today_iso_date + "T00:00:00"
@@ -1137,6 +1188,7 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "open_positions": open_positions,
+        "pending_signals": pending_signals,
         "realized_pnl_today": round(realized_pnl_today, 2),
         "notable_alerts_today": [
             {"message": n["message"], "kind": n["kind"]} for n in today_notifications

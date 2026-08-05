@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getMeta, getTickers } from "../api/tickers";
+import { getFilterDefaults, getMeta, getTickers } from "../api/tickers";
 
 // Polls /api/meta at a fast cadence only while a fetch/compute cycle is actively running --
 // mirrors the old startRealProgressPolling behavior (index.html), but as a plain React Query
@@ -17,6 +17,14 @@ export function useMeta() {
       const active = !!(data?.fetch_progress || data?.compute_progress);
       return active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
     },
+  });
+}
+
+export function useFilterDefaults() {
+  return useQuery({
+    queryKey: ["filter-defaults"],
+    queryFn: getFilterDefaults,
+    staleTime: Infinity,
   });
 }
 

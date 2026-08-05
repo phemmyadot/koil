@@ -1,8 +1,12 @@
 import { apiGet, apiPost } from "./client";
-import type { MetaResponse, TickersResponse } from "./types";
+import type { FilterDefaultsResponse, MetaResponse, TickersResponse } from "./types";
 
 export function getMeta(): Promise<MetaResponse> {
   return apiGet<MetaResponse>("/api/meta");
+}
+
+export function getFilterDefaults(): Promise<FilterDefaultsResponse> {
+  return apiGet<FilterDefaultsResponse>("/api/filter-defaults");
 }
 
 export function getTickers(refresh = false): Promise<TickersResponse> {

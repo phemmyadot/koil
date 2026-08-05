@@ -9,20 +9,12 @@ input from already-computed in-memory state plus the user's support_levels input
 """
 
 
-def estimate_entry(current_price: float, entry_price: float, avg_mae_wins_pct: float,
+def estimate_entry(current_price: float, avg_mae_wins_pct: float,
                     support_levels: list[float]) -> dict:
-    """
-    current_price: latest close (payload["price"]).
-    entry_price: the strategy's open_position.entry_price -- a real simulated entry, not a
-                 stand-in. Callers must not call this without a live open_position.
-    avg_mae_wins_pct: strategy_common.summarize()'s avg_mae_wins_pct for this strategy
-                       (positive float, e.g. 3.91 for a 3.91% average dip on winners).
-    support_levels: user-entered support prices, any order. Only levels below
-                     current_price count as a floor candidate.
-
-    Returns mae_floor, support_used, recommended_limit, pct_below_current.
-    """
-    mae_floor = round(entry_price * (1 - avg_mae_wins_pct / 100), 2)
+    """current_price is the MAE-floor basis -- works for both an open position and a fresh
+    TAKE/Pending signal with no position yet. Returns mae_floor, support_used,
+    recommended_limit, pct_below_current."""
+    mae_floor = round(current_price * (1 - avg_mae_wins_pct / 100), 2)
 
     supports_below = [s for s in support_levels if s < current_price]
     support_used = max(supports_below) if supports_below else mae_floor
@@ -39,3 +31,13 @@ def estimate_entry(current_price: float, entry_price: float, avg_mae_wins_pct: f
         "recommended_limit": recommended_limit,
         "pct_below_current": pct_below_current,
     }
+
+
+def order_plan(passes_quality_bar: bool, instrument: str) -> dict:
+    """Deterministic order-staging rule for a fresh TAKE/Pending signal (see
+    backend/quality_filter.py for passes_quality_bar). instrument: 'spot' or 'option'."""
+    if not passes_quality_bar:
+        return {"watch_only": True, "method": None}
+    if instrument == "option":
+        return {"watch_only": False, "method": "GTC tonight"}
+    return {"watch_only": False, "method": "set at open, cancel by 10:30am"}

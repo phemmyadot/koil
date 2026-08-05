@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useMeta, useRefreshTickers, useTickers } from "../hooks/useTickers";
+import { useFilterDefaults, useMeta, useRefreshTickers, useTickers } from "../hooks/useTickers";
 import { useWatchlists } from "../hooks/useWatchlists";
 import { listPositions } from "../api/positions";
 import { exportCsv, exportPdf } from "../api/plCalc";
 import type { Position, StrategyKey, TickerPayload } from "../api/types";
-import { FilterBar, defaultFilterBarState, type FilterBarState } from "../components/organisms/FilterBar";
+import { FilterBar, defaultFilterBarState, filterBarStateFromDefaults, type FilterBarState } from "../components/organisms/FilterBar";
 import { Pagination, TickerCardGrid } from "../components/organisms/TickerCardGrid";
 import { StrategyDetailModal } from "../components/molecules/StrategyDetailModal";
 import { TradeConfirmModal } from "../components/molecules/TradeConfirmModal";
@@ -48,11 +48,19 @@ interface TradeFlowState {
 export function DashboardPage() {
   const { data, isLoading } = useTickers();
   const { data: meta } = useMeta();
+  const { data: filterDefaults } = useFilterDefaults();
   const refresh = useRefreshTickers();
   const queryClient = useQueryClient();
   const { addToList } = useWatchlists();
 
   const [filterState, setFilterState] = useState<FilterBarState>(defaultFilterBarState);
+  // Patches in the real shared filter once fetched, unless the user already changed it.
+  const userTouchedFilters = useRef(false);
+  useEffect(() => {
+    if (filterDefaults && !userTouchedFilters.current) {
+      setFilterState(filterBarStateFromDefaults(filterDefaults));
+    }
+  }, [filterDefaults]);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [modal, setModal] = useState<ModalState>(null);
@@ -107,6 +115,7 @@ export function DashboardPage() {
       : "";
 
   function updateFilters(next: FilterBarState) {
+    userTouchedFilters.current = true;
     setFilterState(next);
     setPage(1);
   }
