@@ -250,19 +250,27 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
         return ticker, None, str(e) or type(e).__name__, checksum
 
 
+# Index/commodity symbols for the daily review's Market Context section (see
+# docs/superpowers/specs/2026-08-04-daily-review-format-template.md) -- fetched the same way as
+# any watchlisted/traded ticker (see _active_tickers below) so their bars are always fresh by
+# review time, no separate fetch path. They fail passes_technical_filters() (built for
+# individual stocks) and so never enter strategy compute -- fetched only, never scored.
+CONTEXT_TICKERS = ["SPY", "QQQ", "DIA", "^TNX", "USO"]
+
+
 def _active_tickers() -> list[str]:
     """Candidate tickers (from the DB table -- see step 1 of the cycle in this module's
     docstring, NOT a live Yahoo screener call) plus any ticker a client has ever reported as
-    watchlisted, plus any ticker with an open position -- both a watchlisted ticker and an
-    actively-traded one must keep being fetched/computed even if they later fail the technical
-    filter, or they silently go stale forever (an open position's daily marks and TP/stop
-    alerts depend on this)."""
+    watchlisted, plus any ticker with an open position, plus the fixed CONTEXT_TICKERS list --
+    all three must keep being fetched/computed even if they later fail the technical filter, or
+    they silently go stale forever (an open position's daily marks and TP/stop alerts depend on
+    this; CONTEXT_TICKERS backs the daily review's Market Context section)."""
     candidates = db.get_candidate_tickers()
     watchlisted = db.get_watchlist_tickers()
     traded = [p["ticker"] for p in db.list_positions("open")]
     seen = set(candidates)
     extra = []
-    for tk in watchlisted + traded:
+    for tk in watchlisted + traded + CONTEXT_TICKERS:
         if tk not in seen:
             extra.append(tk)
             seen.add(tk)
@@ -1055,6 +1063,33 @@ def _position_with_state(position: dict) -> dict:
     }
 
 
+_CONTEXT_TICKER_LABELS = {"SPY": "S&P 500 (SPY)", "QQQ": "Nasdaq 100 (QQQ)", "DIA": "Dow (DIA)",
+                          "^TNX": "10Y Treasury Yield", "USO": "Oil (USO)"}
+
+
+def _build_market_context() -> list[dict]:
+    """Last close + day-over-day change for each of CONTEXT_TICKERS, from already-fetched bars
+    (data.get_bars() -- in-memory, no network call here). Ticker-ETF proxies (SPY/QQQ/DIA/USO)
+    for the underlying indices/commodity, not the indices themselves -- see CONTEXT_TICKERS."""
+    context = []
+    for ticker in CONTEXT_TICKERS:
+        bars = data.get_bars(ticker)
+        if bars is None or len(bars) < 1:
+            continue
+        close = round(float(bars.Close.iloc[-1]), 4)
+        change_pct = None
+        if len(bars) >= 2:
+            prior_close = float(bars.Close.iloc[-2])
+            if prior_close:
+                change_pct = round((close - prior_close) / prior_close * 100, 2)
+        context.append({
+            "label": _CONTEXT_TICKER_LABELS.get(ticker, ticker),
+            "close": close,
+            "change_pct": change_pct,
+        })
+    return context
+
+
 def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     """Compact, code-computed summary of current trade state for the daily review chatbot -- NOT
     a raw DB dump. Claude receives the CONCLUSION of these queries, not the tables themselves.
@@ -1141,6 +1176,8 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
             strat_payload = payload.get(strat_key)
             if not strat_payload or strat_payload.get("verdict") != "TAKE" or current_price is None:
                 continue
+            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
+                continue
 
             avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
             entry_plan = None
@@ -1156,11 +1193,6 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
                     support_levels=support_levels,
                 )
 
-            plan = entry_estimate.order_plan(
-                passes_quality_bar=_passes_alert_quality_bar(payload, strat_key, strat_payload),
-                instrument="spot",
-            )
-
             pending_signals.append({
                 "ticker": ticker,
                 "strategy": strat_key,
@@ -1170,8 +1202,7 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
                 "win_rate": strat_payload.get("win_rate"),
                 "profit_factor": strat_payload.get("profit_factor"),
                 "entry_plan": entry_plan,
-                "watch_only": plan["watch_only"],
-                "order_method": plan["method"],
+                "order_method": entry_estimate.order_method("spot"),
             })
 
     today_iso_date = datetime.now(timezone.utc).date().isoformat()
@@ -1187,6 +1218,7 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "market_context": _build_market_context(),
         "open_positions": open_positions,
         "pending_signals": pending_signals,
         "realized_pnl_today": round(realized_pnl_today, 2),

@@ -77,11 +77,11 @@ Verdict: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal)*
 **Order**
 
 ```
-Spot:    limit ${{spot_limit}} (support ${{support_used}}) — set at open, cancel 10:30am
-Options: {{option_strike}} {{option_type}} {{option_expiry}} limit ${{option_limit}} — GTC tonight
+Spot: limit ${{spot_limit}} (support ${{support_used}}) — {{order_method}}
 ```
-<!-- Spot always "set at open, cancel 10:30am"; options always "GTC tonight"; if score is
-     below the entry threshold, no order block at all — just watch, no order text. -->
+<!-- Spot-only — no options line (no per-ticker options data exists for a signal with no
+     position yet). Every listed signal has already cleared the shared quality filter
+     (backend/quality_filter.py), so there is no watch-only tier here. -->
 
 > **Verdict:** {{verdict}}
 

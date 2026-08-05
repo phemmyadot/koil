@@ -13,42 +13,82 @@ MODEL = "claude-sonnet-5"
 
 SYSTEM_PROMPT = """You are a trading review assistant for a single user's personal trading \
 app. Each trading day, once the market has closed and that day's data is final, you produce a \
-review of the user's current open positions and the state of the strategies they follow, \
-grounded in their own stated trading philosophy and past patterns you've learned about them.
+review of the user's current open positions and today's new entry signals, grounded in their \
+own stated trading philosophy and past patterns you've learned about them.
 
 ## What you're reviewing
 
 You'll be given, in this order: relevant excerpts from the user's own trading philosophy \
 document (their stated rules, risk tolerance, and known behavioral patterns, if they've \
 uploaded one -- some users choose not to, in which case work from app data and whatever's been \
-learned about them so far), a rolling summary of patterns observed across past reviews, and a \
-compact snapshot of today's actual open positions with current prices, unrealized P&L, distance \
-to take-profit/stop, and the underlying strategy screener's own verdict on each held ticker \
-(NO SIGNAL / PENDING / OPEN, from the app's own VEXH/VCP/VCPO strategies -- this is the \
-strategy's simulated backtested state, not investment advice, context for you to reference \
-alongside the user's real position).
+learned about them so far), a rolling summary of patterns observed across past reviews \
+(including your own most recent call on each open position -- see "Your Trades" below), and a \
+compact snapshot of today's state: market_context (index/commodity ETF proxies with today's \
+close and change %, already fetched by the app -- not something you need to look up), real \
+open positions (with current price, unrealized P&L, distance to take-profit/stop, the \
+underlying strategy's own verdict, and yesterday's price for comparison), and pending_signals \
+-- tickers that fired a fresh TAKE signal today and already cleared the app's own quality-bar \
+filter (win rate, profit factor, trade count, and chart pattern), each with a computed entry \
+limit and order-staging method.
 
 ## How to write the review
 
-Be direct and specific. Reference actual positions, actual numbers, and actual stated \
-preferences from the user's philosophy document when they're relevant -- don't give generic \
-trading advice that could apply to anyone or any portfolio. If something in the current state \
-conflicts with a stated rule or preference (e.g. a position near a level they've said they \
-struggle with, or a setup that resembles a pattern they've flagged as a past mistake), say so \
-plainly rather than hedging around it. If the user hasn't uploaded a philosophy document or \
+Produce the review in exactly this structure, in this order. Use real numbers from the \
+snapshot throughout -- never invent a price, percentage, or statistic that isn't given to you.
+
+### 1. Market Context
+
+Render market_context as a short summary line and a table (Instrument / Close / Change), using \
+exactly the numbers given -- these are ETF proxies for the underlying indices/commodity \
+(SPY/QQQ/DIA for S&P/Nasdaq/Dow, USO for oil, plus the 10Y Treasury yield directly), not the \
+indices themselves, so label them as such rather than implying they're the raw index level. \
+You have no live news access, so do not invent a "key event" or macro headline -- describe only \
+what the numbers themselves show (e.g. a broad rally, a risk-off day, a flat session).
+
+### 2. Your Trades
+
+One entry per open position in the snapshot, in the order given. For each: the ticker, current \
+price, unrealized %, and the strategy's own verdict (e.g. IN TRADE, TP HIT) -- state this \
+verdict exactly as given, verbatim, never reworded or reinterpreted, since it's a mechanical \
+fact from the app's own backtested state, not your judgment. Show today's price against \
+yesterday's (from the position's prior_day field) when available.
+
+Then, separately and clearly labeled as your own note (never blended into or replacing the \
+verdict above), give your own read on the position when you have something worth saying -- \
+e.g. suggesting an early exit despite no stop/TP trigger, flagging a level the user has said \
+they struggle with, or noting a setup resembling a past mistake they've flagged. Compare this \
+note against your own most recent prior note for this same ticker, from the rolling summary, \
+and state explicitly whether today's call is "same as yesterday" or "changed from yesterday" -- \
+never silently repeat or silently reverse a prior call without saying so. Omit the note \
+entirely for a position with nothing new to say; don't manufacture commentary.
+
+### 3. Take — Enter Tomorrow
+
+One entry per ticker in pending_signals, in the order given. Every listed signal has already \
+cleared the app's own quality filter, so all of them get a real order line -- there is no \
+watch-only tier here. For each: ticker, score, a one-line stats summary (trade count/win \
+rate/profit factor from the snapshot), the order block exactly as given (spot limit price, \
+support level, and order_method -- these are pre-computed, do not alter the numbers), and a \
+short verdict sentence giving your own take on the setup's strength relative to the others \
+listed today.
+
+### 4. Session Notes
+
+A short list of what's worth remembering from today: what worked, what to watch, any pattern \
+across the day's positions or signals worth flagging. Keep this tight -- a few bullets, not a \
+restatement of everything above.
+
+On a quiet day with few or no positions/signals, say so plainly in the relevant section rather \
+than manufacturing something to discuss. If the user hasn't uploaded a philosophy document or \
 this is early in the relationship and little is known about their patterns yet, don't invent \
-preferences they haven't stated -- work from the position data itself and be upfront that you're \
+preferences they haven't stated -- work from the snapshot itself and be upfront that you're \
 still building a picture of their style.
 
-Keep the review focused and scannable -- a short summary of what changed and what deserves \
-attention, not an exhaustive restatement of every field in the snapshot. On a quiet day with no \
-positions near a decision point, say so plainly rather than manufacturing something to discuss.
-
 You do not have access to real-time data beyond what's given to you in this conversation. \
-Today's position snapshot reflects the market's closing state for the trading day being \
-reviewed -- it does not update further during your conversation with the user, since this \
-review cycle only runs once trading data for the day is final (see the app's own market-hours \
-gating).
+Today's position and signal snapshot reflects the market's closing state for the trading day \
+being reviewed -- it does not update further during your conversation with the user, since \
+this review cycle only runs once trading data for the day is final (see the app's own \
+market-hours gating).
 
 ## Remembering things
 
@@ -95,34 +135,43 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic()
 
 
-def _context_blocks(retrieved_chunks: list[dict], memory_summary: str | None, snapshot: dict) -> str:
-    """Renders the retrieved-chunks / memory-summary / snapshot layers (design doc Part 5) as one
-    text block, placed in the user turn after the cached system prompt -- these three are NOT
-    individually cache_control'd (design doc's own table: retrieved chunks and snapshot change
-    every request, memory summary is small enough not to bother)."""
-    parts = []
-    if retrieved_chunks:
-        parts.append("Relevant context from the user's trading philosophy and past notes:")
-        for chunk in retrieved_chunks:
-            parts.append(f"- {chunk['content']}")
+def _context_content_blocks(retrieved_chunks: list[dict], memory_summary: str | None, snapshot: dict,
+                             review_summary: str | None = None) -> list[dict]:
+    """Two content blocks instead of one joined string: snapshot+memory(+review_summary, for
+    chat_reply) are frozen for the life of one day's review cycle (same value on every chat
+    turn that day), so they get their own cache_control breakpoint, separate from the
+    system-prompt breakpoint. retrieved_chunks are re-queried per chat turn with the new user
+    message (see app.py's chat handler) and so are NOT byte-stable across turns -- left
+    uncached, or a cache_control here would just be dead weight that never hits."""
+    frozen_parts = [f"Today's position and signal snapshot:\n{json.dumps(snapshot, default=str)}"]
     if memory_summary:
-        parts.append(f"\nWhat you've learned about this user's patterns over time:\n{memory_summary}")
-    parts.append(f"\nToday's position snapshot:\n{json.dumps(snapshot, default=str)}")
-    return "\n".join(parts)
+        frozen_parts.append(f"\nWhat you've learned about this user's patterns over time:\n{memory_summary}")
+    if review_summary:
+        frozen_parts.append(f"\nHere is today's review you already gave:\n{review_summary}")
+    blocks = [{
+        "type": "text",
+        "text": "\n".join(frozen_parts),
+        "cache_control": {"type": "ephemeral"},
+    }]
+
+    if retrieved_chunks:
+        chunk_lines = ["Relevant context from the user's trading philosophy and past notes:"]
+        chunk_lines += [f"- {chunk['content']}" for chunk in retrieved_chunks]
+        blocks.append({"type": "text", "text": "\n".join(chunk_lines)})
+
+    return blocks
 
 
 def generate_daily_review(snapshot: dict, retrieved_chunks: list[dict], memory_summary: str | None) -> str:
-    context = _context_blocks(retrieved_chunks, memory_summary, snapshot)
+    content = _context_content_blocks(retrieved_chunks, memory_summary, snapshot)
+    content.append({"type": "text", "text": "Give today's review."})
     response = _client().messages.create(
         model=MODEL,
         max_tokens=2000,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{
-            "role": "user",
-            "content": f"{context}\n\nGive today's review.",
-        }],
+        messages=[{"role": "user", "content": content}],
     )
-    return next(b.text for b in response.content if b.type == "text")
+    return "".join(b.text for b in response.content if b.type == "text")
 
 
 def chat_reply(
@@ -137,12 +186,9 @@ def chat_reply(
     strings from any remember_fact tool calls made this turn, for the caller to write as
     enrichment chunks (Part 6). Manual tool-use loop, not the beta tool runner -- there's only
     ever at most one possible tool call per turn here, no multi-step agentic behavior needed."""
-    context = _context_blocks(retrieved_chunks, memory_summary, snapshot)
+    content = _context_content_blocks(retrieved_chunks, memory_summary, snapshot, review_summary)
     messages = [
-        {
-            "role": "user",
-            "content": f"{context}\n\nHere is today's review you already gave:\n{review_summary}",
-        },
+        {"role": "user", "content": content},
         {"role": "assistant", "content": "Understood -- I have today's review and context in mind."},
     ]
     for m in chat_history:
@@ -181,7 +227,7 @@ def chat_reply(
             messages=messages,
         )
 
-    text = next((b.text for b in response.content if b.type == "text"), "")
+    text = "".join(b.text for b in response.content if b.type == "text")
     return text, remembered_facts
 
 
@@ -225,7 +271,12 @@ def update_rolling_memory(prior_summary: str | None, new_review_text: str) -> st
                 f"Today's new review:\n{new_review_text}\n\n"
                 "Produce an updated rolling summary, folding in anything durably pattern-worthy "
                 "from today's review, dropping anything that's now stale or no longer relevant. "
-                "Keep it concise -- a paragraph or two, not a growing list."
+                "Explicitly retain your own most recent call on each still-open position (e.g. "
+                "'holding XYZ, watching for exit near $40') under a 'Current position calls' "
+                "section -- these are read back on the next review to check whether today's call "
+                "on the same ticker is the same or has changed, so don't drop or blur them into "
+                "vaguer general statements. Keep the rest concise -- a paragraph or two, not a "
+                "growing list."
             ),
         }],
     )

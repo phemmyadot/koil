@@ -33,11 +33,7 @@ def estimate_entry(current_price: float, avg_mae_wins_pct: float,
     }
 
 
-def order_plan(passes_quality_bar: bool, instrument: str) -> dict:
-    """Deterministic order-staging rule for a fresh TAKE/Pending signal (see
-    backend/quality_filter.py for passes_quality_bar). instrument: 'spot' or 'option'."""
-    if not passes_quality_bar:
-        return {"watch_only": True, "method": None}
-    if instrument == "option":
-        return {"watch_only": False, "method": "GTC tonight"}
-    return {"watch_only": False, "method": "set at open, cancel by 10:30am"}
+def order_method(instrument: str) -> str:
+    """Deterministic order-staging rule for a TAKE/Pending signal that already passed the
+    quality bar. instrument: 'spot' or 'option'."""
+    return "GTC tonight" if instrument == "option" else "set at open, cancel by 10:30am"

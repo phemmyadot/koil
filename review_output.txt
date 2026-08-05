@@ -1,0 +1,50 @@
+# Daily Review — 2026-08-05
+
+*Note up front: I don't yet have a philosophy document or rolling pattern summary to draw on for you, so this review works straight from today's snapshot. I'll build a picture of your tendencies as more sessions come in.*
+
+## 1. Market Context
+
+Broad, strong risk-on day — all three equity proxies rallied together, yields eased, and oil sold off hard.
+
+| Instrument | Close | Change |
+|---|---|---|
+| S&P 500 (SPY, proxy) | 771.33 | +1.80% |
+| Nasdaq 100 (QQQ, proxy) | 723.85 | +3.40% |
+| Dow (DIA, proxy) | 540.43 | +1.73% |
+| 10Y Treasury Yield | 4.627 | -1.26% |
+| Oil (USO, proxy) | 115.78 | -5.19% |
+
+Nasdaq proxy led the move by a wide margin, yields ticked down, and oil had a sharp -5.19% drop — a session that looks like a clear tech-led rally alongside a commodity pullback.
+
+## 2. Your Trades
+
+**PWP** — current price $17.39, unrealized **+15.93%**, day 3 held.
+- Verdict (strategy_vcp): **IN TRADE**
+- Verdict (strategy_vcpo): **IN TRADE**
+- Verdict (vexh): **NO SIGNAL**
+- Yesterday's close was $16.82 (+3.39% that day) vs today's $17.39 — continued upward move, roughly +3.4% day-over-day.
+- Not near TP ($20.00) or stop ($15.00).
+
+*My note:* This is a solid gain sitting comfortably between your stop and target, with no near-term trigger either way. Nothing alarming here — just flagging it's now up nearly 16% with room left to the $20 TP. I don't have a prior note on PWP to compare against, so this is a fresh observation rather than a continuation of an earlier call.
+
+## 3. Take — Enter Tomorrow
+
+**ONDS** — Score 9
+- 29 trades / 75.9% win rate / 5.53 profit factor
+- Order: limit **$8.84**, support at $8.90, current $8.9282 (limit is 0.99% below current)
+- Method: set at open, cancel by 10:30am
+- *Verdict:* Strong sample size (29 trades) with the best score of the two — this is the more statistically seasoned signal of today's pair, worth prioritizing if you can only take one.
+
+**AVGO** — Score 8
+- 20 trades / 80.0% win rate / 5.55 profit factor
+- Order: limit **$412.26**, support at $412.26, current $421.305 (limit is 2.15% below current)
+- Method: set at open, cancel by 10:30am
+- *Verdict:* Slightly higher win rate and profit factor than ONDS, but on a smaller trade sample and a limit set further below current price — a bit more patience required for the fill, but the edge stats are marginally cleaner.
+
+Both cleared the app's quality bar, so both warrant a real order — ONDS on trade-count depth, AVGO on edge purity.
+
+## 4. Session Notes
+
+- Broad tape strength today (SPY/QQQ/DIA all green, QQQ leading) alongside a sharp oil drop — worth remembering as context if PWP or future signals show correlation with risk-on tech moves.
+- PWP continues to run well within its stop/TP band; no action needed, just tracking.
+- Two clean signals today (ONDS, AVGO) both with win rates above 75% and profit factors above 5 — a stronger-than-usual signal day worth noting once more history builds up for comparison.
