@@ -51,10 +51,13 @@ separate multi-day pending backlog to show.
 Verdict: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal)*
 
 {{#if ai_note}}
-> **AI note:** {{ai_note}}
+> **AI note:** {{ai_note}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
 <!-- Claude's own judgment, e.g. "consider exiting early — momentum stalling despite
      still being under TP." Always shown separately from the verdict above, never
-     replacing it. Omitted when Claude has nothing notable to add. -->
+     replacing it. Omitted when Claude has nothing notable to add.
+     "same/changed from yesterday" is Claude comparing against its own prior AI note for
+     this ticker, read from review_memory_summary (see below) — not a new field, a
+     prompting requirement on the existing rolling memory. -->
 {{/if}}
 
 ---
@@ -113,3 +116,17 @@ Options: {{option_strike}} {{option_type}} {{option_expiry}} limit ${{option_lim
   no position yet.
 - **Session Notes**: Claude-authored, same rolling-memory/enrichment approach as the current
   implementation.
+
+## Decision continuity (per-position, day-over-day)
+
+Already-existing storage covers this — no schema change:
+- `daily_reviews.summary_text` keeps every past day's full review, retrievable by `review_date`.
+- `review_memory_summary` is the rolling cross-day summary already passed into every
+  `generate_daily_review()` call and updated after every review (`update_rolling_memory()`).
+
+The only change needed is in prompting: `update_rolling_memory()`'s extraction prompt must be
+told to explicitly retain per-ticker calls ("keep XYZ", "watching for exit"), not just general
+themes, and `generate_daily_review()`'s system prompt must instruct Claude to check each open
+position's AI note against its own most recent prior call for that ticker (from the rolling
+summary) and state plainly whether today's call is the same or has changed — never silently
+repeat or silently reverse a decision without saying so.
