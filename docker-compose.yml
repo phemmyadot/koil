@@ -16,3 +16,8 @@ services:
       - ./backend/app_data.db:/app/backend/app_data.db
       - ./backend/app_data.db-wal:/app/backend/app_data.db-wal
       - ./backend/app_data.db-shm:/app/backend/app_data.db-shm
+      # Uploaded philosophy document(s) for the daily review chatbot (see
+      # docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md)
+      # -- kept outside the image so an upload survives a rebuild/redeploy,
+      # same reasoning as app_data.db above.
+      - ./backend/user_docs:/app/backend/user_docs

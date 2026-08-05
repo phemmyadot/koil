@@ -178,6 +178,81 @@ def _init_schema() -> None:
                 created_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL
             );
+
+            -- Daily trade review chatbot -- see
+            -- docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md. user_id is
+            -- DEFAULT_USER_ID (app.py) today, a real FK once multi-user auth lands (see
+            -- 2026-08-04-multi-user-trades-design.md) -- every table here is born user-scoped so
+            -- that migration needs zero schema change later, only a different value written in.
+            CREATE TABLE IF NOT EXISTS user_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL,
+                status TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_documents_user ON user_documents(user_id);
+
+            -- document_id/chunk_index are NULL for enrichment chunks (source != 'upload') --
+            -- those aren't tied to the originally-uploaded file, they're tied to the review/chat
+            -- that produced them (source_review_id) instead. See design doc Part 1, "The
+            -- document is a living memory store."
+            CREATE TABLE IF NOT EXISTS document_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                document_id INTEGER REFERENCES user_documents(id),
+                source TEXT NOT NULL,
+                source_review_id INTEGER,
+                chunk_index INTEGER,
+                content TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_document_chunks_document ON document_chunks(document_id);
+            CREATE INDEX IF NOT EXISTS idx_document_chunks_user ON document_chunks(user_id);
+
+            -- review_date is the TRADING date this review covers (the date whose 4pm close data
+            -- was used), not the calendar date of every chat message -- a review started Tue 4pm
+            -- and chatted on through Wed 6am is still "Tuesday's review." status is 'active'
+            -- (exactly one review per user can be active at a time) or 'locked' (every past
+            -- review, permanently, once its cycle ends at 7am -- see design doc Part 7).
+            CREATE TABLE IF NOT EXISTS daily_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                review_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                summary_text TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (user_id, review_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_daily_reviews_user ON daily_reviews(user_id);
+
+            -- No direct user_id -- reached via review_id, same "inherit scoping through the
+            -- parent" pattern as position_fills/trade_daily_marks. role='system' is the 7am
+            -- lock-notice row (see design doc Part 7), distinct from 'assistant' so the frontend
+            -- can style it as a system notice rather than something Claude generated.
+            CREATE TABLE IF NOT EXISTS review_chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                review_id INTEGER NOT NULL REFERENCES daily_reviews(id),
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_review_chat_review ON review_chat_messages(review_id);
+
+            -- Singleton per user (not a hardcoded id=1 singleton like universe_meta -- that
+            -- pattern breaks the moment a second user exists). Overwritten each time, no version
+            -- history, per the design doc's v1 decision.
+            CREATE TABLE IF NOT EXISTS review_memory_summary (
+                user_id INTEGER PRIMARY KEY,
+                summary_text TEXT NOT NULL,
+                last_updated_review_id INTEGER NOT NULL REFERENCES daily_reviews(id),
+                updated_at TEXT NOT NULL
+            );
         """)
     _migrate_notifications_position_id_nullable()
 
@@ -1022,6 +1097,20 @@ def mark_all_notifications_read(read_at: str) -> None:
         _conn.execute("UPDATE notifications SET read_at = ? WHERE read_at IS NULL", (read_at,))
 
 
+def list_notifications_since(since_iso: str) -> list[dict]:
+    """Uncapped, unlike list_notifications() (which tops out at NOTIFICATIONS_LIST_MIN for the
+    bell panel) -- used by the daily review snapshot (review_snapshot.py), which needs every
+    notification from today, not a fixed-size recent-history window."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, position_id, kind, pct, message, created_at, read_at "
+            "FROM notifications WHERE created_at >= ? ORDER BY created_at DESC",
+            (since_iso,),
+        ).fetchall()
+    cols = ["id", "position_id", "kind", "pct", "message", "created_at", "read_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
 # ─────────────────────────── push subscriptions ───────────────────────────
 
 def upsert_push_subscription(endpoint: str, p256dh: str, auth: str, now_iso: str) -> None:
@@ -1051,3 +1140,140 @@ def list_push_subscriptions() -> list[dict]:
 def touch_push_subscription(endpoint: str, now_iso: str) -> None:
     with _lock, _conn:
         _conn.execute("UPDATE push_subscriptions SET last_seen_at = ? WHERE endpoint = ?", (now_iso, endpoint))
+
+
+# ─────────────────────── daily review chatbot ───────────────────────
+# See docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md.
+
+def insert_user_document(user_id: int, filename: str, file_path: str, file_type: str, uploaded_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute("""
+            INSERT INTO user_documents (user_id, filename, file_path, file_type, uploaded_at, status)
+            VALUES (?, ?, ?, ?, ?, 'processing')
+        """, (user_id, filename, file_path, file_type, uploaded_at))
+        return cur.lastrowid
+
+
+def update_user_document_status(document_id: int, status: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE user_documents SET status = ? WHERE id = ?", (status, document_id))
+
+
+def get_active_user_document(user_id: int) -> dict | None:
+    """Most recently uploaded 'ready' document for this user -- see design doc's "First-visit
+    onboarding prompt" (upload is a once-per-lifecycle action, so there's normally at most one,
+    but a re-upload isn't hard-blocked, hence "most recent" not "the only one")."""
+    with _lock:
+        row = _conn.execute("""
+            SELECT id, user_id, filename, file_path, file_type, uploaded_at, status
+            FROM user_documents WHERE user_id = ? AND status = 'ready'
+            ORDER BY uploaded_at DESC LIMIT 1
+        """, (user_id,)).fetchone()
+    if row is None:
+        return None
+    cols = ["id", "user_id", "filename", "file_path", "file_type", "uploaded_at", "status"]
+    return dict(zip(cols, row))
+
+
+def insert_document_chunk(user_id: int, document_id: int | None, source: str, source_review_id: int | None,
+                           chunk_index: int | None, content: str, embedding_bytes: bytes, created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute("""
+            INSERT INTO document_chunks
+                (user_id, document_id, source, source_review_id, chunk_index, content, embedding, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, document_id, source, source_review_id, chunk_index, content, embedding_bytes, created_at))
+        return cur.lastrowid
+
+
+def get_document_chunks(user_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("""
+            SELECT id, user_id, document_id, source, source_review_id, chunk_index, content, embedding, created_at
+            FROM document_chunks WHERE user_id = ?
+        """, (user_id,)).fetchall()
+    cols = ["id", "user_id", "document_id", "source", "source_review_id", "chunk_index", "content", "embedding", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def insert_daily_review(user_id: int, review_date: str, summary_text: str, embedding_bytes: bytes,
+                         snapshot_json: str, created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute("""
+            INSERT INTO daily_reviews (user_id, review_date, status, summary_text, embedding, snapshot_json, created_at)
+            VALUES (?, ?, 'active', ?, ?, ?, ?)
+        """, (user_id, review_date, summary_text, embedding_bytes, snapshot_json, created_at))
+        return cur.lastrowid
+
+
+def get_daily_review(user_id: int, review_date: str) -> dict | None:
+    with _lock:
+        row = _conn.execute("""
+            SELECT id, user_id, review_date, status, summary_text, embedding, snapshot_json, created_at
+            FROM daily_reviews WHERE user_id = ? AND review_date = ?
+        """, (user_id, review_date)).fetchone()
+    if row is None:
+        return None
+    cols = ["id", "user_id", "review_date", "status", "summary_text", "embedding", "snapshot_json", "created_at"]
+    return dict(zip(cols, row))
+
+
+def get_active_daily_review(user_id: int) -> dict | None:
+    """The one review currently in status='active', if any -- see design doc Part 7 (exactly one
+    review cycle can be active per user at a time)."""
+    with _lock:
+        row = _conn.execute("""
+            SELECT id, user_id, review_date, status, summary_text, embedding, snapshot_json, created_at
+            FROM daily_reviews WHERE user_id = ? AND status = 'active'
+            ORDER BY created_at DESC LIMIT 1
+        """, (user_id,)).fetchone()
+    if row is None:
+        return None
+    cols = ["id", "user_id", "review_date", "status", "summary_text", "embedding", "snapshot_json", "created_at"]
+    return dict(zip(cols, row))
+
+
+def set_daily_review_status(review_id: int, status: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE daily_reviews SET status = ? WHERE id = ?", (status, review_id))
+
+
+def list_review_chat_messages(review_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("""
+            SELECT id, review_id, role, content, created_at
+            FROM review_chat_messages WHERE review_id = ? ORDER BY created_at ASC, id ASC
+        """, (review_id,)).fetchall()
+    cols = ["id", "review_id", "role", "content", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def insert_review_chat_message(review_id: int, role: str, content: str, created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute("""
+            INSERT INTO review_chat_messages (review_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (review_id, role, content, created_at))
+        return cur.lastrowid
+
+
+def get_review_memory_summary(user_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("""
+            SELECT user_id, summary_text, last_updated_review_id, updated_at
+            FROM review_memory_summary WHERE user_id = ?
+        """, (user_id,)).fetchone()
+    if row is None:
+        return None
+    cols = ["user_id", "summary_text", "last_updated_review_id", "updated_at"]
+    return dict(zip(cols, row))
+
+
+def upsert_review_memory_summary(user_id: int, summary_text: str, last_updated_review_id: int, updated_at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO review_memory_summary (user_id, summary_text, last_updated_review_id, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET summary_text=excluded.summary_text,
+                last_updated_review_id=excluded.last_updated_review_id, updated_at=excluded.updated_at
+        """, (user_id, summary_text, last_updated_review_id, updated_at))

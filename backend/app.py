@@ -49,7 +49,14 @@ _compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
 # that ticker's bars happened not to change since the shape changed.
 PAYLOAD_SCHEMA_VERSION = 6
 
-from fastapi import FastAPI, HTTPException, Response
+# No real auth/accounts yet -- every user-scoped table (daily review chatbot, see
+# docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md) is written and read
+# under this one hardcoded id. Swapping this for a resolved current_user.id, once real multi-user
+# auth lands (docs/superpowers/specs/2026-08-04-multi-user-trades-design.md), is the only change
+# needed -- the schema, queries, and retrieval logic don't change shape.
+DEFAULT_USER_ID = 1
+
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from yfinance.exceptions import YFRateLimitError
@@ -63,6 +70,9 @@ import backend.market_hours as market_hours
 import backend.options_pricing as options_pricing
 import backend.pdf_export as pdf_export
 import backend.push as push
+import backend.review_claude as review_claude
+import backend.review_gating as review_gating
+import backend.review_ingest as review_ingest
 import backend.support_resistance as support_resistance
 import backend.prebreak as prebreak
 import backend.score as score
@@ -448,6 +458,31 @@ def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
     }
 
 
+def _position_pct_to_tp_stop(state: dict, tp: float, stop: float, current_price: float) -> tuple[float, float] | None:
+    """Shared by _update_trade_marks_and_alerts() (real-time alerting) and
+    review_snapshot.build_daily_snapshot() (the AI review's compact state summary) -- extracted
+    so the same TP/stop-progress math isn't duplicated. Returns (pct_to_tp, pct_to_stop), or None
+    if an option position has no priced lots to derive a target from (missing iv_at_entry)."""
+    avg_cost = state["avg_cost"]
+    if state["instrument"] == "option":
+        today = datetime.now(timezone.utc).date()
+        tp_value = _blended_option_value(state["open_lots"], tp, today)
+        stop_value = _blended_option_value(state["open_lots"], stop, today)
+        compare_value = _blended_option_value(state["open_lots"], current_price, today)
+        if tp_value is None or stop_value is None or compare_value is None:
+            return None
+        multiplier = state["multiplier"]
+        tp_value *= multiplier
+        stop_value *= multiplier
+        compare_value *= multiplier
+        pct_to_tp = (compare_value - avg_cost) / (tp_value - avg_cost) * 100 if tp_value != avg_cost else 0
+        pct_to_stop = (avg_cost - compare_value) / (avg_cost - stop_value) * 100 if stop_value != avg_cost else 0
+    else:
+        pct_to_tp = (current_price - avg_cost) / (tp - avg_cost) * 100 if tp != avg_cost else 0
+        pct_to_stop = (avg_cost - current_price) / (avg_cost - stop) * 100 if stop != avg_cost else 0
+    return pct_to_tp, pct_to_stop
+
+
 def _update_trade_marks_and_alerts() -> None:
     """Runs after every compute_all() pass (scheduled 2h wake or manual refresh, same code
     path -- see refresh_and_compute()). For every open position: upsert today's daily mark
@@ -525,39 +560,15 @@ def _update_trade_marks_and_alerts() -> None:
             continue
         db.set_position_status(position["id"], "open", None)
 
-        avg_cost = state["avg_cost"]
         tp, stop = position["tp_price"], position["stop_price"]
         # TP/stop are ALWAYS stock-price levels the user set, for both spot and option
         # positions -- same familiar input either way, see
-        # docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md. For an option
-        # position avg_cost is average premium, not a stock price, so comparing it directly
-        # against a stock-price tp/stop (as this used to) mixed units and produced a meaningless
-        # pct -- fixed by translating tp/stop into "what would the option be worth today if the
-        # stock were at that level" (decay from entry to today already applied, since T is
-        # measured as of today) and comparing THAT against avg_cost instead.
-        if state["instrument"] == "option":
-            today = datetime.now(timezone.utc).date()
-            tp_value = _blended_option_value(state["open_lots"], tp, today)
-            stop_value = _blended_option_value(state["open_lots"], stop, today)
-            compare_value = _blended_option_value(state["open_lots"], current_price, today)
-            if tp_value is None or stop_value is None or compare_value is None:
-                continue  # no priced lots (missing iv_at_entry) -- can't derive an option-price target, skip alerting this cycle
-            # _blended_option_value is per-share; avg_cost from replay_fills already has the
-            # 100x contract multiplier baked in (see replay_fills's own docstring) -- scale up
-            # to the same units before comparing, or every option position looks artificially
-            # close to both tp and stop simultaneously.
-            multiplier = state["multiplier"]
-            tp_value *= multiplier
-            stop_value *= multiplier
-            compare_value *= multiplier
-            pct_to_tp = (compare_value - avg_cost) / (tp_value - avg_cost) * 100 if tp_value != avg_cost else 0
-            pct_to_stop = (avg_cost - compare_value) / (avg_cost - stop_value) * 100 if stop_value != avg_cost else 0
-        else:
-            # Sign-aware: a short/put-style position has tp below avg_cost and stop above --
-            # these denominators are negative in that case, keeping pct_to_* positive as price
-            # moves favorably either direction.
-            pct_to_tp = (current_price - avg_cost) / (tp - avg_cost) * 100 if tp != avg_cost else 0
-            pct_to_stop = (avg_cost - current_price) / (avg_cost - stop) * 100 if stop != avg_cost else 0
+        # docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md. See
+        # _position_pct_to_tp_stop's own docstring for the option-vs-spot math.
+        pcts = _position_pct_to_tp_stop(state, tp, stop, current_price)
+        if pcts is None:
+            continue  # no priced lots (missing iv_at_entry) -- can't derive an option-price target, skip alerting this cycle
+        pct_to_tp, pct_to_stop = pcts
 
         _fire_threshold_alerts(position, "tp_progress", pct_to_tp, position["last_alert_tp_pct"])
         _fire_threshold_alerts(position, "stop_progress", pct_to_stop, position["last_alert_stop_pct"])
@@ -696,6 +707,9 @@ def meta():
         # Non-null only while compute_all() is actively running; never overlaps fetch_progress.
         "compute_progress": compute_progress(),
         "rate_limited_until": _rate_limited_until,
+        # Gates the Analyzer nav entry -- see
+        # docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md.
+        "daily_review_enabled": os.environ.get("ENABLE_DAILY_REVIEW", "false").lower() == "true",
     }
 
 
@@ -1044,6 +1058,92 @@ def _position_with_state(position: dict) -> dict:
     }
 
 
+def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
+    """Compact, code-computed summary of current trade state for the daily review chatbot -- NOT
+    a raw DB dump. Claude receives the CONCLUSION of these queries, not the tables themselves.
+    See docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md, Part 2.
+
+    user_id is accepted (not yet threaded into db.list_positions, which has no user scoping
+    today) purely so this function's signature is already correct for when multi-user auth lands
+    -- see DEFAULT_USER_ID's own docstring."""
+    del user_id  # not yet used -- db.list_positions has no user_id column to filter on today
+
+    with _compute_lock:
+        computed_by_ticker = {p["ticker"]: p for p in _computed}
+
+    open_positions = []
+    for position in db.list_positions("open"):
+        fills = db.list_fills(position["id"])
+        state = replay_fills(fills)
+        if state["units_remaining"] <= 0:
+            continue
+
+        ticker = position["ticker"]
+        payload = computed_by_ticker.get(ticker)
+        current_price = payload["price"] if payload else None
+        if current_price is None:
+            bars = data.get_bars(ticker)
+            if bars is not None and not bars.empty:
+                current_price = round(float(bars.Close.iloc[-1]), 4)
+
+        unrealized_pct = None
+        near_tp_or_stop = False
+        if current_price is not None and state["avg_cost"] is not None:
+            pcts = _position_pct_to_tp_stop(state, position["tp_price"], position["stop_price"], current_price)
+            if pcts is not None:
+                pct_to_tp, pct_to_stop = pcts
+                near_tp_or_stop = pct_to_tp >= 70 or pct_to_stop >= 70
+            if state["instrument"] == "option":
+                # avg_cost has the 100x multiplier baked in; option_value/current_price from
+                # _computed is a stock price, not an option value -- unrealized_pct for options
+                # isn't derivable from current_price alone without re-pricing the option, so it's
+                # intentionally left None here rather than computing something misleading.
+                unrealized_pct = None
+            else:
+                unrealized_pct = round((current_price - state["avg_cost"]) / state["avg_cost"] * 100, 2)
+
+        strategy_verdicts = {}
+        if payload:
+            for strat_key in _STRATEGY_MODULES:
+                strat_payload = payload.get(strat_key)
+                strategy_verdicts[strat_key] = strat_payload.get("verdict") if strat_payload else None
+
+        open_positions.append({
+            "ticker": ticker,
+            "instrument": state["instrument"],
+            "units_remaining": state["units_remaining"],
+            "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
+            "current_price": current_price,
+            "unrealized_pct": unrealized_pct,
+            "days_held": (datetime.now(timezone.utc).date() - datetime.fromisoformat(position["opened_at"]).date()).days,
+            "near_tp_or_stop": near_tp_or_stop,
+            "tp_price": position["tp_price"],
+            "stop_price": position["stop_price"],
+            "realized_pnl": round(state["realized_pnl"], 2),
+            "strategy_verdicts": strategy_verdicts,
+        })
+
+    today_iso_date = datetime.now(timezone.utc).date().isoformat()
+    today_start = today_iso_date + "T00:00:00"
+    today_notifications = db.list_notifications_since(today_start)
+
+    realized_pnl_today = 0.0
+    for position in db.list_positions("closed"):
+        closed_at = position.get("closed_at")
+        if closed_at and closed_at[:10] == today_iso_date:
+            state = replay_fills(db.list_fills(position["id"]))
+            realized_pnl_today += state["realized_pnl"]
+
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "open_positions": open_positions,
+        "realized_pnl_today": round(realized_pnl_today, 2),
+        "notable_alerts_today": [
+            {"message": n["message"], "kind": n["kind"]} for n in today_notifications
+        ],
+    }
+
+
 @app.post("/api/positions")
 def create_position(body: dict):
     """Opens a NEW position from a first entry fill. 409 if this ticker already has an open
@@ -1339,6 +1439,210 @@ def push_unsubscribe(body: dict):
         raise HTTPException(status_code=400, detail="expected {\"endpoint\": ...}")
     db.delete_push_subscription(endpoint)
     return {"ok": True}
+
+
+# ─────────────────────── daily review chatbot ───────────────────────
+# See docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md. Every endpoint
+# below 404s when the feature flag is off -- a determined user hitting the API directly must
+# not be able to bypass a hidden UI button.
+
+def _require_daily_review_enabled() -> None:
+    if os.environ.get("ENABLE_DAILY_REVIEW", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="not found")
+
+
+_USER_DOCS_DIR = os.path.join(os.path.dirname(__file__), "user_docs")
+
+
+@app.get("/api/review/onboarding-status")
+def review_onboarding_status():
+    _require_daily_review_enabled()
+    # Deliberately trivial -- reads the env var directly, no DB, no side effect. Nothing in this
+    # app ever flips DAILY_REVIEW_ONBOARDED itself; that's an intentional manual step (see design
+    # doc Part 1, "First-visit onboarding prompt") -- there is no endpoint that sets it.
+    onboarded = os.environ.get("DAILY_REVIEW_ONBOARDED", "false").lower() == "true"
+    return {"onboarded": onboarded}
+
+
+@app.post("/api/review/document")
+async def review_upload_document(file: UploadFile = File(...)):
+    _require_daily_review_enabled()
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ("pdf", "docx", "md", "txt"):
+        raise HTTPException(status_code=400, detail="only .pdf, .docx, .md, .txt files are accepted")
+
+    os.makedirs(_USER_DOCS_DIR, exist_ok=True)
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Timestamp-prefixed so a re-upload never silently overwrites the file backing an OLDER
+    # document_chunks row still referenced by past reviews (see design doc: old chunks are kept,
+    # not pruned, on re-upload).
+    safe_name = f"{int(time.time())}_{os.path.basename(filename)}"
+    dest_path = os.path.join(_USER_DOCS_DIR, safe_name)
+    contents = await file.read()
+    with open(dest_path, "wb") as f:
+        f.write(contents)
+
+    try:
+        document_id = review_ingest.ingest_document(DEFAULT_USER_ID, dest_path, filename, ext, now_iso)
+    except Exception as e:  # noqa: BLE001 - a bad upload must surface as a clear error, not a 500 with no trace
+        raise HTTPException(status_code=422, detail=f"could not process document: {e}")
+    return {"document_id": document_id, "filename": filename, "status": "ready"}
+
+
+@app.get("/api/review/document")
+def review_get_document():
+    _require_daily_review_enabled()
+    doc = db.get_active_user_document(DEFAULT_USER_ID)
+    if doc is None:
+        return {"document": None}
+    return {"document": {"filename": doc["filename"], "file_type": doc["file_type"], "uploaded_at": doc["uploaded_at"]}}
+
+
+@app.get("/api/review/status")
+def review_status():
+    _require_daily_review_enabled()
+    now = datetime.now(timezone.utc)
+    active = db.get_active_daily_review(DEFAULT_USER_ID)
+    active_out = None
+    if active is not None:
+        active_out = {
+            "review_date": active["review_date"],
+            "status": active["status"],
+            "chat_open": review_gating.chat_still_open(active, now),
+        }
+    return {
+        "can_start": review_gating.review_available_to_start(now) and active is None,
+        "active_review": active_out,
+    }
+
+
+@app.post("/api/review/daily")
+def review_trigger_daily():
+    _require_daily_review_enabled()
+    now = datetime.now(timezone.utc)
+    if not review_gating.review_available_to_start(now):
+        raise HTTPException(status_code=400, detail="review is not available to start right now")
+    if db.get_active_daily_review(DEFAULT_USER_ID) is not None:
+        raise HTTPException(status_code=400, detail="a review is already active")
+
+    review_date = market_hours.most_recent_close_boundary(now).date().isoformat()
+    existing = db.get_daily_review(DEFAULT_USER_ID, review_date)
+    if existing is not None:
+        return _review_to_dict(existing)
+
+    now_iso = now.isoformat(timespec="seconds")
+    snapshot = build_daily_snapshot(DEFAULT_USER_ID)
+    query_text = json.dumps(snapshot, default=str)
+    retrieved_chunks = review_ingest.top_k_chunks(DEFAULT_USER_ID, query_text)
+    memory = db.get_review_memory_summary(DEFAULT_USER_ID)
+    memory_text = memory["summary_text"] if memory else None
+
+    summary_text = review_claude.generate_daily_review(snapshot, retrieved_chunks, memory_text)
+    embedding = review_ingest.embed_texts([summary_text])[0]
+    review_id = db.insert_daily_review(
+        DEFAULT_USER_ID, review_date, summary_text, embedding.tobytes(), json.dumps(snapshot, default=str), now_iso,
+    )
+
+    try:
+        fact = review_claude.extract_enrichment_fact(summary_text)
+        if fact:
+            fact_vec = review_ingest.embed_texts([fact])[0]
+            db.insert_document_chunk(
+                DEFAULT_USER_ID, None, "auto_enrichment", review_id, None, fact, fact_vec.tobytes(), now_iso,
+            )
+    except Exception as e:  # noqa: BLE001 - enrichment is best-effort, must not fail the review itself
+        print(f"app: post-review enrichment extraction failed ({e}); review still saved.")
+
+    try:
+        updated_memory = review_claude.update_rolling_memory(memory_text, summary_text)
+        db.upsert_review_memory_summary(DEFAULT_USER_ID, updated_memory, review_id, now_iso)
+    except Exception as e:  # noqa: BLE001 - same -- rolling memory update must not fail the review itself
+        print(f"app: rolling memory update failed ({e}); review still saved.")
+
+    return _review_to_dict(db.get_daily_review(DEFAULT_USER_ID, review_date))
+
+
+def _review_to_dict(review: dict) -> dict:
+    return {
+        "review_date": review["review_date"],
+        "status": review["status"],
+        "summary_text": review["summary_text"],
+        "created_at": review["created_at"],
+    }
+
+
+@app.get("/api/review/daily/{review_date}")
+def review_get_daily(review_date: str):
+    _require_daily_review_enabled()
+    review = db.get_daily_review(DEFAULT_USER_ID, review_date)
+    if review is None:
+        raise HTTPException(status_code=404, detail=f"no review for {review_date}")
+    messages = db.list_review_chat_messages(review["id"])
+    return {
+        **_review_to_dict(review),
+        "chat_messages": [{"role": m["role"], "content": m["content"], "created_at": m["created_at"]} for m in messages],
+    }
+
+
+@app.post("/api/review/daily/{review_date}/chat")
+def review_chat(review_date: str, body: dict):
+    _require_daily_review_enabled()
+    user_message = (body.get("message") or "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    review = db.get_daily_review(DEFAULT_USER_ID, review_date)
+    if review is None:
+        raise HTTPException(status_code=404, detail=f"no review for {review_date}")
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+
+    if review["status"] == "locked":
+        raise HTTPException(status_code=400, detail="this review's chat has ended")
+
+    if not review_gating.chat_still_open(review, now):
+        # Lazy lock (design doc Part 7, resolved decision): the 7am transition is detected on
+        # next access, not by a background job. Insert the lock notice, lock the review, THEN
+        # reject this request too -- the message that triggered the lock check still doesn't
+        # get a real reply.
+        db.insert_review_chat_message(
+            review["id"], "system",
+            "This daily review session has ended. A new review will be available after the next market close.",
+            now_iso,
+        )
+        db.set_daily_review_status(review["id"], "locked")
+        raise HTTPException(status_code=400, detail="this review's chat has ended")
+
+    db.insert_review_chat_message(review["id"], "user", user_message, now_iso)
+
+    chat_history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in db.list_review_chat_messages(review["id"])
+        if m["role"] in ("user", "assistant")
+    ][:-1]  # exclude the message just inserted -- chat_reply appends it separately
+
+    retrieved_chunks = review_ingest.top_k_chunks(DEFAULT_USER_ID, user_message)
+    memory = db.get_review_memory_summary(DEFAULT_USER_ID)
+    memory_text = memory["summary_text"] if memory else None
+    snapshot = json.loads(review["snapshot_json"])
+
+    assistant_text, remembered_facts = review_claude.chat_reply(
+        review["summary_text"], chat_history, retrieved_chunks, memory_text, snapshot, user_message,
+    )
+    db.insert_review_chat_message(review["id"], "assistant", assistant_text, now_iso)
+
+    for fact in remembered_facts:
+        try:
+            vec = review_ingest.embed_texts([fact])[0]
+            db.insert_document_chunk(
+                DEFAULT_USER_ID, None, "user_enrichment", review["id"], None, fact, vec.tobytes(), now_iso,
+            )
+        except Exception as e:  # noqa: BLE001 - a failed enrichment write must not fail the chat reply itself
+            print(f"app: user_enrichment write failed for fact {fact!r} ({e}).")
+
+    return {"reply": assistant_text}
 
 
 class SPAStaticFiles(StaticFiles):

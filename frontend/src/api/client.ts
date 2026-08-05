@@ -41,6 +41,14 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return handle<T>(res);
 }
 
+// For endpoints that take a file upload (multipart/form-data) rather than JSON -- e.g. the
+// daily review chatbot's philosophy-document upload. No Content-Type header set explicitly:
+// the browser sets it (including the multipart boundary) automatically for a FormData body.
+export async function apiPostFormData<T>(path: string, formData: FormData): Promise<T> {
+  const res = await fetch(path, { method: "POST", body: formData });
+  return handle<T>(res);
+}
+
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "PATCH",

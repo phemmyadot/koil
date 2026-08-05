@@ -7,6 +7,7 @@ export interface MetaResponse {
   fetch_progress: { done: number; total: number } | null;
   compute_progress: { done: number; total: number } | null;
   rate_limited_until: number | null;
+  daily_review_enabled: boolean;
 }
 
 export interface OpenPosition {
@@ -194,4 +195,59 @@ export interface Notification {
   message: string;
   created_at: string;
   read_at: string | null;
+}
+
+// ---------------- Daily review chatbot ----------------
+// See docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md.
+
+export interface ReviewOnboardingStatus {
+  onboarded: boolean;
+}
+
+export interface ReviewDocumentInfo {
+  filename: string;
+  file_type: "pdf" | "docx" | "md" | "txt";
+  uploaded_at: string;
+}
+
+export interface ReviewDocumentResponse {
+  document: ReviewDocumentInfo | null;
+}
+
+export interface ReviewUploadResponse {
+  document_id: number;
+  filename: string;
+  status: "ready";
+}
+
+export interface ActiveReviewSummary {
+  review_date: string;
+  status: "active" | "locked";
+  chat_open: boolean;
+}
+
+export interface ReviewStatusResponse {
+  can_start: boolean;
+  active_review: ActiveReviewSummary | null;
+}
+
+export interface ReviewChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+}
+
+export interface DailyReview {
+  review_date: string;
+  status: "active" | "locked";
+  summary_text: string;
+  created_at: string;
+}
+
+export interface DailyReviewWithChat extends DailyReview {
+  chat_messages: ReviewChatMessage[];
+}
+
+export interface ReviewChatReply {
+  reply: string;
 }
