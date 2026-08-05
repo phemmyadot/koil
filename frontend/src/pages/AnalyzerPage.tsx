@@ -193,6 +193,15 @@ function TriggerCard({
       <button type="button" className="small-btn analyzer-trigger-btn" disabled={!canStart || pending} onClick={onTrigger}>
         {pending ? "Generating review…" : "Start today's review"}
       </button>
+      {pending && (
+        <div className="analyzer-trigger-thinking">
+          <span className="analyzer-thinking-dots" aria-label="Generating your review">
+            <span />
+            <span />
+            <span />
+          </span>
+        </div>
+      )}
       {error != null && (
         <p className="analyzer-error">
           {error instanceof Error ? error.message : "Could not start the review."}

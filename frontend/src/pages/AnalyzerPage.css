@@ -82,6 +82,12 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+.analyzer-trigger-thinking {
+  margin-top: 10px;
+}
+.analyzer-trigger-thinking .analyzer-thinking-dots {
+  margin-left: 0;
+}
 
 .analyzer-review {
   display: flex;
