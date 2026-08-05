@@ -8,7 +8,7 @@ import {
   useTriggerDailyReview,
   useUploadReviewDocument,
 } from "../hooks/useReview";
-import { LightMarkdown } from "../lib/lightMarkdown";
+import { Streamdown } from "streamdown";
 import { StreamingReview } from "../components/molecules/StreamingReview";
 import "./AnalyzerPage.css";
 
@@ -257,7 +257,7 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
         <div className="analyzer-chat-msg analyzer-chat-msg-assistant">
           <span className="analyzer-chat-role">Analyzer</span>
           {hasStreamedSummary ? (
-            <LightMarkdown text={review.summary_text} />
+            <Streamdown>{review.summary_text}</Streamdown>
           ) : (
             <StreamingReview
               chunks={review.summary_text_chunks}
@@ -276,7 +276,7 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
                 onProgress={scrollToBottom}
               />
             ) : (
-              <LightMarkdown text={m.content} />
+              <Streamdown>{m.content}</Streamdown>
             )}
           </div>
         ))}
