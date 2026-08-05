@@ -54,12 +54,11 @@ exist just to import, even when using Vite's dev server for frontend work — so
 frontend change, rebuild it before restarting uvicorn:
 
 ```
-cd frontend && npm run build && cd ..
-rm -rf backend/static_frontend && cp -r frontend/dist backend/static_frontend
-.venv/Scripts/python.exe -m uvicorn backend.app:app --port 8123
+./run_local.sh
 ```
 
-(PowerShell: `Remove-Item -Recurse -Force backend/static_frontend; Copy-Item -Recurse frontend/dist backend/static_frontend`.)
+(`run_local.sh` builds the frontend, copies `frontend/dist` into `backend/static_frontend/`,
+then starts uvicorn on port 8123.)
 
 To run the whole app (frontend + backend) via Docker and cleanly rebuild after code changes:
 

@@ -227,42 +227,35 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
 
   return (
     <div className="analyzer-review">
-      <div className="analyzer-review-summary">
-        <h2>Review &mdash; {reviewDate}</h2>
-        <div className="analyzer-summary-text">
+      <div className="analyzer-chat-messages" ref={scrollRef}>
+        <div className="analyzer-chat-msg analyzer-chat-msg-assistant">
+          <span className="analyzer-chat-role">Analyzer</span>
           <LightMarkdown text={review.summary_text} />
         </div>
-      </div>
-
-      <div className="analyzer-chat">
-        {review.chat_messages.length > 0 && (
-          <div className="analyzer-chat-messages" ref={scrollRef}>
-            {review.chat_messages.map((m, i) => (
-              <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
-                <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
-                <LightMarkdown text={m.content} />
-              </div>
-            ))}
+        {review.chat_messages.map((m, i) => (
+          <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
+            <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
+            <LightMarkdown text={m.content} />
           </div>
-        )}
-        <div className="analyzer-chat-input-row">
-          <input
-            type="text"
-            value={draft}
-            disabled={locked || sendMessage.isPending}
-            placeholder={locked ? "This review's chat has ended." : "Ask a follow-up…"}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-          />
-          <button type="button" className="small-btn" disabled={locked || sendMessage.isPending || !draft.trim()} onClick={handleSend}>
-            Send
-          </button>
-        </div>
+        ))}
+      </div>
+      <div className="analyzer-chat-input-row">
+        <input
+          type="text"
+          value={draft}
+          disabled={locked || sendMessage.isPending}
+          placeholder={locked ? "This review's chat has ended." : "Ask a follow-up…"}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+        />
+        <button type="button" className="small-btn" disabled={locked || sendMessage.isPending || !draft.trim()} onClick={handleSend}>
+          Send
+        </button>
       </div>
     </div>
   );
