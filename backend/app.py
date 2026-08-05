@@ -1209,6 +1209,56 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
                 "order_method": entry_estimate.order_method("spot"),
             })
 
+    # Tickers where a strategy's own simulated backtest is IN TRADE (open_position exists) but
+    # the user never actually entered it -- distinct from open_positions above (real trades) and
+    # pending_signals (fresh TAKE, not yet entered at all). Capped to signals that opened within
+    # the last 3 days -- old ones are stale, not worth resurfacing as "still might be worth it."
+    open_position_tickers = {p["ticker"] for p in open_positions}
+    open_signals = []
+    for payload in computed_snapshot:
+        ticker = payload["ticker"]
+        if ticker in open_position_tickers:
+            continue
+        current_price = payload.get("price")
+        for strat_key in _STRATEGY_MODULES:
+            strat_payload = payload.get(strat_key)
+            if not strat_payload or strat_payload.get("verdict") != "IN TRADE" or current_price is None:
+                continue
+            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
+                continue
+            open_position = strat_payload.get("open_position")
+            if not open_position or open_position.get("days_held", 999) > 3:
+                continue
+
+            avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
+            entry_plan = None
+            if avg_mae_wins_pct is not None:
+                atr_length = 14 if strat_key == "vexh" else support_resistance.DEFAULT_ATR_LENGTH
+                bars = data.get_bars(ticker)
+                sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
+                             if bars is not None else {"support": [], "resistance": []})
+                support_levels = [p for p, _ in sr_levels["support"][:1]]
+                entry_plan = entry_estimate.estimate_entry(
+                    current_price=current_price,
+                    avg_mae_wins_pct=avg_mae_wins_pct,
+                    support_levels=support_levels,
+                )
+
+            open_signals.append({
+                "ticker": ticker,
+                "strategy": strat_key,
+                "current_price": current_price,
+                "score": score.compute_score(payload, strat_key),
+                "n_trades": strat_payload.get("n_trades"),
+                "win_rate": strat_payload.get("win_rate"),
+                "profit_factor": strat_payload.get("profit_factor"),
+                "signal_entry_date": open_position.get("entry_date"),
+                "signal_entry_price": open_position.get("entry_price"),
+                "days_since_signal": open_position.get("days_held"),
+                "unrealized_pct_if_entered": open_position.get("unrealized_pct"),
+                "entry_plan": entry_plan,
+            })
+
     today_iso_date = datetime.now(timezone.utc).date().isoformat()
     today_start = today_iso_date + "T00:00:00"
     today_notifications = db.list_notifications_since(today_start)
@@ -1225,6 +1275,7 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
         "market_context": _build_market_context(),
         "open_positions": open_positions,
         "pending_signals": pending_signals,
+        "open_signals": open_signals,
         "realized_pnl_today": round(realized_pnl_today, 2),
         "notable_alerts_today": [
             {"message": n["message"], "kind": n["kind"]} for n in today_notifications

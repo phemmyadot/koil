@@ -90,6 +90,19 @@ Spot: limit ${{spot_limit}} (support ${{support_used}}) — {{order_method}}
 
 ---
 
+## Missed Entries Worth Discussing
+*Optional — only appears when there's a real judgment call to make. Tickers where a strategy's
+own simulated backtest is IN TRADE but the user never entered, signal fired within the last 3
+days. Not every open_signals entry gets written up -- Claude selects which are worth a late
+entry and explicitly says why others are being skipped, rather than covering all of them evenly.*
+
+{{#each open_signals_discussed}}
+**{{ticker}}** — signal fired {{signal_entry_date}} at {{signal_entry_price}}, now
+{{current_price}} ({{unrealized_pct_if_entered}}% if entered then). {{judgment}}
+{{/each}}
+
+---
+
 ## Session Notes
 
 **What worked / what to note:**
@@ -103,17 +116,23 @@ Spot: limit ${{spot_limit}} (support ${{support_used}}) — {{order_method}}
 
 ## Data sources per section
 
-- **Market Context**: `web_search_20260209` server tool enabled on the `generate_daily_review()`
-  call. Claude searches live, writes the table and macro line itself. No app-side fetch.
-- **Your Trades**: `build_daily_snapshot()`'s existing `open_positions` list, plus a new
+- **Market Context**: `CONTEXT_TICKERS` (SPY/QQQ/DIA/^TNX/USO, ETF proxies) fetched via the same
+  universe cycle as any watchlisted/traded ticker (`app.py`'s `_active_tickers()`), read via
+  `_build_market_context()`. Not `web_search` — dropped after proving slow (8-12 searches per
+  call) and prone to truncating the rest of the review.
+- **Your Trades**: `build_daily_snapshot()`'s existing `open_positions` list, plus a
   `prior_day` field per position sourced from `db.get_trade_daily_marks(position_id)` (yesterday's
   `close_price`, diffed against today's). `strategy_verdict` unchanged (mechanical). `ai_note` is
   Claude's own generated text, not stored input.
-- **Take — Enter Tomorrow**: every ticker whose current strategy verdict is TAKE/Pending —
-  no date filtering needed, since Pending is inherently a single-day state. Order limit comes
-  from `entry_estimate.py`'s `estimate_entry()`, generalized to accept `current_price` directly
-  instead of requiring an existing open position's `entry_price`, so it works for a signal with
-  no position yet.
+- **Take — Enter Tomorrow**: every ticker whose current strategy verdict is TAKE, restricted to
+  `quality_filter.DEFAULT_FILTER["strategies"]` (VCPO today) and passing the shared quality bar
+  — no watch-only tier, everything listed already cleared the filter. Order limit comes from
+  `entry_estimate.py`'s `estimate_entry()`, working off `current_price` directly (no existing
+  position needed).
+- **Missed Entries Worth Discussing**: `open_signals` in `build_daily_snapshot()` — tickers
+  where a strategy's own `open_position` exists (its simulated backtest is IN TRADE) but the
+  ticker isn't in the user's real `open_positions`, capped to `days_held <= 3`. Claude selects
+  which entries are worth writing up; the section is omitted entirely when nothing qualifies.
 - **Session Notes**: Claude-authored, same rolling-memory/enrichment approach as the current
   implementation.
 

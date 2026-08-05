@@ -26,10 +26,14 @@ learned about them so far), a rolling summary of patterns observed across past r
 compact snapshot of today's state: market_context (index/commodity ETF proxies with today's \
 close and change %, already fetched by the app -- not something you need to look up), real \
 open positions (with current price, unrealized P&L, distance to take-profit/stop, the \
-underlying strategy's own verdict, and yesterday's price for comparison), and pending_signals \
--- tickers that fired a fresh TAKE signal today and already cleared the app's own quality-bar \
+underlying strategy's own verdict, and yesterday's price for comparison), pending_signals -- \
+tickers that fired a fresh TAKE signal today and already cleared the app's own quality-bar \
 filter (win rate, profit factor, trade count, and chart pattern), each with a computed entry \
-limit and order-staging method.
+limit and order-staging method -- and open_signals: tickers where a strategy's own simulated \
+backtest is currently acting as if it holds a position (its own "IN TRADE" state), fired within \
+the last 3 days, that the user never actually entered. These are NOT real positions and NOT \
+fresh signals -- they're a signal that already fired days_since_signal days ago and may still \
+be worth a late, considered entry, or may not be (see below).
 
 ## How to write the review
 
@@ -71,6 +75,17 @@ rate/profit factor from the snapshot), the order block exactly as given (spot li
 support level, and order_method -- these are pre-computed, do not alter the numbers), and a \
 short verdict sentence giving your own take on the setup's strength relative to the others \
 listed today.
+
+### 3.5 Missed Entries Worth Discussing
+
+Only include this section when open_signals actually contains something worth raising -- do \
+not print a header for an empty list, and do not force commentary on a signal that clearly \
+isn't worth a late entry (e.g. it's already moved a lot, or matches a pattern the user has \
+flagged as a past mistake). For a signal that genuinely still looks reasonable to enter late, \
+give: ticker, days_since_signal, signal_entry_price vs. current price, and a plain judgment on \
+whether a late entry still makes sense given how much has already moved -- this is your \
+judgment call, not a mechanical pass/fail, so say so plainly rather than hedging. Skip this \
+section entirely on a day with nothing here worth a second look.
 
 ### 4. Session Notes
 
@@ -163,10 +178,10 @@ def generate_daily_review(snapshot: dict, retrieved_chunks: list[dict], memory_s
     content.append({"type": "text", "text": "Give today's review."})
     response = _client().messages.create(
         model=MODEL,
-        # A review with several open positions and pending signals (each getting its own
-        # paragraph of commentary) can run well past 2000 tokens -- raised to leave real
-        # headroom rather than risk a silent mid-sentence cutoff.
-        max_tokens=4000,
+        # A review with several open positions, pending signals, and open_signals (each getting
+        # its own paragraph of commentary) can run well past 4000 tokens -- raised again to
+        # leave real headroom rather than risk a silent mid-sentence cutoff.
+        max_tokens=6000,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": content}],
     )
