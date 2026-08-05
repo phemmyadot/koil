@@ -252,19 +252,16 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
 
 # Index/commodity symbols for the daily review's Market Context section (see
 # docs/superpowers/specs/2026-08-04-daily-review-format-template.md) -- fetched the same way as
-# any watchlisted/traded ticker (see _active_tickers below) so their bars are always fresh by
-# review time, no separate fetch path. They fail passes_technical_filters() (built for
-# individual stocks) and so never enter strategy compute -- fetched only, never scored.
+# Index/commodity ETF proxies for the daily review's Market Context section -- fetched via the
+# same universe cycle as any watchlisted/traded ticker; they fail passes_technical_filters()
+# (built for stocks) so are fetched only, never scored.
 CONTEXT_TICKERS = ["SPY", "QQQ", "DIA", "^TNX", "USO"]
 
 
 def _active_tickers() -> list[str]:
-    """Candidate tickers (from the DB table -- see step 1 of the cycle in this module's
-    docstring, NOT a live Yahoo screener call) plus any ticker a client has ever reported as
-    watchlisted, plus any ticker with an open position, plus the fixed CONTEXT_TICKERS list --
-    all three must keep being fetched/computed even if they later fail the technical filter, or
-    they silently go stale forever (an open position's daily marks and TP/stop alerts depend on
-    this; CONTEXT_TICKERS backs the daily review's Market Context section)."""
+    """Candidate tickers (from the DB table, not a live Yahoo screener call) plus any
+    watchlisted ticker, any open position's ticker, and CONTEXT_TICKERS -- all must keep being
+    fetched even if they fail the technical filter, or they silently go stale forever."""
     candidates = db.get_candidate_tickers()
     watchlisted = db.get_watchlist_tickers()
     traded = [p["ticker"] for p in db.list_positions("open")]
@@ -1068,9 +1065,7 @@ _CONTEXT_TICKER_LABELS = {"SPY": "S&P 500 (SPY)", "QQQ": "Nasdaq 100 (QQQ)", "DI
 
 
 def _build_market_context() -> list[dict]:
-    """Last close + day-over-day change for each of CONTEXT_TICKERS, from already-fetched bars
-    (data.get_bars() -- in-memory, no network call here). Ticker-ETF proxies (SPY/QQQ/DIA/USO)
-    for the underlying indices/commodity, not the indices themselves -- see CONTEXT_TICKERS."""
+    """Last close + day-over-day change for each of CONTEXT_TICKERS, from already-fetched bars."""
     context = []
     for ticker in CONTEXT_TICKERS:
         bars = data.get_bars(ticker)
@@ -1628,21 +1623,30 @@ def review_trigger_daily():
         DEFAULT_USER_ID, review_date, summary_text, embedding.tobytes(), json.dumps(snapshot, default=str), now_iso,
     )
 
-    try:
-        fact = review_claude.extract_enrichment_fact(summary_text)
-        if fact:
-            fact_vec = review_ingest.embed_texts([fact])[0]
-            db.insert_document_chunk(
-                DEFAULT_USER_ID, None, "auto_enrichment", review_id, None, fact, fact_vec.tobytes(), now_iso,
-            )
-    except Exception as e:  # noqa: BLE001 - enrichment is best-effort, must not fail the review itself
-        print(f"app: post-review enrichment extraction failed ({e}); review still saved.")
+    def _run_enrichment():
+        try:
+            fact = review_claude.extract_enrichment_fact(summary_text)
+            if fact:
+                fact_vec = review_ingest.embed_texts([fact])[0]
+                db.insert_document_chunk(
+                    DEFAULT_USER_ID, None, "auto_enrichment", review_id, None, fact, fact_vec.tobytes(), now_iso,
+                )
+        except Exception as e:  # noqa: BLE001 - enrichment is best-effort, must not fail the review itself
+            print(f"app: post-review enrichment extraction failed ({e}); review still saved.")
 
-    try:
-        updated_memory = review_claude.update_rolling_memory(memory_text, summary_text)
-        db.upsert_review_memory_summary(DEFAULT_USER_ID, updated_memory, review_id, now_iso)
-    except Exception as e:  # noqa: BLE001 - same -- rolling memory update must not fail the review itself
-        print(f"app: rolling memory update failed ({e}); review still saved.")
+    def _run_memory_update():
+        try:
+            updated_memory = review_claude.update_rolling_memory(memory_text, summary_text)
+            db.upsert_review_memory_summary(DEFAULT_USER_ID, updated_memory, review_id, now_iso)
+        except Exception as e:  # noqa: BLE001 - same -- rolling memory update must not fail the review itself
+            print(f"app: rolling memory update failed ({e}); review still saved.")
+
+    # Independent best-effort calls -- run concurrently rather than blocking the response in
+    # series (each is its own Claude API round-trip).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_run_enrichment), pool.submit(_run_memory_update)]
+        for f in as_completed(futures):
+            f.result()
 
     return _review_to_dict(db.get_daily_review(DEFAULT_USER_ID, review_date))
 

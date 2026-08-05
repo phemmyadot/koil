@@ -137,12 +137,8 @@ def _client() -> anthropic.Anthropic:
 
 def _context_content_blocks(retrieved_chunks: list[dict], memory_summary: str | None, snapshot: dict,
                              review_summary: str | None = None) -> list[dict]:
-    """Two content blocks instead of one joined string: snapshot+memory(+review_summary, for
-    chat_reply) are frozen for the life of one day's review cycle (same value on every chat
-    turn that day), so they get their own cache_control breakpoint, separate from the
-    system-prompt breakpoint. retrieved_chunks are re-queried per chat turn with the new user
-    message (see app.py's chat handler) and so are NOT byte-stable across turns -- left
-    uncached, or a cache_control here would just be dead weight that never hits."""
+    """Snapshot/memory/review_summary are frozen for the day and get their own cache breakpoint;
+    retrieved_chunks vary per chat turn (re-queried each time) so are left uncached."""
     frozen_parts = [f"Today's position and signal snapshot:\n{json.dumps(snapshot, default=str)}"]
     if memory_summary:
         frozen_parts.append(f"\nWhat you've learned about this user's patterns over time:\n{memory_summary}")

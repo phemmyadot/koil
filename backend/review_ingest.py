@@ -65,27 +65,29 @@ def chunk_text(text: str, target_tokens: int = 650, overlap_tokens: int = 75) ->
 
 
 def embed_texts(texts: list[str]) -> list[np.ndarray]:
+    """Unit-normalizes vectors so top_k_chunks() can score similarity as a plain dot product."""
     if not texts:
         return []
     vectors = _get_model().encode(texts, batch_size=32, convert_to_numpy=True)
-    return [v.astype(np.float32) for v in vectors]
-
-
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+    normalized = []
+    for v in vectors:
+        v = v.astype(np.float32)
+        norm = np.linalg.norm(v)
+        normalized.append(v / norm if norm else v)
+    return normalized
 
 
 def top_k_chunks(user_id: int, query_text: str, k: int = 5) -> list[dict]:
     """Embeds query_text once, scores every stored chunk (original upload + enrichment, no
-    distinction -- see design doc Part 1/3) by cosine similarity, returns the top K full row
-    dicts. Brute-force is fine at this scale (a handful of document chunks, one review per day)
-    -- no vector DB needed."""
+    distinction -- see design doc Part 1/3) by similarity (dot product on pre-normalized
+    vectors -- see embed_texts), returns the top K full row dicts. Brute-force is fine at this
+    scale (a handful of document chunks, one review per day) -- no vector DB needed."""
     query_vec = embed_texts([query_text])[0]
     rows = db.get_document_chunks(user_id)
     if not rows:
         return []
     scored = [
-        (cosine_similarity(query_vec, np.frombuffer(r["embedding"], dtype=np.float32)), r)
+        (float(np.dot(query_vec, np.frombuffer(r["embedding"], dtype=np.float32))), r)
         for r in rows
     ]
     scored.sort(key=lambda x: x[0], reverse=True)
