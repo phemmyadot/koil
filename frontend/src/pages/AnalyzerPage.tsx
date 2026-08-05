@@ -9,6 +9,7 @@ import {
   useUploadReviewDocument,
 } from "../hooks/useReview";
 import { LightMarkdown } from "../lib/lightMarkdown";
+import { StreamingReview } from "../components/molecules/StreamingReview";
 import "./AnalyzerPage.css";
 
 // Daily review chatbot page. See
@@ -217,9 +218,20 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Set once, at mount, to the summary's own chunk count -- lets the very first render of the
+  // review still animate (a fresh trigger navigates straight into this component), while a
+  // page reload/revisit of an already-open review still gets the full instant-render treatment
+  // below via hasStreamedSummary flipping true right after the first pass.
+  const [hasStreamedSummary, setHasStreamedSummary] = useState(false);
+  // The chunk array for a chat reply just received this session, keyed by the message index it
+  // corresponds to once chat_messages includes it -- cleared once that reply has fully
+  // streamed, so history reloads (or a later message) never re-animate it.
+  const [streamingReplyChunks, setStreamingReplyChunks] = useState<string[] | null>(null);
+  const streamingReplyIndex = review ? review.chat_messages.length - 1 : -1;
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [review?.chat_messages.length, sendMessage.isPending]);
+  }, [review?.chat_messages.length, sendMessage.isPending, streamingReplyChunks]);
 
   if (isLoading || !review) {
     return <p className="analyzer-loading">Loading&hellip;</p>;
@@ -231,7 +243,8 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
     const message = draft.trim();
     if (!message) return;
     setDraft("");
-    await sendMessage.mutateAsync(message);
+    const result = await sendMessage.mutateAsync(message);
+    setStreamingReplyChunks(result.reply_chunks);
   }
 
   return (
@@ -239,12 +252,20 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
       <div className="analyzer-chat-messages" ref={scrollRef}>
         <div className="analyzer-chat-msg analyzer-chat-msg-assistant">
           <span className="analyzer-chat-role">Analyzer</span>
-          <LightMarkdown text={review.summary_text} />
+          {hasStreamedSummary ? (
+            <LightMarkdown text={review.summary_text} />
+          ) : (
+            <StreamingReview chunks={review.summary_text_chunks} onDone={() => setHasStreamedSummary(true)} />
+          )}
         </div>
         {review.chat_messages.map((m, i) => (
           <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
             <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
-            <LightMarkdown text={m.content} />
+            {m.role === "assistant" && i === streamingReplyIndex && streamingReplyChunks ? (
+              <StreamingReview chunks={streamingReplyChunks} onDone={() => setStreamingReplyChunks(null)} />
+            ) : (
+              <LightMarkdown text={m.content} />
+            )}
           </div>
         ))}
         {sendMessage.isPending && (

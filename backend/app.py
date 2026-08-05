@@ -74,6 +74,7 @@ import backend.quality_filter as quality_filter
 import backend.review_claude as review_claude
 import backend.review_gating as review_gating
 import backend.review_ingest as review_ingest
+import backend.review_stream as review_stream
 import backend.support_resistance as support_resistance
 import backend.prebreak as prebreak
 import backend.score as score
@@ -1719,6 +1720,7 @@ def _review_to_dict(review: dict) -> dict:
         "review_date": review["review_date"],
         "status": review["status"],
         "summary_text": review["summary_text"],
+        "summary_text_chunks": review_stream.chunk_markdown_for_stream(review["summary_text"]),
         "created_at": review["created_at"],
     }
 
@@ -1793,7 +1795,7 @@ def review_chat(review_date: str, body: dict):
         except Exception as e:  # noqa: BLE001 - a failed enrichment write must not fail the chat reply itself
             print(f"app: user_enrichment write failed for fact {fact!r} ({e}).")
 
-    return {"reply": assistant_text}
+    return {"reply": assistant_text, "reply_chunks": review_stream.chunk_markdown_for_stream(assistant_text)}
 
 
 class SPAStaticFiles(StaticFiles):

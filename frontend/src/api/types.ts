@@ -251,6 +251,8 @@ export interface DailyReview {
   review_date: string;
   status: "active" | "locked";
   summary_text: string;
+  // backend/review_stream.py -- ordered markdown units for the simulated streaming reveal.
+  summary_text_chunks: string[];
   created_at: string;
 }
 
@@ -260,4 +262,5 @@ export interface DailyReviewWithChat extends DailyReview {
 
 export interface ReviewChatReply {
   reply: string;
+  reply_chunks: string[];
 }
