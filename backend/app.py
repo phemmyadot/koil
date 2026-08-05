@@ -1139,9 +1139,14 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
             else:
                 unrealized_pct = round((current_price - state["avg_cost"]) / state["avg_cost"] * 100, 2)
 
+        # Only the strategy(s) actually traded (quality_filter.DEFAULT_FILTER["strategies"],
+        # currently VCPO only) are sent to the review chatbot -- other strategies' verdicts on a
+        # held ticker are noise the user doesn't act on and shouldn't factor into its commentary.
         strategy_verdicts = {}
         if payload:
             for strat_key in _STRATEGY_MODULES:
+                if strat_key not in _DEFAULT_FILTER_WIRE_STRATEGIES:
+                    continue
                 strat_payload = payload.get(strat_key)
                 strategy_verdicts[strat_key] = strat_payload.get("verdict") if strat_payload else None
 
