@@ -97,7 +97,7 @@
     z-index: 10;
     /* Extra bottom inset on notched iPhones so the nav isn't flush against the home
        indicator -- falls back to 0 on devices without a safe-area inset. */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
   }
   .app-bottomnav-item {
     flex: 1 1 0;

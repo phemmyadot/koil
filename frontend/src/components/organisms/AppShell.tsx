@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { KMark } from "../atoms/KMark";
 import { WordMark } from "../atoms/WordMark";
 import { NotificationBell } from "./NotificationBell";
@@ -24,7 +24,9 @@ const ANALYZER_NAV_ITEM = { to: "/analyzer", label: "Analyzer", icon: "\u{1F9E0}
 
 export function AppShell() {
   const { data: meta } = useMeta();
+  const location = useLocation();
   const navItems = meta?.daily_review_enabled ? [...NAV_ITEMS, ANALYZER_NAV_ITEM] : NAV_ITEMS;
+  const isHome = location.pathname === "/";
   return (
     <div className="app-shell">
       <header className="app-topbar">
@@ -46,7 +48,7 @@ export function AppShell() {
         <Outlet />
       </main>
 
-      <PLCalcFab />
+      {isHome && <PLCalcFab />}
 
       <nav className="app-bottomnav">
         {navItems.map((item) => (
