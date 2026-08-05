@@ -8,7 +8,15 @@ import { Streamdown } from "streamdown";
 // lines so that rarely matters in practice.
 const CHUNK_INTERVAL_MS = 60;
 
-export function StreamingReview({ chunks, onDone }: { chunks: string[]; onDone?: () => void }) {
+export function StreamingReview({
+  chunks,
+  onDone,
+  onProgress,
+}: {
+  chunks: string[];
+  onDone?: () => void;
+  onProgress?: () => void;
+}) {
   const [visibleCount, setVisibleCount] = useState(chunks.length > 0 ? 1 : 0);
   const chunksRef = useRef(chunks);
   chunksRef.current = chunks;
@@ -16,6 +24,13 @@ export function StreamingReview({ chunks, onDone }: { chunks: string[]; onDone?:
   useEffect(() => {
     setVisibleCount(chunks.length > 0 ? 1 : 0);
   }, [chunks]);
+
+  // Fires on every revealed chunk (including the first) so the caller can keep a scroll
+  // container pinned to the bottom as the content grows, not just once at the start/end.
+  useEffect(() => {
+    onProgress?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleCount]);
 
   useEffect(() => {
     if (visibleCount >= chunksRef.current.length) {

@@ -229,8 +229,12 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
   const [streamingReplyChunks, setStreamingReplyChunks] = useState<string[] | null>(null);
   const streamingReplyIndex = review ? review.chat_messages.length - 1 : -1;
 
-  useEffect(() => {
+  function scrollToBottom() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }
+
+  useEffect(() => {
+    scrollToBottom();
   }, [review?.chat_messages.length, sendMessage.isPending, streamingReplyChunks]);
 
   if (isLoading || !review) {
@@ -255,14 +259,22 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
           {hasStreamedSummary ? (
             <LightMarkdown text={review.summary_text} />
           ) : (
-            <StreamingReview chunks={review.summary_text_chunks} onDone={() => setHasStreamedSummary(true)} />
+            <StreamingReview
+              chunks={review.summary_text_chunks}
+              onDone={() => setHasStreamedSummary(true)}
+              onProgress={scrollToBottom}
+            />
           )}
         </div>
         {review.chat_messages.map((m, i) => (
           <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
             <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
             {m.role === "assistant" && i === streamingReplyIndex && streamingReplyChunks ? (
-              <StreamingReview chunks={streamingReplyChunks} onDone={() => setStreamingReplyChunks(null)} />
+              <StreamingReview
+                chunks={streamingReplyChunks}
+                onDone={() => setStreamingReplyChunks(null)}
+                onProgress={scrollToBottom}
+              />
             ) : (
               <LightMarkdown text={m.content} />
             )}
