@@ -49,6 +49,33 @@ A live scoring dashboard for all 3 strategies (VEXH/VCP/VCPO), run locally:
 
 Then open `http://127.0.0.1:8123`.
 
+`backend/app.py` requires `backend/static_frontend/` (a prebuilt copy of the React SPA) to
+exist just to import, even when using Vite's dev server for frontend work — so after any
+frontend change, rebuild it before restarting uvicorn:
+
+```
+cd frontend && npm run build && cd ..
+rm -rf backend/static_frontend && cp -r frontend/dist backend/static_frontend
+.venv/Scripts/python.exe -m uvicorn backend.app:app --port 8123
+```
+
+(PowerShell: `Remove-Item -Recurse -Force backend/static_frontend; Copy-Item -Recurse frontend/dist backend/static_frontend`.)
+
+To run the whole app (frontend + backend) via Docker and cleanly rebuild after code changes:
+
+```
+docker compose up -d --build
+```
+
+`--build` forces Docker to rebuild the image instead of reusing a stale cached layer (e.g. after
+a frontend or dependency change). `app_data.db` and `backend/user_docs/` are bind-mounted (see
+`docker-compose.yml`), so a rebuild never wipes the database or uploaded documents. If a
+container is misbehaving and a rebuild alone doesn't fix it, force a full recreate:
+
+```
+docker compose down && docker compose up -d --build --force-recreate
+```
+
 - `app.py` — FastAPI backend; computes each ticker's per-strategy stats in the background on
   a fixed cadence (see `backend/refresh_architecture.md`), never on the request path.
 - `strategy_vexh.py` / `strategy_vcp.py` / `strategy_vcpo.py` — each strategy's `evaluate()`,
