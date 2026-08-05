@@ -235,14 +235,16 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
       </div>
 
       <div className="analyzer-chat">
-        <div className="analyzer-chat-messages" ref={scrollRef}>
-          {review.chat_messages.map((m, i) => (
-            <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
-              <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
-              <LightMarkdown text={m.content} />
-            </div>
-          ))}
-        </div>
+        {review.chat_messages.length > 0 && (
+          <div className="analyzer-chat-messages" ref={scrollRef}>
+            {review.chat_messages.map((m, i) => (
+              <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
+                <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
+                <LightMarkdown text={m.content} />
+              </div>
+            ))}
+          </div>
+        )}
         <div className="analyzer-chat-input-row">
           <input
             type="text"
