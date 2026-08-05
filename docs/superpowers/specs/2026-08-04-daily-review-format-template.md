@@ -6,10 +6,16 @@ current free-form format. See
 this feeds into. Placeholders (`{{...}}`) mark where snapshot data or Claude's own generation
 fills in — this file documents the target shape, it is not rendered by a template engine.
 
-Sections, in order: **Market Context → Your Trades → Take — Enter Tomorrow → Session Notes.**
-No Watchlist section — a TAKE/Pending verdict is a one-day state (fires at next day's open or
-reverts), so every currently-Pending ticker belongs in "Take — Enter Tomorrow"; there is no
-separate multi-day pending backlog to show.
+Sections, in order: **Market Context → Strategy Trades → Investment → Take — Enter Tomorrow →
+Missed Entries Worth Discussing → Session Notes.** No Watchlist section — a TAKE/Pending verdict
+is a one-day state (fires at next day's open or reverts), so every currently-Pending ticker
+belongs in "Take — Enter Tomorrow"; there is no separate multi-day pending backlog to show.
+
+"Your Trades" (2.0/2.5) splits real open positions by how they were entered: **Strategy Trades**
+(entered off an actual strategy signal — mechanical verdict + AI note, as before) and
+**Investment** (entered manually as a long-term holding — no strategy verdict exists or is
+implied; commentary reads as a thesis check-in, not signal-following). Either subsection is
+omitted entirely if its list is empty.
 
 ```markdown
 # KOIL Daily Review
@@ -37,10 +43,10 @@ separate multi-day pending backlog to show.
 
 ---
 
-## Your Trades
-*Real open positions from the app. Act now.*
+## 2.0 Strategy Trades
+*Real open positions entered off an actual strategy signal. Act now.*
 
-{{#each open_positions}}
+{{#each strategy_positions}}
 ### {{ticker}} | {{current_price}} | {{unrealized_pct}}% | {{strategy_verdict}}
 
 | | Today | Yesterday |
@@ -62,6 +68,32 @@ Verdict: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal)*
 
 ---
 {{/each}}
+<!-- Subsection omitted entirely if strategy_positions is empty. -->
+
+---
+
+## 2.5 Investment
+*Real open positions entered manually as a long-term holding, not from a strategy signal.
+No strategy verdict — never invented for these.*
+
+{{#each investment_positions}}
+### {{ticker}} | {{current_price}} | {{unrealized_pct}}%
+
+| | Today | Yesterday |
+|---|---|---|
+| Price | {{current_price}} | {{prior_day.close_price}} |
+| Unrealized | {{unrealized_pct}}% | {{prior_day.unrealized_pct}}% |
+
+{{#if ai_note}}
+> **AI note:** {{ai_note}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
+<!-- Reads as a long-term thesis check-in, not tactical signal-following -- no verdict
+     line above it since none applies to a manual holding. Same same/changed-from-
+     yesterday continuity as Strategy Trades. -->
+{{/if}}
+
+---
+{{/each}}
+<!-- Subsection omitted entirely if investment_positions is empty. -->
 
 ---
 
@@ -120,10 +152,13 @@ entry and explicitly says why others are being skipped, rather than covering all
   universe cycle as any watchlisted/traded ticker (`app.py`'s `_active_tickers()`), read via
   `_build_market_context()`. Not `web_search` — dropped after proving slow (8-12 searches per
   call) and prone to truncating the rest of the review.
-- **Your Trades**: `build_daily_snapshot()`'s existing `open_positions` list, plus a
-  `prior_day` field per position sourced from `db.get_trade_daily_marks(position_id)` (yesterday's
-  `close_price`, diffed against today's). `strategy_verdict` unchanged (mechanical). `ai_note` is
-  Claude's own generated text, not stored input.
+- **Strategy Trades / Investment**: `build_daily_snapshot()` splits its open-positions loop into
+  `strategy_positions` and `investment_positions` by each position's entry fill's `strategy_key`
+  (`"manual"` → Investment, anything else → Strategy Trades — read directly off the fills
+  already fetched per position, no new query). Both carry the same `prior_day` field (from
+  `db.get_trade_daily_marks(position_id)`, yesterday's `close_price` diffed against today's).
+  `strategy_verdict` only applies to Strategy Trades (mechanical, unchanged); `ai_note` is
+  Claude's own generated text either way, not stored input.
 - **Take — Enter Tomorrow**: every ticker whose current strategy verdict is TAKE, restricted to
   `quality_filter.DEFAULT_FILTER["strategies"]` (VCPO today) and passing the shared quality bar
   — no watch-only tier, everything listed already cleared the filter. Order limit comes from

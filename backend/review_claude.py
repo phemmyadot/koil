@@ -28,16 +28,19 @@ uploaded one -- some users choose not to, in which case work from app data and w
 learned about them so far), a rolling summary of patterns observed across past reviews \
 (including your own most recent call on each open position -- see "Your Trades" below), and a \
 compact snapshot of today's state: market_context (index/commodity ETF proxies with today's \
-close and change %, already fetched by the app -- not something you need to look up), real \
-open positions (with current price, unrealized P&L, distance to take-profit/stop, the \
-underlying strategy's own verdict, and yesterday's price for comparison), pending_signals -- \
-tickers that fired a fresh TAKE signal today and already cleared the app's own quality-bar \
-filter (win rate, profit factor, trade count, and chart pattern), each with a computed entry \
-limit and order-staging method -- and open_signals: tickers where a strategy's own simulated \
-backtest is currently acting as if it holds a position (its own "IN TRADE" state), fired within \
-the last 3 days, that the user never actually entered. These are NOT real positions and NOT \
-fresh signals -- they're a signal that already fired days_since_signal days ago and may still \
-be worth a late, considered entry, or may not be (see below).
+close and change %, already fetched by the app -- not something you need to look up), \
+strategy_positions -- real open positions entered off an actual strategy signal (with current \
+price, unrealized P&L, distance to take-profit/stop, the underlying strategy's own verdict, and \
+yesterday's price for comparison), investment_positions -- real open positions the user entered \
+manually as a long-term holding, not from any strategy signal (same price/P&L fields, but no \
+strategy verdict exists for these -- never invent one), pending_signals -- tickers that fired a \
+fresh TAKE signal today and already cleared the app's own quality-bar filter (win rate, profit \
+factor, trade count, and chart pattern), each with a computed entry limit and order-staging \
+method -- and open_signals: tickers where a strategy's own simulated backtest is currently \
+acting as if it holds a position (its own "IN TRADE" state), fired within the last 3 days, that \
+the user never actually entered. These are NOT real positions and NOT fresh signals -- they're \
+a signal that already fired days_since_signal days ago and may still be worth a late, \
+considered entry, or may not be (see below).
 
 ## How to write the review
 
@@ -53,9 +56,9 @@ indices themselves, so label them as such rather than implying they're the raw i
 You have no live news access, so do not invent a "key event" or macro headline -- describe only \
 what the numbers themselves show (e.g. a broad rally, a risk-off day, a flat session).
 
-### 2. Your Trades
+### 2.0 Strategy Trades
 
-One entry per open position in the snapshot, in the order given. For each: the ticker, current \
+One entry per position in strategy_positions, in the order given. For each: the ticker, current \
 price, unrealized %, and the strategy's own verdict (e.g. IN TRADE, TP HIT) -- state this \
 verdict exactly as given, verbatim, never reworded or reinterpreted, since it's a mechanical \
 fact from the app's own backtested state, not your judgment. Show today's price against \
@@ -69,6 +72,22 @@ note against your own most recent prior note for this same ticker, from the roll
 and state explicitly whether today's call is "same as yesterday" or "changed from yesterday" -- \
 never silently repeat or silently reverse a prior call without saying so. Omit the note \
 entirely for a position with nothing new to say; don't manufacture commentary.
+
+Skip this subsection entirely if strategy_positions is empty.
+
+### 2.5 Investment
+
+One entry per position in investment_positions, in the order given -- these are long-term \
+manual holdings, not strategy trades, so treat them differently: no strategy verdict exists and \
+none should be implied. For each: ticker, current price, unrealized %, days held, and today's \
+price vs. yesterday's (prior_day) when available. Your commentary here should read like a \
+long-term thesis check-in, not tactical signal-following -- e.g. is the position drifting \
+toward a level worth a conscious decision, or is there nothing new and it's fine to just note \
+that. Compare against your own most recent prior note for this ticker the same way as in \
+Strategy Trades (same/changed from yesterday). Don't apply strategy-trade framing (TP/stop \
+distance, verdict language) here unless the position itself has a real tp_price/stop_price set.
+
+Skip this subsection entirely if investment_positions is empty.
 
 ### 3. Take — Enter Tomorrow
 

@@ -1157,6 +1157,9 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
                 "price_change_pct": round((current_price - prior_close) / prior_close * 100, 2) if prior_close else None,
             }
 
+        # fills are ordered by fill_date, id -- the first fill is always the entry.
+        strategy_key = fills[0]["strategy_key"] if fills else None
+
         open_positions.append({
             "ticker": ticker,
             "instrument": state["instrument"],
@@ -1171,7 +1174,14 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
             "realized_pnl": round(state["realized_pnl"], 2),
             "strategy_verdicts": strategy_verdicts,
             "prior_day": prior_day,
+            "strategy_key": strategy_key,
         })
+
+    # Split by how the position was entered: a real strategy signal vs. a manual long-term
+    # investment (strategy_key == "manual") -- the review treats these very differently (see
+    # SYSTEM_PROMPT's "2.0 Strategy Trades" / "2.5 Investment" split).
+    strategy_positions = [p for p in open_positions if p["strategy_key"] != "manual"]
+    investment_positions = [p for p in open_positions if p["strategy_key"] == "manual"]
 
     pending_signals = []
     with _compute_lock:
@@ -1276,7 +1286,8 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "market_context": _build_market_context(),
-        "open_positions": open_positions,
+        "strategy_positions": strategy_positions,
+        "investment_positions": investment_positions,
         "pending_signals": pending_signals,
         "open_signals": open_signals,
         "realized_pnl_today": round(realized_pnl_today, 2),
