@@ -116,11 +116,9 @@ function AnalyzerMain() {
 
       {showUpload && <DocumentPanel onClose={() => setShowUpload(false)} />}
 
-      {activeReviewDate ? (
-        <ReviewAndChat reviewDate={activeReviewDate} />
-      ) : (
-        <TriggerCard status={status} onTrigger={() => trigger.mutate()} pending={trigger.isPending} error={trigger.error} />
-      )}
+      <TriggerCard status={status} onTrigger={() => trigger.mutate()} pending={trigger.isPending} error={trigger.error} />
+
+      {activeReviewDate && <ReviewAndChat reviewDate={activeReviewDate} />}
     </div>
   );
 }
@@ -178,18 +176,21 @@ function TriggerCard({
   pending,
   error,
 }: {
-  status: { can_start: boolean } | undefined;
+  status: { can_start: boolean; active_review: { review_date: string } | null } | undefined;
   onTrigger: () => void;
   pending: boolean;
   error: unknown;
 }) {
   const canStart = !!status?.can_start;
+  const activeReviewDate = status?.active_review?.review_date ?? null;
   return (
     <div className="analyzer-trigger-card">
       <p>
         {canStart
           ? "Today's closing data is in. Start your review."
-          : "The review button is available once the market has closed and today's data is final (weekdays, after close)."}
+          : activeReviewDate
+            ? `Viewing ${activeReviewDate}'s review below. Today's review becomes available once the market has closed and today's data is final.`
+            : "The review button is available once the market has closed and today's data is final (weekdays, after close)."}
       </p>
       <button type="button" className="small-btn analyzer-trigger-btn" disabled={!canStart || pending} onClick={onTrigger}>
         {pending ? "Generating review…" : "Start today's review"}
@@ -240,8 +241,6 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
   if (isLoading || !review) {
     return <p className="analyzer-loading">Loading&hellip;</p>;
   }
-
-  const locked = review.status === "locked";
 
   async function handleSend() {
     const message = draft.trim();
@@ -295,8 +294,8 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
         <input
           type="text"
           value={draft}
-          disabled={locked || sendMessage.isPending}
-          placeholder={locked ? "This review's chat has ended." : "Ask a follow-up…"}
+          disabled={sendMessage.isPending}
+          placeholder="Ask a follow-up…"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -305,7 +304,7 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
             }
           }}
         />
-        <button type="button" className="small-btn" disabled={locked || sendMessage.isPending || !draft.trim()} onClick={handleSend}>
+        <button type="button" className="small-btn" disabled={sendMessage.isPending || !draft.trim()} onClick={handleSend}>
           Send
         </button>
       </div>

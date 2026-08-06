@@ -1850,10 +1850,14 @@ def review_status():
         active_out = {
             "review_date": active["review_date"],
             "status": active["status"],
-            "chat_open": review_gating.chat_still_open(active, now),
+            # Chat never auto-closes by time -- the user decides when to start a new review vs.
+            # keep talking in an existing one, so this is always true for any active review.
+            "chat_open": True,
         }
     return {
-        "can_start": review_gating.review_available_to_start(now) and active is None,
+        # No longer gated on "only one active review at a time" -- the user can start a new
+        # review any time today's data is ready, even with an older one still open below.
+        "can_start": review_gating.review_available_to_start(now),
         "active_review": active_out,
     }
 
@@ -1864,8 +1868,6 @@ def review_trigger_daily():
     now = datetime.now(timezone.utc)
     if not review_gating.review_available_to_start(now):
         raise HTTPException(status_code=400, detail="review is not available to start right now")
-    if db.get_active_daily_review(DEFAULT_USER_ID) is not None:
-        raise HTTPException(status_code=400, detail="a review is already active")
 
     review_date = market_hours.most_recent_close_boundary(now).date().isoformat()
     existing = db.get_daily_review(DEFAULT_USER_ID, review_date)
@@ -1953,22 +1955,8 @@ def review_chat(review_date: str, body: dict):
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat(timespec="seconds")
 
-    if review["status"] == "locked":
-        raise HTTPException(status_code=400, detail="this review's chat has ended")
-
-    if not review_gating.chat_still_open(review, now):
-        # Lazy lock (design doc Part 7, resolved decision): the 7am transition is detected on
-        # next access, not by a background job. Insert the lock notice, lock the review, THEN
-        # reject this request too -- the message that triggered the lock check still doesn't
-        # get a real reply.
-        db.insert_review_chat_message(
-            review["id"], "system",
-            "This daily review session has ended. A new review will be available after the next market close.",
-            now_iso,
-        )
-        db.set_daily_review_status(review["id"], "locked")
-        raise HTTPException(status_code=400, detail="this review's chat has ended")
-
+    # No time-based lock -- the user controls when a review's chat context is done, not a clock.
+    # Any review, past or present, stays reachable for follow-up messages.
     db.insert_review_chat_message(review["id"], "user", user_message, now_iso)
 
     chat_history = [

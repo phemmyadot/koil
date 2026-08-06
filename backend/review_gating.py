@@ -4,7 +4,10 @@ docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md, Part 7.
 Pure functions over an explicit `now`, same discipline as market_hours.py -- no reliance on
 datetime.now() internally, so callers control time and this is directly unit-testable without
 waiting for real clock time.
-"""
+
+Chat itself never locks by time (the user decides when a review's context is done, not a
+clock) -- this module only gates when a NEW review is allowed to start, i.e. whether today's
+close data has actually landed yet."""
 from datetime import datetime, time
 
 import backend.market_hours as market_hours
@@ -14,14 +17,6 @@ import backend.market_hours as market_hours
 # day's close, not at any arbitrary later hour.
 _NEW_REVIEW_WINDOW_START = time(16, 0)   # 4:00pm ET
 _NEW_REVIEW_WINDOW_END = time(23, 59, 59)  # 11:59:59pm ET
-
-# The window during which an EXISTING active chat stays reachable -- spans midnight (4pm one
-# day through 7am the next), so this is checked as "NOT inside the 7am-4pm closed window,"
-# not a simple start<=now<=end range.
-_MARKET_OPEN_START = time(7, 0)  # matches this feature's own gate, not market_hours.MARKET_OPEN
-                                    # (9:30) -- the review page locks the whole 7am-4pm span,
-                                    # wider than the exchange's actual open, since 7am-9:30am
-                                    # data is already starting to move pre-market.
 
 
 def review_available_to_start(now: datetime) -> bool:
@@ -43,12 +38,3 @@ def review_available_to_start(now: datetime) -> bool:
     if last_close_fetch is None:
         return False
     return datetime.fromisoformat(last_close_fetch) >= boundary
-
-
-def chat_still_open(review: dict, now: datetime) -> bool:
-    """True while the review's own status is 'active' AND now hasn't rolled past 7am since it
-    was created -- i.e. local time is >= 4pm OR < 7am (the window that spans midnight)."""
-    if review["status"] != "active":
-        return False
-    local = now.astimezone(market_hours.MARKET_TZ)
-    return local.time() >= _NEW_REVIEW_WINDOW_START or local.time() < _MARKET_OPEN_START
