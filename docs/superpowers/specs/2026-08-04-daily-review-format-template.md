@@ -6,10 +6,11 @@ current free-form format. See
 this feeds into. Placeholders (`{{...}}`) mark where snapshot data or Claude's own generation
 fills in — this file documents the target shape, it is not rendered by a template engine.
 
-Sections, in order: **Market Context → Strategy Trades → Investment → Take — Enter Tomorrow →
-Missed Entries Worth Discussing → Session Notes.** No Watchlist section — a TAKE/Pending verdict
-is a one-day state (fires at next day's open or reverts), so every currently-Pending ticker
-belongs in "Take — Enter Tomorrow"; there is no separate multi-day pending backlog to show.
+Sections, in order: **Portfolio Health → Market Context → Strategy Trades → Investment →
+Take — Enter Tomorrow → Missed Entries Worth Discussing → Session Notes.** No Watchlist
+section — a TAKE/Pending verdict is a one-day state (fires at next day's open or reverts), so
+every currently-Pending ticker belongs in "Take — Enter Tomorrow"; there is no separate
+multi-day pending backlog to show.
 
 "Your Trades" (2.0/2.5) splits real open positions by how they were entered: **Strategy Trades**
 (entered off an actual strategy signal — mechanical verdict + AI note, as before) and
@@ -21,6 +22,19 @@ omitted entirely if its list is empty.
 # KOIL Daily Review
 **Date:** {{date}}
 **Time:** {{time}} ET
+
+---
+
+## 0. Portfolio Health
+*Overall trend, not today's specifics — how the portfolio has been doing over time.*
+
+{{portfolio_health_summary}}
+<!-- Claude's own read on portfolio_series (dates/realized[]/unrealized[]), the same
+     cumulative daily P&L history the Trades page's chart is built from. This is a trend
+     judgment (climbing / flat / drawing down, realized vs. unrealized balance, whether
+     unrealized gains are being converted to realized or just sitting exposed) -- not a
+     restatement of the numbers row by row, and not today's specific positions (those are
+     covered in their own sections below). Keep this to a few sentences. -->
 
 ---
 
@@ -148,6 +162,14 @@ entry and explicitly says why others are being skipped, rather than covering all
 
 ## Data sources per section
 
+- **Portfolio Health**: `positions_pnl_series()` (`backend/app.py`'s
+  `GET /api/positions/pnl-series`, already built for the Trades page's chart) — `{dates,
+  realized[], unrealized[]}`, portfolio-wide cumulative daily P&L, reused as-is by
+  `build_daily_snapshot()` under `portfolio_series`. No new computation: same function, same
+  data, just fed into the review snapshot instead of (or alongside) the chart endpoint. Claude
+  reads the series and gives a trend judgment — this is genuinely a judgment call (is the
+  portfolio's shape healthy), not a mechanical fact, so no separate "verdict" field exists for
+  it the way strategy_verdicts does for individual positions.
 - **Market Context**: `CONTEXT_TICKERS` (SPY/QQQ/DIA/^TNX/USO, ETF proxies) fetched via the same
   universe cycle as any watchlisted/traded ticker (`app.py`'s `_active_tickers()`), read via
   `_build_market_context()`. Not `web_search` — dropped after proving slow (8-12 searches per

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePositions, usePositionsSummary, usePnlSeries } from "../hooks/usePositions";
 import { addFill, cancelPosition } from "../api/positions";
@@ -17,15 +17,10 @@ export function TradesPage() {
   const queryClient = useQueryClient();
 
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
-  const [tickerFilter, setTickerFilter] = useState("");
 
   const positionIds = positions?.map((p) => p.id) ?? [];
 
-  const tickers = useMemo(() => [...new Set((positions ?? []).map((p) => p.ticker))].sort(), [positions]);
-
-  const filtered = (positions ?? []).filter(
-    (p) => (!statusFilter || p.status === statusFilter) && (!tickerFilter || p.ticker === tickerFilter),
-  );
+  const filtered = (positions ?? []).filter((p) => !statusFilter || p.status === statusFilter);
 
   function invalidateAll() {
     queryClient.invalidateQueries({ queryKey: ["positions"] });
@@ -105,15 +100,6 @@ export function TradesPage() {
           <option value="">All</option>
           <option value="open">Open</option>
           <option value="closed">Closed</option>
-        </select>
-        <label>Ticker</label>
-        <select value={tickerFilter} onChange={(e) => setTickerFilter(e.target.value)}>
-          <option value="">All</option>
-          {tickers.map((tk) => (
-            <option key={tk} value={tk}>
-              {tk}
-            </option>
-          ))}
         </select>
       </div>
 
