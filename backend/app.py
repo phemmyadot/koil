@@ -1309,10 +1309,6 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        # Same function/data as the Trades page's own chart (GET /api/positions/pnl-series) --
-        # portfolio-wide cumulative daily realized/unrealized P&L, for the review's Portfolio
-        # Health section to judge the overall trend against, not today's specifics.
-        "portfolio_series": positions_pnl_series(),
         "market_context": _build_market_context(),
         "strategy_positions": strategy_positions,
         "investment_positions": investment_positions,

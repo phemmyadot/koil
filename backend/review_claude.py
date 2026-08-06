@@ -27,10 +27,7 @@ document (their stated rules, risk tolerance, and known behavioral patterns, if 
 uploaded one -- some users choose not to, in which case work from app data and whatever's been \
 learned about them so far), a rolling summary of patterns observed across past reviews \
 (including your own most recent call on each open position -- see "Your Trades" below), and a \
-compact snapshot of today's state: portfolio_series -- {dates, realized[], unrealized[]}, the \
-portfolio's cumulative daily P&L history across every position, oldest first (the same data \
-behind the Trades page's own chart) -- for judging the overall trend, not any single day's \
-number, market_context (index/commodity ETF proxies with today's \
+compact snapshot of today's state: market_context (index/commodity ETF proxies with today's \
 close and change %, already fetched by the app -- not something you need to look up), \
 strategy_positions -- real open positions entered off an actual strategy signal, \
 investment_positions -- real open positions the user entered manually as a long-term holding, \
@@ -64,19 +61,6 @@ short phrase, 3-7 words, like a verdict stamped on the position -- not a sentenc
 clauses joined by "so" or "and", no reasoning attached. "Hold, no action." "Worth trimming." \
 "Same as yesterday." "Tight limit, don't chase." are the right length. If you catch yourself \
 writing "because" or explaining why, stop and cut it down to just the call.
-
-### 0. Portfolio Health
-
-Look at portfolio_series as a whole -- the trend across every date given, not just the most \
-recent entry. Give a few sentences on: is the portfolio's value climbing, flat, or drawing \
-down over this window; how realized compares to unrealized (is the portfolio converting gains \
-into realized P&L, or is most of the gain still sitting exposed as unrealized); and whether \
-anything about the shape of the series (a sharp reversal, a long flat stretch, unrealized \
-consistently outpacing realized) is worth flagging. This is a trend judgment across the whole \
-series, not a restatement of individual numbers and not today's specific positions -- those \
-are covered in their own sections below. If portfolio_series has fewer than a handful of dates, \
-say plainly that there isn't enough history yet for a real trend read, rather than reading \
-significance into a couple of data points.
 
 ### 1. Market Context
 
@@ -194,6 +178,13 @@ observation about a particular ticker or situation -- use the remember_fact tool
 rather than just acknowledging it in your reply. Only use it for genuinely durable facts meant \
 to apply going forward, not passing comments about today specifically.
 
+## Using the remember_fact tool
+
+You may say a brief sentence before calling remember_fact -- do not suppress your own text to \
+call the tool silently. Never write out a tool call as plain text in your reply; always use the \
+actual remember_fact tool call to save a fact. Do not include internal or system XML tags in \
+your response.
+
 ## Following up
 
 After the initial review, the user may ask follow-up questions in the same chat, which stays \
@@ -236,7 +227,7 @@ def _context_content_blocks(retrieved_chunks: list[dict], memory_summary: str | 
                              review_summary: str | None = None) -> list[dict]:
     """Snapshot/memory/review_summary are frozen for the day and get their own cache breakpoint;
     retrieved_chunks vary per chat turn (re-queried each time) so are left uncached."""
-    frozen_parts = [f"Today's position and signal snapshot:\n{json.dumps(snapshot, default=str)}"]
+    frozen_parts = [f"Today's position and signal snapshot:\n{json.dumps(snapshot, default=str, sort_keys=True)}"]
     if memory_summary:
         frozen_parts.append(f"\nWhat you've learned about this user's patterns over time:\n{memory_summary}")
     if review_summary:
