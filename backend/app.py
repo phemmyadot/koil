@@ -1151,6 +1151,10 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
             for strat_key in _DEFAULT_FILTER_WIRE_STRATEGIES
         } if payload else {}
 
+        # last_alert_tp_pct/last_alert_stop_pct are internal alerting-threshold bookkeeping
+        # (see _fire_threshold_alerts), not decision-relevant P&L data -- dropped so the model
+        # can't mistake them for real events ("TP alert fired at X%") in its narration.
+        state = {k: v for k, v in state.items() if k not in ("last_alert_tp_pct", "last_alert_stop_pct")}
         open_positions.append({
             **state,
             "fills": fills,
