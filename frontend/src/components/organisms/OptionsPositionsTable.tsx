@@ -42,6 +42,9 @@ function PositionRow({
   // option value for option positions (backend's _position_with_state).
   const premium = p.avg_cost != null ? p.avg_cost / 100 : null;
   const pct = p.current_price != null && premium ? ((p.current_price - premium) / premium) * 100 : 0;
+  // current_price is per-share (option value); the contract multiplier (100) applies the same
+  // way it does everywhere else option $ totals are derived from a per-share figure.
+  const currentTotal = p.current_price != null ? p.current_price * p.units_remaining * 100 : null;
 
   async function submitExit() {
     const premium = parseFloat(exitPremium);
@@ -100,6 +103,7 @@ function PositionRow({
             "—"
           )}
         </td>
+        <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
           <b className={plClass(p.realized_pnl)}>
             {fmtMoney(p.realized_pnl)}
@@ -126,7 +130,7 @@ function PositionRow({
       </tr>
       {isOpen && exitOpen && (
         <tr>
-          <td colSpan={9}>
+          <td colSpan={10}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -170,6 +174,7 @@ export function OptionsPositionsTable({ positions, onExit, onCancel }: OptionsPo
             <th>TP</th>
             <th>Stop</th>
             <th>Last / Unrealized %</th>
+            <th>Current Total</th>
             <th>Realized $ / %</th>
             <th></th>
           </tr>

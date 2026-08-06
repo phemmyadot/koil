@@ -39,6 +39,7 @@ function PositionRow({
 
   const isOpen = p.status === "open";
   const pct = p.current_price != null && p.avg_cost ? ((p.current_price - p.avg_cost) / p.avg_cost) * 100 : 0;
+  const currentTotal = p.current_price != null ? p.current_price * p.units_remaining : null;
 
   async function submitExit() {
     const price = parseFloat(exitPrice);
@@ -97,6 +98,7 @@ function PositionRow({
             "—"
           )}
         </td>
+        <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
           <b className={plClass(p.realized_pnl)}>
             {fmtMoney(p.realized_pnl)}
@@ -123,7 +125,7 @@ function PositionRow({
       </tr>
       {isOpen && exitOpen && (
         <tr>
-          <td colSpan={9}>
+          <td colSpan={10}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -167,6 +169,7 @@ export function SpotPositionsTable({ positions, onExit, onCancel }: SpotPosition
             <th>TP</th>
             <th>Stop</th>
             <th>Last / Unrealized %</th>
+            <th>Current Total</th>
             <th>Realized $ / %</th>
             <th></th>
           </tr>

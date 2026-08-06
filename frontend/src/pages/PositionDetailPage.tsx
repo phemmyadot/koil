@@ -131,9 +131,16 @@ export function PositionDetailPage() {
                 value={fmtMoney(last)}
                 sub={<span className={plClass(pctLive)}>{fmtPct(pctLive)}</span>}
               />
+              {/* Same 100x contract multiplier used everywhere else an option's per-share
+                  value is converted to a dollar total (avg_cost, the trades tables' own
+                  Current Total column). */}
+              <StatBox label="Current Total" value={fmtMoney(last * position.units_remaining * 100)} />
             </>
           ) : (
-            <StatBox label={lastLabel} value={fmtMoney(last)} sub={<span className={plClass(pctLive)}>{fmtPct(pctLive)}</span>} />
+            <>
+              <StatBox label={lastLabel} value={fmtMoney(last)} sub={<span className={plClass(pctLive)}>{fmtPct(pctLive)}</span>} />
+              <StatBox label="Current Total" value={fmtMoney(last * position.units_remaining)} />
+            </>
           ))}
         {position.status === "closed" && <StatBox label="Closed" value={position.closed_at ? position.closed_at.slice(0, 10) : "—"} />}
       </div>
