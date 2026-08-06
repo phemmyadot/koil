@@ -55,8 +55,12 @@ considered entry, or may not be (see below).
 Produce the review in exactly this structure, in this order. Use real numbers from the \
 snapshot throughout -- never invent a price, percentage, or statistic that isn't given to you.
 
+"Verdict" always means your own opinion -- your take on whether a setup is worth taking, \
+watching, or skipping. It is never the mechanical signal/backtest state a strategy reports \
+(that's "Status" -- see 2.0 below); never call a mechanical state a "verdict."
+
 Whenever these instructions say to give "your own note," write it as a markdown blockquote \
-(a line starting with "> "), bolding the label, e.g. "> **My note:** ...". This must be ONE \
+(a line starting with "> "), bolding the label as "> **Verdict:** ...". This must be ONE \
 short phrase, 3-7 words, like a verdict stamped on the position -- not a sentence, not two \
 clauses joined by "so" or "and", no reasoning attached. "Hold, no action." "Worth trimming." \
 "Same as yesterday." "Tight limit, don't chase." are the right length. If you catch yourself \
@@ -76,11 +80,12 @@ what the numbers themselves show (e.g. a broad rally, a risk-off day, a flat ses
 One entry per position in strategy_positions, in the order given. For each: the ticker, its \
 real entry date and entry price/premium (from fills[0] -- never estimate these from anything \
 else), current price and unrealized % (derive from the most recent mark's close_price, or \
-option_value for an option position, versus avg_cost), and the strategy's own verdict from \
-strategy_verdicts (e.g. IN TRADE, TP HIT) -- state this verdict exactly as given, verbatim, \
-never reworded or reinterpreted, since it's a mechanical fact from the app's own backtested \
-state, not your judgment. Show today's value against yesterday's using the two most recent \
-entries in marks when available.
+option_value for an option position, versus avg_cost), and the strategy's own state from \
+strategy_verdicts, labeled "Status:" (e.g. "Status: IN TRADE", "Status: TP HIT") -- state \
+this exactly as given, verbatim, never reworded or reinterpreted, since it's a mechanical \
+fact from the app's own backtested state, not your judgment, and never label it "Verdict" -- \
+that word is reserved for your own opinion (see the note below). Show today's value against \
+yesterday's using the two most recent entries in marks when available.
 
 For an options position, fills[0] gives you the actual contract this position holds -- type, \
 side, strike, expiry date, entry premium, and IV at entry. Use these exact values when \
@@ -92,8 +97,8 @@ philosophy document or general plans -- those describe intent, not what was actu
 on this specific position, and stating them as fact about a real position when you don't have \
 its real contract data is a mistake. Say plainly that you don't have that detail instead.
 
-Then, separately and clearly labeled as your own note (never blended into or replacing the \
-verdict above), give your own read on the position when you have something worth saying -- \
+Then, separately as your own Verdict (never blended into or replacing the Status above), give \
+your own read on the position when you have something worth saying -- \
 e.g. suggesting an early exit despite no stop/TP trigger, flagging a level the user has said \
 they struggle with, or noting a setup resembling a past mistake they've flagged. Compare this \
 note against your own most recent prior note for this same ticker, from the rolling summary, \
@@ -106,12 +111,12 @@ Skip this subsection entirely if strategy_positions is empty.
 ### 2.5 Investment
 
 A brief general overview of investment_positions as a group -- these are long-term manual \
-holdings, not strategy trades, so no per-position breakdown, no strategy verdict, no tactical \
+holdings, not strategy trades, so no per-position breakdown, no Status line, no tactical \
 signal-following framing. List the tickers with their current unrealized % in one line each \
-(a compact list, not a full write-up per position), then one short blockquote note covering \
+(a compact list, not a full write-up per position), then one short blockquote Verdict covering \
 the group as a whole -- e.g. flag only a ticker that's moved enough to warrant a conscious \
 decision, otherwise say plainly that nothing here needs attention. Don't write an individual \
-note per ticker.
+Verdict per ticker.
 
 Skip this subsection entirely if investment_positions is empty.
 

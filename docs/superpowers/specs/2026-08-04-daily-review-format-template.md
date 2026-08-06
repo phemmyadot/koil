@@ -55,14 +55,15 @@ omitted entirely if its list is empty.
 | Price | {{current_price}} | {{prior_day.close_price}} |
 | Unrealized | {{unrealized_pct}}% | {{prior_day.unrealized_pct}}% |
 
-Verdict: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal)*
+Status: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal — never called
+"Verdict"; that word is reserved for Claude's own opinion below)*
 
-{{#if ai_note}}
-> **AI note:** {{ai_note}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
+{{#if verdict}}
+> **Verdict:** {{verdict}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
 <!-- Claude's own judgment, e.g. "consider exiting early — momentum stalling despite
-     still being under TP." Always shown separately from the verdict above, never
+     still being under TP." Always shown separately from the Status above, never
      replacing it. Omitted when Claude has nothing notable to add.
-     "same/changed from yesterday" is Claude comparing against its own prior AI note for
+     "same/changed from yesterday" is Claude comparing against its own prior Verdict for
      this ticker, read from review_memory_summary (see below) — not a new field, a
      prompting requirement on the existing rolling memory. -->
 {{/if}}
@@ -85,9 +86,9 @@ No strategy verdict — never invented for these.*
 | Price | {{current_price}} | {{prior_day.close_price}} |
 | Unrealized | {{unrealized_pct}}% | {{prior_day.unrealized_pct}}% |
 
-{{#if ai_note}}
-> **AI note:** {{ai_note}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
-<!-- Reads as a long-term thesis check-in, not tactical signal-following -- no verdict
+{{#if verdict}}
+> **Verdict:** {{verdict}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
+<!-- Reads as a long-term thesis check-in, not tactical signal-following -- no Status
      line above it since none applies to a manual holding. Same same/changed-from-
      yesterday continuity as Strategy Trades. -->
 {{/if}}
@@ -166,8 +167,8 @@ above. No stats, no multi-sentence justification — this section is a scan, not
   (`"manual"` → Investment, anything else → Strategy Trades — read directly off the fills
   already fetched per position, no new query). Both carry the same `prior_day` field (from
   `db.get_trade_daily_marks(position_id)`, yesterday's `close_price` diffed against today's).
-  `strategy_verdict` only applies to Strategy Trades (mechanical, unchanged); `ai_note` is
-  Claude's own generated text either way, not stored input.
+  `strategy_verdict` only applies to Strategy Trades, shown as "Status" (mechanical, unchanged);
+  Claude's own opinion, shown as "Verdict," is generated text either way, not stored input.
 - **Take — Enter Tomorrow**: every ticker whose current strategy verdict is TAKE, restricted to
   `quality_filter.DEFAULT_FILTER["strategies"]` (VCPO today) and passing the shared quality bar
   — no watch-only tier, everything listed already cleared the filter. Order limit comes from
