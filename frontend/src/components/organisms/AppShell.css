@@ -69,7 +69,7 @@
   width: 100%;
   margin: 0 auto;
   min-height: 0;
-  overflow-y: auto;
+  /* overflow-y: auto; */
   display: flex;
   flex-direction: column;
 }
