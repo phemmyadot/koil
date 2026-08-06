@@ -9,6 +9,25 @@
   font-size: 19px;
   margin: 0;
 }
+.trades-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.trades-tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.trades-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
 .trades-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

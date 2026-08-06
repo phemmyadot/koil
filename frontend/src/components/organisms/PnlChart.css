@@ -28,8 +28,3 @@
   height: 2px;
   display: inline-block;
 }
-.pnl-legend .swatch-dashed {
-  background: none;
-  border-top: 2px dashed;
-  height: 0;
-}

@@ -37,8 +37,8 @@ function SummaryRow({ label, summary }: { label: string; summary: PositionsSumma
 }
 
 export function TradesPage() {
-  // All spot/options combos fetched together on mount -- the top filter below only toggles
-  // which already-fetched table/summary row is visible, it never triggers a new request.
+  // All spot/options combos fetched together on mount -- the tab bar below only toggles which
+  // already-fetched summary/chart/table is visible, it never triggers a new request.
   const { data: spotPositions } = usePositions(undefined, "spot");
   const { data: optionsPositions } = usePositions(undefined, "options");
   const { data: spotSummary } = usePositionsSummary("spot");
@@ -51,6 +51,8 @@ export function TradesPage() {
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
 
   const positions = typeFilter === "spot" ? spotPositions : optionsPositions;
+  const summary = typeFilter === "spot" ? spotSummary : optionsSummary;
+  const pnlSeries = typeFilter === "spot" ? spotPnlSeries : optionsPnlSeries;
   const positionIds = positions?.map((p) => p.id) ?? [];
   const filtered = (positions ?? []).filter((p) => !statusFilter || p.status === statusFilter);
 
@@ -101,21 +103,29 @@ export function TradesPage() {
         <h1>Trades</h1>
       </div>
 
-      <SummaryRow label="Spot" summary={spotSummary} />
-      <SummaryRow label="Options" summary={optionsSummary} />
+      <div className="trades-tabs">
+        <button
+          type="button"
+          className={typeFilter === "spot" ? "active" : ""}
+          onClick={() => setTypeFilter("spot")}
+        >
+          Spot
+        </button>
+        <button
+          type="button"
+          className={typeFilter === "options" ? "active" : ""}
+          onClick={() => setTypeFilter("options")}
+        >
+          Options
+        </button>
+      </div>
+
+      <SummaryRow label={typeFilter === "spot" ? "Spot" : "Options"} summary={summary} />
 
       <h2>Daily P&amp;L</h2>
-      <PnlChart
-        spot={spotPnlSeries ?? { dates: [], realized: [], unrealized: [] }}
-        options={optionsPnlSeries ?? { dates: [], realized: [], unrealized: [] }}
-      />
+      <PnlChart series={pnlSeries ?? { dates: [], realized: [], unrealized: [] }} />
 
       <div className="trades-filterbar">
-        <label>Type</label>
-        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as "spot" | "options")}>
-          <option value="spot">Spot</option>
-          <option value="options">Options</option>
-        </select>
         <label>Status</label>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | "open" | "closed")}>
           <option value="">All</option>
