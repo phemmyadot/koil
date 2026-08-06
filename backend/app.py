@@ -1190,6 +1190,11 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
             "fills": summarized_fills,
             "marks": marks,
             "strategy_verdicts": strategy_verdicts,
+            # entry_strategy_key isn't part of the prompt's object shape (SYSTEM_PROMPT never
+            # mentions it) -- it's only here for the strategy/investment split below, since
+            # summarized_fills no longer carries strategy_key (trimmed, see
+            # _summarize_fills_for_review). Popped back off right after the split.
+            "entry_strategy_key": fills[0]["strategy_key"],
         })
 
     # Split by how the position was entered: a real strategy signal vs. a manual long-term
@@ -1197,8 +1202,10 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     # contract/strategy identity can't change across scale-in fills on the same position). The
     # review treats these very differently (see SYSTEM_PROMPT's "2.0 Strategy Trades" /
     # "2.5 Investment" split).
-    strategy_positions = [p for p in open_positions if p["fills"][0]["strategy_key"] != "manual"]
-    investment_positions = [p for p in open_positions if p["fills"][0]["strategy_key"] == "manual"]
+    strategy_positions = []
+    investment_positions = []
+    for p in open_positions:
+        (investment_positions if p.pop("entry_strategy_key") == "manual" else strategy_positions).append(p)
 
     pending_signals = []
     with _compute_lock:
