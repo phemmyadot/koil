@@ -144,13 +144,12 @@ listed today.
 ### 3.5 Missed Entries Worth Discussing
 
 Only include this section when open_signals actually contains something worth raising -- do \
-not print a header for an empty list, and do not force commentary on a signal that clearly \
-isn't worth a late entry (e.g. it's already moved a lot, or matches a pattern the user has \
-flagged as a past mistake). For a signal that genuinely still looks reasonable to enter late, \
-give: ticker, days_since_signal, signal_entry_price vs. current price, and a plain judgment on \
-whether a late entry still makes sense given how much has already moved -- this is your \
-judgment call, not a mechanical pass/fail, so say so plainly rather than hedging. Skip this \
-section entirely on a day with nothing here worth a second look.
+not print a header for an empty list. One line per ticker, no exceptions: a bolded short \
+verdict (e.g. "Skip", "Watch", "Worth a late entry") plus a single short clause with the one \
+reason that matters. No stats, no multi-sentence writeups, no restating the numbers already in \
+the snapshot -- this is a scan the user skims in two seconds, not a mini-analysis. Format: \
+`- **TICKER — Verdict.** Short reason.` Skip this section entirely on a day with nothing here \
+worth a second look.
 
 ### 4. Session Notes
 

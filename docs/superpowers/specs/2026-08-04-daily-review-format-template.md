@@ -140,11 +140,11 @@ Spot: limit ${{spot_limit}} (support ${{support_used}}) — {{order_method}}
 *Optional — only appears when there's a real judgment call to make. Tickers where a strategy's
 own simulated backtest is IN TRADE but the user never entered, signal fired within the last 3
 days. Not every open_signals entry gets written up -- Claude selects which are worth a late
-entry and explicitly says why others are being skipped, rather than covering all of them evenly.*
+entry, one line each: a short verdict, then a short reason. No stats, no multi-sentence
+justification — this section is a scan, not a writeup.*
 
 {{#each open_signals_discussed}}
-**{{ticker}}** — signal fired {{signal_entry_date}} at {{signal_entry_price}}, now
-{{current_price}} ({{unrealized_pct_if_entered}}% if entered then). {{judgment}}
+- **{{ticker}} — {{verdict}}.** {{short_reason}}
 {{/each}}
 
 ---
