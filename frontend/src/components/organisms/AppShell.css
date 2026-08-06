@@ -84,7 +84,7 @@
     display: none;
   }
   .app-content {
-    padding: 12px 0 76px; /* clears the fixed bottom nav */
+    padding: 12px 12px 88px; /* clears the fixed bottom nav */
   }
   .app-bottomnav {
     display: flex;
