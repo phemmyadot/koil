@@ -223,6 +223,13 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic()
 
 
+def _mark_cache_boundary(message: dict) -> None:
+    """Rewrites message["content"] (a plain string, as chat_history entries always are -- see
+    db's review_chat_messages.content column) into the one-block list form so a cache_control
+    marker can attach to it."""
+    message["content"] = [{"type": "text", "text": message["content"], "cache_control": {"type": "ephemeral"}}]
+
+
 def _context_content_blocks(retrieved_chunks: list[dict], memory_summary: str | None, snapshot: dict,
                              review_summary: str | None = None) -> list[dict]:
     """Snapshot/memory/review_summary are frozen for the day and get their own cache breakpoint;
@@ -287,6 +294,12 @@ def chat_reply(
     ]
     for m in chat_history:
         messages.append({"role": m["role"], "content": m["content"]})
+    if chat_history:
+        # Second cache breakpoint: everything up to and including the last already-sent turn is
+        # byte-identical to what this same conversation sent last turn, so it caches -- without
+        # this, every turn re-pays full price for the entire growing history, not just the
+        # snapshot/system tier. Only the brand-new user_message below stays uncached.
+        _mark_cache_boundary(messages[-1])
     messages.append({"role": "user", "content": user_message})
 
     client = _client()
