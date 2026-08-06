@@ -1113,6 +1113,23 @@ def _build_market_context() -> list[dict]:
     return context
 
 
+_FILL_REVIEW_FIELDS = (
+    "fill_date", "price", "premium", "units", "instrument",
+    "opt_side", "opt_type", "strike", "expiry_date", "iv_at_entry", "exit_reason",
+)
+
+
+def _summarize_fills_for_review(fills: list[dict]) -> list[dict]:
+    """fills[0] (the real entry) plus the most recent fill if different -- see
+    build_daily_snapshot's call site for why. Each trimmed to only the fields SYSTEM_PROMPT
+    actually reads; drops id/position_id/strategy_key/signal_date/kind/created_at/notes and any
+    always-null option field on a spot fill, all dead weight in the snapshot otherwise."""
+    if not fills:
+        return []
+    picked = [fills[0]] if len(fills) == 1 or fills[-1] is fills[0] else [fills[0], fills[-1]]
+    return [{k: f[k] for k in _FILL_REVIEW_FIELDS if f.get(k) is not None} for f in picked]
+
+
 def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     """Compact, code-computed summary of current trade state for the daily review chatbot -- NOT
     a raw DB dump. Claude receives the CONCLUSION of these queries, not the tables themselves.
@@ -1141,6 +1158,19 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
         marks = db.get_trade_daily_marks(position["id"])
         if state["instrument"] == "option":
             marks = _with_option_values(position, fills, marks)
+        # The prompt only ever compares the most recent two marks ("today vs. yesterday") --
+        # sending the position's full daily history (can be 100+ days) bloated the snapshot to
+        # ~75% marks by size for nothing the model actually reads.
+        marks = marks[-2:]
+
+        # The prompt only ever reads fills[0] (the real entry -- date, price/premium, and for
+        # options the contract terms). A scaled-in position can have many fills (seen: 6 for one
+        # real position); sending all of them was the single biggest snapshot cost for no benefit
+        # the model uses. Keep fills[0] plus the most recent fill (covers a same-day add/exit
+        # without re-inventing "latest" semantics), each trimmed to only the fields the prompt
+        # reads -- see SYSTEM_PROMPT's "fills[0] is the real entry" / "for options, fills[0] also
+        # carries opt_type, opt_side, strike, expiry_date, iv_at_entry".
+        summarized_fills = _summarize_fills_for_review(fills)
 
         # Only the strategy(s) actually traded (quality_filter.DEFAULT_FILTER["strategies"],
         # currently VCPO only) are sent to the review chatbot -- other strategies' verdicts on a
@@ -1157,7 +1187,7 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
         state = {k: v for k, v in state.items() if k not in ("last_alert_tp_pct", "last_alert_stop_pct")}
         open_positions.append({
             **state,
-            "fills": fills,
+            "fills": summarized_fills,
             "marks": marks,
             "strategy_verdicts": strategy_verdicts,
         })
