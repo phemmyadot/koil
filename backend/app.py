@@ -1057,18 +1057,26 @@ def _seed_todays_mark(position_id: int, ticker: str) -> None:
 def _position_with_state(position: dict) -> dict:
     """Annotates a position with its derived replay state (avg_cost, units_remaining,
     realized_pnl, instrument) -- computed fresh from position_fills every time, never cached
-    beyond the stored status/closed_at (see db.py's positions docstring). current_price is the
-    ticker's latest known price (same source as positions_summary's total_unrealized_pnl) --
-    None if never fetched."""
+    beyond the stored status/closed_at (see db.py's positions docstring). current_price is
+    per-share and comparable against avg_cost: for spot it's the ticker's latest known price
+    (same source as positions_summary's total_unrealized_pnl); for options it's the modeled
+    option value (_blended_option_value, same model used by PositionDetailPage's chart and
+    positions_pnl_series) rather than the raw underlying price. None if unpriceable."""
     fills = db.list_fills(position["id"])
     state = replay_fills(fills)
     with _compute_lock:
         payload = next((p for p in _computed if p["ticker"] == position["ticker"]), None)
-    current_price = payload["price"] if payload else None
-    if current_price is None:
+    underlying_price = payload["price"] if payload else None
+    if underlying_price is None:
         bars = data.get_bars(position["ticker"])
         if bars is not None and not bars.empty:
-            current_price = round(float(bars.Close.iloc[-1]), 4)
+            underlying_price = round(float(bars.Close.iloc[-1]), 4)
+    if state["instrument"] == "option" and state["open_lots"] and underlying_price is not None:
+        today = datetime.now(timezone.utc).date()
+        option_value = _blended_option_value(state["open_lots"], underlying_price, today)
+        current_price = round(option_value, 4) if option_value is not None else None
+    else:
+        current_price = underlying_price
     return {
         **position,
         "instrument": state["instrument"],
@@ -1260,6 +1268,10 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # Same function/data as the Trades page's own chart (GET /api/positions/pnl-series) --
+        # portfolio-wide cumulative daily realized/unrealized P&L, for the review's Portfolio
+        # Health section to judge the overall trend against, not today's specifics.
+        "portfolio_series": positions_pnl_series(),
         "market_context": _build_market_context(),
         "strategy_positions": strategy_positions,
         "investment_positions": investment_positions,
@@ -1338,19 +1350,56 @@ def add_fill(position_id: int, body: dict):
 
 
 @app.get("/api/positions")
-def list_positions(status: str | None = None):
+def list_positions(status: str | None = None, type: str | None = None):
     if status not in (None, "open", "closed"):
         raise HTTPException(status_code=400, detail=f"invalid status: {status!r}")
-    return [_position_with_state(p) for p in db.list_positions(status)]
+    if type not in (None, "spot", "options"):
+        raise HTTPException(status_code=400, detail=f"invalid type: {type!r}")
+    result = [_position_with_state(p) for p in db.list_positions(status)]
+    if type == "spot":
+        result = [p for p in result if p["instrument"] == "spot"]
+    elif type == "options":
+        result = [p for p in result if p["instrument"] == "option"]
+    return result
+
+
+def _open_position_unrealized(p: dict, fills: list[dict]) -> float | None:
+    """$ unrealized for one open position -- spot: current_price vs avg_cost, straight.
+    Options: p["current_price"] is already the modeled per-share option value (see
+    _position_with_state), so this only needs to unwind avg_cost's multiplier the same way
+    _position_pct_to_tp_stop already does for TP/stop progress. None if unpriceable."""
+    if p["avg_cost"] is None or p["current_price"] is None:
+        return None
+    if p["instrument"] == "spot":
+        return (p["current_price"] - p["avg_cost"]) * p["units_remaining"]
+
+    state = replay_fills(fills)
+    if not state["open_lots"]:
+        return None
+    avg_cost_per_share = p["avg_cost"] / state["multiplier"]
+    return (p["current_price"] - avg_cost_per_share) * p["units_remaining"] * state["multiplier"]
 
 
 @app.get("/api/positions/summary")
-def positions_summary():
+def positions_summary(type: str | None = None):
     """Win rate / avg return -- ticker-position-level only, not filterable by strategy, since a
     position can span fills from multiple strategies (see the design doc's grouping decision).
     'Simple math' per the design brief: pnl / cost basis, no Black-Scholes needed for the %
-    itself, only for pricing an option's exit VALUE (handled inside replay_fills)."""
-    closed = [_position_with_state(p) for p in db.list_positions("closed")]
+    itself, only for pricing an option's exit VALUE (handled inside replay_fills). type=spot or
+    type=options filters positions to that instrument BEFORE any of the counting/summing below
+    -- same computation either way, just over a smaller set; unrealized is the only place the
+    math itself differs (see _open_position_unrealized)."""
+    if type not in (None, "spot", "options"):
+        raise HTTPException(status_code=400, detail=f"invalid type: {type!r}")
+
+    def matches_type(p: dict) -> bool:
+        if type == "spot":
+            return p["instrument"] == "spot"
+        if type == "options":
+            return p["instrument"] == "option"
+        return True
+
+    closed = [p for p in (_position_with_state(p) for p in db.list_positions("closed")) if matches_type(p)]
     returns = []
     for p in closed:
         fills = db.list_fills(p["id"])
@@ -1363,15 +1412,12 @@ def positions_summary():
             returns.append(p["realized_pnl"] / cost_basis * 100)
     wins = [r for r in returns if r >= 0]
 
-    # Straight aggregate against each open position's current_price (see _position_with_state)
-    # -- spot positions only, an option's avg_cost isn't comparable to a stock price without
-    # re-pricing the contract, same reasoning as build_daily_snapshot's spot-only unrealized_pct.
-    open_positions = [_position_with_state(p) for p in db.list_positions("open")]
-    total_unrealized_pnl = sum(
-        (p["current_price"] - p["avg_cost"]) * p["units_remaining"]
-        for p in open_positions
-        if p["instrument"] == "spot" and p["avg_cost"] is not None and p["current_price"] is not None
-    )
+    open_positions = [p for p in (_position_with_state(p) for p in db.list_positions("open")) if matches_type(p)]
+    total_unrealized_pnl = 0.0
+    for p in open_positions:
+        unrealized = _open_position_unrealized(p, db.list_fills(p["id"]))
+        if unrealized is not None:
+            total_unrealized_pnl += unrealized
 
     return {
         "open_count": len(open_positions),
@@ -1385,16 +1431,33 @@ def positions_summary():
 
 
 @app.get("/api/positions/pnl-series")
-def positions_pnl_series():
+def positions_pnl_series(type: str | None = None):
     """Portfolio-wide daily cumulative realized/unrealized P&L -- ported from the frontend's
     former computePnlSeries()/replayAsOf() (frontend/src/lib/pnlSeries.ts) to a single backend
     call, so the Trades page no longer needs one marks + one fills request per position just to
     draw this chart. realized is a step function (flat between exits, steps on each exit fill's
-    own date); unrealized is mark-to-market against each position's own daily marks."""
+    own date); unrealized is mark-to-market against each position's own daily marks. type=spot
+    or type=options filters the input positions before the loop below -- the loop itself
+    already branches on instrument internally for pricing, so filtering the input is the only
+    change needed."""
+    if type not in (None, "spot", "options"):
+        raise HTTPException(status_code=400, detail=f"invalid type: {type!r}")
     positions = db.list_positions(None)
     position_ids = [p["id"] for p in positions]
     fills_by_position = db.list_fills_bulk(position_ids)
-    marks_by_position = db.get_trade_daily_marks_bulk(position_ids)
+
+    # Raw position rows carry no instrument column -- it's derived from fills (fills[0], same
+    # as every other instrument check in this file). A position with no fills yet can't match
+    # either type filter.
+    if type in ("spot", "options"):
+        wanted = "spot" if type == "spot" else "option"
+        positions = [
+            p for p in positions
+            if fills_by_position.get(p["id"]) and fills_by_position[p["id"]][0]["instrument"] == wanted
+        ]
+        fills_by_position = {p["id"]: fills_by_position[p["id"]] for p in positions}
+
+    marks_by_position = db.get_trade_daily_marks_bulk([p["id"] for p in positions])
 
     dates = set()
     for p in positions:

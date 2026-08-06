@@ -6,8 +6,32 @@ const W = 860;
 const H = 220;
 const PAD = { l: 54, r: 14, t: 14, b: 24 };
 
-export function PnlChart({ series }: { series: PnlSeriesResponse }) {
-  const { dates, realized, unrealized } = series;
+const EMPTY_SERIES: PnlSeriesResponse = { dates: [], realized: [], unrealized: [] };
+
+// Spot and options each have their own dates -- a position can have marks on days the other
+// type has none, so the chart's x-axis is the union of both, and each line looks up its own
+// value per date (missing -> holds its last known value, since realized/unrealized are both
+// cumulative and don't reset between marks).
+function seriesAsMap(series: PnlSeriesResponse): { realized: Map<string, number>; unrealized: Map<string, number> } {
+  const realized = new Map<string, number>();
+  const unrealized = new Map<string, number>();
+  series.dates.forEach((d, i) => {
+    realized.set(d, series.realized[i]);
+    unrealized.set(d, series.unrealized[i]);
+  });
+  return { realized, unrealized };
+}
+
+function fillForward(dates: string[], byDate: Map<string, number>): number[] {
+  let last = 0;
+  return dates.map((d) => {
+    if (byDate.has(d)) last = byDate.get(d) as number;
+    return last;
+  });
+}
+
+export function PnlChart({ spot = EMPTY_SERIES, options = EMPTY_SERIES }: { spot?: PnlSeriesResponse; options?: PnlSeriesResponse }) {
+  const dates = [...new Set([...spot.dates, ...options.dates])].sort();
   if (!dates.length) {
     return (
       <svg className="pnl-chart" viewBox={`0 0 ${W} ${H}`}>
@@ -18,7 +42,14 @@ export function PnlChart({ series }: { series: PnlSeriesResponse }) {
     );
   }
 
-  const allVals = [...realized, ...unrealized, 0];
+  const spotMaps = seriesAsMap(spot);
+  const optionsMaps = seriesAsMap(options);
+  const spotRealized = fillForward(dates, spotMaps.realized);
+  const spotUnrealized = fillForward(dates, spotMaps.unrealized);
+  const optionsRealized = fillForward(dates, optionsMaps.realized);
+  const optionsUnrealized = fillForward(dates, optionsMaps.unrealized);
+
+  const allVals = [...spotRealized, ...spotUnrealized, ...optionsRealized, ...optionsUnrealized, 0];
   const yMin = Math.min(...allVals);
   const yMax = Math.max(...allVals);
   const yPad = (yMax - yMin) * 0.1 || 10;
@@ -55,15 +86,23 @@ export function PnlChart({ series }: { series: PnlSeriesResponse }) {
           ) : null,
         )}
         <line x1={PAD.l} x2={W - PAD.r} y1={zeroY} y2={zeroY} stroke="var(--muted)" strokeWidth={1} opacity={0.5} />
-        <path d={pathOf(unrealized)} fill="none" stroke="var(--accent)" strokeWidth={2} />
-        <path d={pathOf(realized)} fill="none" stroke="var(--gold)" strokeWidth={2} />
+        <path d={pathOf(spotUnrealized)} fill="none" stroke="var(--accent)" strokeWidth={2} />
+        <path d={pathOf(spotRealized)} fill="none" stroke="var(--gold)" strokeWidth={2} />
+        <path d={pathOf(optionsUnrealized)} fill="none" stroke="var(--accent)" strokeWidth={2} strokeDasharray="5 3" />
+        <path d={pathOf(optionsRealized)} fill="none" stroke="var(--gold)" strokeWidth={2} strokeDasharray="5 3" />
       </svg>
       <div className="pnl-legend">
         <span>
-          <span className="swatch" style={{ background: "var(--accent)" }} /> Unrealized
+          <span className="swatch" style={{ background: "var(--accent)" }} /> Spot unrealized
         </span>
         <span>
-          <span className="swatch" style={{ background: "var(--gold)" }} /> Realized (cumulative)
+          <span className="swatch" style={{ background: "var(--gold)" }} /> Spot realized
+        </span>
+        <span>
+          <span className="swatch swatch-dashed" style={{ borderColor: "var(--accent)" }} /> Options unrealized
+        </span>
+        <span>
+          <span className="swatch swatch-dashed" style={{ borderColor: "var(--gold)" }} /> Options realized
         </span>
       </div>
     </>

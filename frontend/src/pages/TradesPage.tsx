@@ -2,24 +2,56 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePositions, usePositionsSummary, usePnlSeries } from "../hooks/usePositions";
 import { addFill, cancelPosition } from "../api/positions";
-import type { ExitReason, Fill } from "../api/types";
+import type { ExitReason, Fill, PositionsSummary } from "../api/types";
 import { StatBox } from "../components/atoms/StatBox";
-import { PositionsTable } from "../components/organisms/PositionsTable";
+import { SpotPositionsTable } from "../components/organisms/SpotPositionsTable";
+import { OptionsPositionsTable } from "../components/organisms/OptionsPositionsTable";
 import { PnlChart } from "../components/organisms/PnlChart";
 import { fmtMoney, fmtPct } from "../lib/format";
 import { todayIsoDate } from "../lib/dates";
 import "./TradesPage.css";
 
+function SummaryRow({ label, summary }: { label: string; summary: PositionsSummary | undefined }) {
+  return (
+    <div className="trades-summary-grid">
+      <StatBox label={`${label} — Open`} value={summary?.open_count ?? 0} />
+      <StatBox label="Closed" value={summary?.closed_count ?? 0} />
+      <StatBox label="Win rate" value={summary?.win_rate_pct != null ? `${summary.win_rate_pct}%` : "—"} />
+      <StatBox
+        label="Avg return"
+        value={summary?.avg_return_pct != null ? fmtPct(summary.avg_return_pct) : "—"}
+        tone={summary?.avg_return_pct ?? undefined}
+      />
+      <StatBox
+        label="Total unrealized"
+        value={summary?.total_unrealized_pnl != null ? fmtMoney(summary.total_unrealized_pnl) : "—"}
+        tone={summary?.total_unrealized_pnl ?? undefined}
+      />
+      <StatBox
+        label="Total realized"
+        value={summary?.total_realized_pnl != null ? fmtMoney(summary.total_realized_pnl) : "—"}
+        tone={summary?.total_realized_pnl ?? undefined}
+      />
+    </div>
+  );
+}
+
 export function TradesPage() {
-  const { data: positions } = usePositions();
-  const { data: summary } = usePositionsSummary();
-  const { data: pnlSeries } = usePnlSeries();
+  // All spot/options combos fetched together on mount -- the top filter below only toggles
+  // which already-fetched table/summary row is visible, it never triggers a new request.
+  const { data: spotPositions } = usePositions(undefined, "spot");
+  const { data: optionsPositions } = usePositions(undefined, "options");
+  const { data: spotSummary } = usePositionsSummary("spot");
+  const { data: optionsSummary } = usePositionsSummary("options");
+  const { data: spotPnlSeries } = usePnlSeries("spot");
+  const { data: optionsPnlSeries } = usePnlSeries("options");
   const queryClient = useQueryClient();
 
+  const [typeFilter, setTypeFilter] = useState<"spot" | "options">("spot");
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
 
+  const positions = typeFilter === "spot" ? spotPositions : optionsPositions;
   const positionIds = positions?.map((p) => p.id) ?? [];
-
   const filtered = (positions ?? []).filter((p) => !statusFilter || p.status === statusFilter);
 
   function invalidateAll() {
@@ -27,11 +59,10 @@ export function TradesPage() {
     for (const id of positionIds) queryClient.invalidateQueries({ queryKey: ["position", id] });
   }
 
-  // `amount` is the exit price (spot) or exit option price (option) -- PositionsTable's single
-  // generic input, routed to the right field here since options carry their price in premium,
-  // never price. See docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
-  // lastFill is fetched by PositionRow itself, on demand when the Exit form opens, rather than
-  // eagerly for every position on page load.
+  // `amount` is the exit price (spot) or exit option price (option) -- routed to the right
+  // field here since options carry their price in premium, never price. See
+  // docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md. lastFill is fetched
+  // by the table row itself, on demand when the Exit form opens.
   async function handleExit(positionId: number, lastFill: Fill, amount: number, units: number, exitReason: ExitReason) {
     const position = positions?.find((p) => p.id === positionId);
     if (!position) return;
@@ -70,31 +101,21 @@ export function TradesPage() {
         <h1>Trades</h1>
       </div>
 
-      <div className="trades-summary-grid">
-        <StatBox label="Open" value={summary?.open_count ?? 0} />
-        <StatBox label="Closed" value={summary?.closed_count ?? 0} />
-        <StatBox label="Win rate" value={summary?.win_rate_pct != null ? `${summary.win_rate_pct}%` : "—"} />
-        <StatBox
-          label="Avg return"
-          value={summary?.avg_return_pct != null ? fmtPct(summary.avg_return_pct) : "—"}
-          tone={summary?.avg_return_pct ?? undefined}
-        />
-        <StatBox
-          label="Total unrealized"
-          value={summary?.total_unrealized_pnl != null ? fmtMoney(summary.total_unrealized_pnl) : "—"}
-          tone={summary?.total_unrealized_pnl ?? undefined}
-        />
-        <StatBox
-          label="Total realized"
-          value={summary?.total_realized_pnl != null ? fmtMoney(summary.total_realized_pnl) : "—"}
-          tone={summary?.total_realized_pnl ?? undefined}
-        />
-      </div>
+      <SummaryRow label="Spot" summary={spotSummary} />
+      <SummaryRow label="Options" summary={optionsSummary} />
 
       <h2>Daily P&amp;L</h2>
-      <PnlChart series={pnlSeries ?? { dates: [], realized: [], unrealized: [] }} />
+      <PnlChart
+        spot={spotPnlSeries ?? { dates: [], realized: [], unrealized: [] }}
+        options={optionsPnlSeries ?? { dates: [], realized: [], unrealized: [] }}
+      />
 
       <div className="trades-filterbar">
+        <label>Type</label>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as "spot" | "options")}>
+          <option value="spot">Spot</option>
+          <option value="options">Options</option>
+        </select>
         <label>Status</label>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | "open" | "closed")}>
           <option value="">All</option>
@@ -104,7 +125,11 @@ export function TradesPage() {
       </div>
 
       <h2>Positions</h2>
-      <PositionsTable positions={filtered} onExit={handleExit} onCancel={handleCancel} />
+      {typeFilter === "spot" ? (
+        <SpotPositionsTable positions={filtered} onExit={handleExit} onCancel={handleCancel} />
+      ) : (
+        <OptionsPositionsTable positions={filtered} onExit={handleExit} onCancel={handleCancel} />
+      )}
     </div>
   );
 }

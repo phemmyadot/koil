@@ -1,25 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api/positions";
+import type { PositionType } from "../api/positions";
 import type { AddFillBody, CreatePositionBody, PositionStatus } from "../api/types";
 
-export function usePositions(status?: PositionStatus) {
+export function usePositions(status?: PositionStatus, type?: PositionType) {
   return useQuery({
-    queryKey: ["positions", status ?? "all"],
-    queryFn: () => api.listPositions(status),
+    queryKey: ["positions", status ?? "all", type ?? "all"],
+    queryFn: () => api.listPositions(status, type),
   });
 }
 
-export function usePositionsSummary() {
+export function usePositionsSummary(type?: PositionType) {
   return useQuery({
-    queryKey: ["positions", "summary"],
-    queryFn: api.getPositionsSummary,
+    queryKey: ["positions", "summary", type ?? "all"],
+    queryFn: () => api.getPositionsSummary(type),
   });
 }
 
-export function usePnlSeries() {
+export function usePnlSeries(type?: PositionType) {
   return useQuery({
-    queryKey: ["positions", "pnl-series"],
-    queryFn: api.getPnlSeries,
+    queryKey: ["positions", "pnl-series", type ?? "all"],
+    queryFn: () => api.getPnlSeries(type),
   });
 }
 

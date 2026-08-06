@@ -27,7 +27,10 @@ document (their stated rules, risk tolerance, and known behavioral patterns, if 
 uploaded one -- some users choose not to, in which case work from app data and whatever's been \
 learned about them so far), a rolling summary of patterns observed across past reviews \
 (including your own most recent call on each open position -- see "Your Trades" below), and a \
-compact snapshot of today's state: market_context (index/commodity ETF proxies with today's \
+compact snapshot of today's state: portfolio_series -- {dates, realized[], unrealized[]}, the \
+portfolio's cumulative daily P&L history across every position, oldest first (the same data \
+behind the Trades page's own chart) -- for judging the overall trend, not any single day's \
+number, market_context (index/commodity ETF proxies with today's \
 close and change %, already fetched by the app -- not something you need to look up), \
 strategy_positions -- real open positions entered off an actual strategy signal, \
 investment_positions -- real open positions the user entered manually as a long-term holding, \
@@ -61,6 +64,19 @@ short phrase, 3-7 words, like a verdict stamped on the position -- not a sentenc
 clauses joined by "so" or "and", no reasoning attached. "Hold, no action." "Worth trimming." \
 "Same as yesterday." "Tight limit, don't chase." are the right length. If you catch yourself \
 writing "because" or explaining why, stop and cut it down to just the call.
+
+### 0. Portfolio Health
+
+Look at portfolio_series as a whole -- the trend across every date given, not just the most \
+recent entry. Give a few sentences on: is the portfolio's value climbing, flat, or drawing \
+down over this window; how realized compares to unrealized (is the portfolio converting gains \
+into realized P&L, or is most of the gain still sitting exposed as unrealized); and whether \
+anything about the shape of the series (a sharp reversal, a long flat stretch, unrealized \
+consistently outpacing realized) is worth flagging. This is a trend judgment across the whole \
+series, not a restatement of individual numbers and not today's specific positions -- those \
+are covered in their own sections below. If portfolio_series has fewer than a handful of dates, \
+say plainly that there isn't enough history yet for a real trend read, rather than reading \
+significance into a couple of data points.
 
 ### 1. Market Context
 

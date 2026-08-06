@@ -6,7 +6,7 @@ import type { ExitReason, Fill, Position } from "../../api/types";
 import { fmtMoney, fmtPct, fmtUnits, plClass } from "../../lib/format";
 import "./PositionsTable.css";
 
-export interface PositionsTableProps {
+export interface SpotPositionsTableProps {
   positions: Position[];
   onExit: (positionId: number, lastFill: Fill, price: number, units: number, exitReason: ExitReason) => Promise<void>;
   onCancel: (positionId: number) => Promise<void>;
@@ -18,8 +18,8 @@ function PositionRow({
   onCancel,
 }: {
   p: Position;
-  onExit: PositionsTableProps["onExit"];
-  onCancel: PositionsTableProps["onCancel"];
+  onExit: SpotPositionsTableProps["onExit"];
+  onCancel: SpotPositionsTableProps["onCancel"];
 }) {
   const [exitOpen, setExitOpen] = useState(false);
   const [exitPrice, setExitPrice] = useState("");
@@ -28,8 +28,8 @@ function PositionRow({
   const [submitting, setSubmitting] = useState(false);
 
   // Fetched only when the Exit form is actually opened, not eagerly for every row on page
-  // load -- handleExit needs the position's last fill (strategy_key/option contract terms) to
-  // carry over onto the new exit fill.
+  // load -- handleExit needs the position's last fill (strategy_key) to carry over onto the
+  // new exit fill.
   const fillsQuery = useQuery({
     queryKey: ["position", p.id, "fills"],
     queryFn: () => listFills(p.id),
@@ -37,18 +37,14 @@ function PositionRow({
   });
   const lastFill = fillsQuery.data?.[fillsQuery.data.length - 1];
 
-  const isOption = p.instrument === "option";
   const isOpen = p.status === "open";
-  // current_price is spot-only (see Position type) -- an option's avg_cost isn't comparable to
-  // a stock price without re-pricing the contract, so unrealized is left unavailable for options.
-  const last = !isOption ? p.current_price : null;
-  const pct = last != null && p.avg_cost ? ((last - p.avg_cost) / p.avg_cost) * 100 : 0;
+  const pct = p.current_price != null && p.avg_cost ? ((p.current_price - p.avg_cost) / p.avg_cost) * 100 : 0;
 
   async function submitExit() {
     const price = parseFloat(exitPrice);
     const units = parseFloat(exitUnits);
     if (!Number.isFinite(price)) {
-      window.alert(isOption ? "Enter a valid exit option price" : "Enter a valid exit price");
+      window.alert("Enter a valid exit price");
       return;
     }
     if (!Number.isFinite(units) || units <= 0) {
@@ -86,15 +82,14 @@ function PositionRow({
         <td>
           <span className={`status-tag ${p.status}`}>{p.status}</span>
         </td>
-        <td>{isOption ? "Option" : "Spot"}</td>
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{p.avg_cost != null ? fmtMoney(p.avg_cost) : "—"}</td>
         <td>{fmtMoney(p.tp_price)}</td>
         <td>{fmtMoney(p.stop_price)}</td>
         <td>
-          {last != null ? (
+          {p.current_price != null ? (
             <b className={plClass(pct)}>
-              {fmtMoney(last)}
+              {fmtMoney(p.current_price)}
               <br />
               {fmtPct(pct)}
             </b>
@@ -120,7 +115,7 @@ function PositionRow({
       </tr>
       {isOpen && exitOpen && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={9}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -128,7 +123,7 @@ function PositionRow({
                 <input
                   type="number"
                   step={0.01}
-                  placeholder={isOption ? "Exit option price" : "Exit price"}
+                  placeholder="Exit price"
                   value={exitPrice}
                   onChange={(e) => setExitPrice(e.target.value)}
                 />
@@ -150,8 +145,8 @@ function PositionRow({
   );
 }
 
-export function PositionsTable({ positions, onExit, onCancel }: PositionsTableProps) {
-  if (!positions.length) return <p className="empty">No positions match this filter.</p>;
+export function SpotPositionsTable({ positions, onExit, onCancel }: SpotPositionsTableProps) {
+  if (!positions.length) return <p className="empty">No spot positions match this filter.</p>;
   return (
     <div className="table-scroll">
       <table className="postable">
@@ -159,7 +154,6 @@ export function PositionsTable({ positions, onExit, onCancel }: PositionsTablePr
           <tr>
             <th>Ticker</th>
             <th>Status</th>
-            <th>Instrument</th>
             <th>Units</th>
             <th>Avg Cost</th>
             <th>TP</th>

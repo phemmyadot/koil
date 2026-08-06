@@ -18,17 +18,25 @@ export function addFill(positionId: number, body: AddFillBody): Promise<Position
   return apiPost<Position>(`/api/positions/${positionId}/fills`, body);
 }
 
-export function listPositions(status?: PositionStatus): Promise<Position[]> {
-  const qs = status ? `?status=${status}` : "";
-  return apiGet<Position[]>(`/api/positions${qs}`);
+export type PositionType = "spot" | "options";
+
+function typeQueryParam(type?: PositionType): string {
+  return type ? `type=${type}` : "";
 }
 
-export function getPositionsSummary(): Promise<PositionsSummary> {
-  return apiGet<PositionsSummary>("/api/positions/summary");
+export function listPositions(status?: PositionStatus, type?: PositionType): Promise<Position[]> {
+  const params = [status ? `status=${status}` : "", typeQueryParam(type)].filter(Boolean).join("&");
+  return apiGet<Position[]>(`/api/positions${params ? `?${params}` : ""}`);
 }
 
-export function getPnlSeries(): Promise<PnlSeriesResponse> {
-  return apiGet<PnlSeriesResponse>("/api/positions/pnl-series");
+export function getPositionsSummary(type?: PositionType): Promise<PositionsSummary> {
+  const qs = typeQueryParam(type);
+  return apiGet<PositionsSummary>(`/api/positions/summary${qs ? `?${qs}` : ""}`);
+}
+
+export function getPnlSeries(type?: PositionType): Promise<PnlSeriesResponse> {
+  const qs = typeQueryParam(type);
+  return apiGet<PnlSeriesResponse>(`/api/positions/pnl-series${qs ? `?${qs}` : ""}`);
 }
 
 export function getPosition(id: number): Promise<Position> {
