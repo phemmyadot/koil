@@ -1108,80 +1108,45 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     with _compute_lock:
         computed_by_ticker = {p["ticker"]: p for p in _computed}
 
+    # Each position is exactly what /api/positions/{id} (the real Trades page) returns --
+    # _position_with_state() -- plus its real fills and daily marks, the same records the Trades
+    # page itself reads entry date/price/contract terms and price history from. No independent
+    # re-derivation of days_held/current_price/unrealized_pct/etc. here; the model reads those
+    # straight out of the same real records the app already trusts elsewhere.
     open_positions = []
     for position in db.list_positions("open"):
-        fills = db.list_fills(position["id"])
-        state = replay_fills(fills)
+        state = _position_with_state(position)
         if state["units_remaining"] <= 0:
             continue
 
-        ticker = position["ticker"]
-        payload = computed_by_ticker.get(ticker)
-        current_price = payload["price"] if payload else None
-        if current_price is None:
-            bars = data.get_bars(ticker)
-            if bars is not None and not bars.empty:
-                current_price = round(float(bars.Close.iloc[-1]), 4)
-
-        unrealized_pct = None
-        near_tp_or_stop = False
-        if current_price is not None and state["avg_cost"] is not None:
-            pcts = _position_pct_to_tp_stop(state, position["tp_price"], position["stop_price"], current_price)
-            if pcts is not None:
-                pct_to_tp, pct_to_stop = pcts
-                near_tp_or_stop = pct_to_tp >= 70 or pct_to_stop >= 70
-            if state["instrument"] == "option":
-                # avg_cost has the 100x multiplier baked in; option_value/current_price from
-                # _computed is a stock price, not an option value -- unrealized_pct for options
-                # isn't derivable from current_price alone without re-pricing the option, so it's
-                # intentionally left None here rather than computing something misleading.
-                unrealized_pct = None
-            else:
-                unrealized_pct = round((current_price - state["avg_cost"]) / state["avg_cost"] * 100, 2)
+        fills = db.list_fills(position["id"])
+        marks = db.get_trade_daily_marks(position["id"])
+        if state["instrument"] == "option":
+            marks = _with_option_values(position, fills, marks)
 
         # Only the strategy(s) actually traded (quality_filter.DEFAULT_FILTER["strategies"],
         # currently VCPO only) are sent to the review chatbot -- other strategies' verdicts on a
         # held ticker are noise the user doesn't act on and shouldn't factor into its commentary.
+        payload = computed_by_ticker.get(state["ticker"])
         strategy_verdicts = {
             strat_key: (payload.get(strat_key) or {}).get("verdict")
             for strat_key in _DEFAULT_FILTER_WIRE_STRATEGIES
         } if payload else {}
 
-        marks = db.get_trade_daily_marks(position["id"])
-        prior_day = None
-        if len(marks) >= 2 and current_price is not None:
-            prior_close = marks[-2]["close_price"]
-            prior_day = {
-                "mark_date": marks[-2]["mark_date"],
-                "close_price": prior_close,
-                "price_change_pct": round((current_price - prior_close) / prior_close * 100, 2) if prior_close else None,
-            }
-
-        # fills are ordered by fill_date, id -- the first fill is always the entry.
-        strategy_key = fills[0]["strategy_key"] if fills else None
-
         open_positions.append({
-            "ticker": ticker,
-            "instrument": state["instrument"],
-            "units_remaining": state["units_remaining"],
-            "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
-            "current_price": current_price,
-            "unrealized_pct": unrealized_pct,
-            "days_held": (datetime.now(timezone.utc).date() - datetime.fromisoformat(position["opened_at"]).date()).days,
-            "near_tp_or_stop": near_tp_or_stop,
-            "tp_price": position["tp_price"],
-            "stop_price": position["stop_price"],
-            "realized_pnl": round(state["realized_pnl"], 2),
+            **state,
+            "fills": fills,
+            "marks": marks,
             "strategy_verdicts": strategy_verdicts,
-            "prior_day": prior_day,
-            "strategy_key": strategy_key,
         })
 
     # Split by how the position was entered: a real strategy signal vs. a manual long-term
-    # investment (strategy_key == "manual") -- the review treats these very differently (see
-    # SYSTEM_PROMPT's "2.0 Strategy Trades" / "2.5 Investment" split).
-    strategy_positions = [p for p in open_positions if p["strategy_key"] != "manual"]
-    investment_positions = [p for p in open_positions if p["strategy_key"] == "manual"]
+    # investment (fills are ordered by fill_date, id -- the first fill is always the entry, and
+    # contract/strategy identity can't change across scale-in fills on the same position). The
+    # review treats these very differently (see SYSTEM_PROMPT's "2.0 Strategy Trades" /
+    # "2.5 Investment" split).
+    strategy_positions = [p for p in open_positions if p["fills"][0]["strategy_key"] != "manual"]
+    investment_positions = [p for p in open_positions if p["fills"][0]["strategy_key"] == "manual"]
 
     pending_signals = []
     with _compute_lock:
