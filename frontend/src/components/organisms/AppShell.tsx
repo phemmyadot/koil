@@ -45,7 +45,9 @@ export function AppShell() {
       </header>
 
       <main className="app-content">
-        <Outlet />
+        <div className="app-content-inner">
+          <Outlet />
+        </div>
       </main>
 
       {isHome && <PLCalcFab />}

@@ -2,7 +2,6 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow-y: auto;
 }
 
 /* ---------------- Top bar (desktop) ---------------- */
@@ -63,8 +62,19 @@
   margin-left: auto;
 }
 
+/* Full-width scroll container -- the scrollbar this produces sits at the true viewport edge.
+   Centering/max-width lives on .app-content-inner instead, so the two concerns (where the
+   scrollbar renders vs. how wide the content column is) don't fight each other. */
 .app-content {
   flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.app-content-inner {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 16px 20px 32px;
   max-width: 1200px;
   width: 100%;
@@ -82,8 +92,10 @@
   .app-toplinks {
     display: none;
   }
-  .app-content {
-    padding: 12px 12px 88px; /* clears the fixed bottom nav */
+  .app-content-inner {
+    /* Clears the fixed bottom nav (its own height + safe-area inset) -- generous rather than
+       exact since the nav's actual rendered height varies slightly by content/label wrapping. */
+    padding: 12px 12px calc(96px + env(safe-area-inset-bottom, 0px));
   }
   .app-bottomnav {
     display: flex;

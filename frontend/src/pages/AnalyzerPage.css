@@ -220,15 +220,20 @@
   }
 }
 
+/* Not sticky -- it's already the last child of .analyzer-review, a bounded-height (min-height:
+   0 down the flex chain) non-scrolling column, so it sits pinned below .analyzer-chat-messages'
+   own internal scroll without needing position: sticky. Sticky here previously anchored to
+   whichever ancestor actually scrolled -- on mobile that became the page-level .app-shell
+   scroll (see AppShell.css), not this chat panel, so the input row could end up stuck to the
+   bottom of the whole page and hidden behind the fixed .app-bottomnav. */
 .analyzer-chat-input-row {
   display: flex;
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--line);
   background: var(--panel);
-  position: sticky;
-  bottom: 0;
   border-radius: 8px;
+  flex: 0 0 auto;
 }
 .analyzer-chat-input-row input {
   flex: 1;

@@ -131,6 +131,18 @@ a:focus-visible,
   outline-offset: 2px;
 }
 
+/* Mobile Safari/Chrome auto-zoom the page on focusing any text input/select/textarea whose
+   computed font-size is under 16px -- this app's own type scale runs well below that
+   everywhere, so every focusable field gets bumped to 16px on narrow viewports only (desktop
+   keeps its normal, smaller sizing; nothing here changes layout at desktop widths). */
+@media (max-width: 719px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 /* <input type=date>'s calendar icon is browser-drawn, not styleable via color/currentColor --
    the only lever Chromium/WebKit expose is inverting it. It renders black by default, which
    reads fine on light --panel backgrounds but is barely visible (or just ugly) against the
