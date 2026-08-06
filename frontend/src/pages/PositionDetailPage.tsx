@@ -77,6 +77,16 @@ export function PositionDetailPage() {
   const pctLive = avgCostPerShare ? ((last - avgCostPerShare) / avgCostPerShare) * 100 : 0;
   const lastLabel = hasOptionValues ? "Option value" : "Last price";
 
+  // Realized P&L% basis is avg_cost * units actually sold, not the whole position -- avg_cost
+  // is a weighted-average blend that's fixed at each entry and doesn't change as units get sold
+  // off, so it's still correct to use even after the position is fully closed (backend now
+  // preserves it post-close instead of nulling it out -- see replay_fills). units sold = total
+  // entered - units still remaining (0 for a closed position, whatever's left for an open one).
+  const unitsEntered = fillsList.filter((f) => f.kind === "entry").reduce((sum, f) => sum + f.units, 0);
+  const unitsSold = unitsEntered - position.units_remaining;
+  const costBasisSold = position.avg_cost != null ? position.avg_cost * unitsSold : null;
+  const realizedPct = costBasisSold ? (position.realized_pnl / costBasisSold) * 100 : null;
+
   async function handleCancelPosition() {
     if (!window.confirm("Cancel this position? This permanently deletes it and all its fills, and cannot be undone.")) return;
     await cancelPosition.mutateAsync();
@@ -105,7 +115,12 @@ export function PositionDetailPage() {
         <StatBox label="Avg cost" value={position.avg_cost != null ? fmtMoney(position.avg_cost) : "—"} />
         <StatBox label="Take Profit" value={fmtMoney(position.tp_price)} />
         <StatBox label="Stop" value={fmtMoney(position.stop_price)} />
-        <StatBox label="Realized P&L" value={fmtMoney(position.realized_pnl)} tone={position.realized_pnl} />
+        <StatBox
+          label="Realized P&L"
+          value={fmtMoney(position.realized_pnl)}
+          tone={position.realized_pnl}
+          sub={realizedPct != null ? <span className={plClass(realizedPct)}>{fmtPct(realizedPct)}</span> : undefined}
+        />
         {position.status === "open" &&
           position.avg_cost != null &&
           (isOption ? (

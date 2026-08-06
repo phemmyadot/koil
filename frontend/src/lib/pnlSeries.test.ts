@@ -42,6 +42,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     units_remaining: 10,
     avg_cost: 100,
     realized_pnl: 0,
+    realized_pnl_pct: null,
     fill_count: 1,
     current_price: null,
     ...overrides,

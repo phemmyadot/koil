@@ -432,6 +432,11 @@ def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
     # weighted-average, see above), only for the expiry auto-close check, which needs to know
     # a specific option fill's own expiry_date, not a position-wide blended one.
     open_lots: list[dict] = []  # [{fill, units_remaining}], oldest entry first
+    # Weighted-average cost is fixed at each entry and doesn't change as units get sold off --
+    # so the last computable avg_cost (right before the final exit fully closes the position) is
+    # still the right number to report after closing, not None. Tracked separately from the
+    # running_cost/running_units below, which legitimately hit 0/0 once nothing remains open.
+    last_avg_cost: float | None = None
 
     for f in ordered:
         fill_value = f["premium"] if instrument == "option" else f["price"]
@@ -439,6 +444,7 @@ def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
             running_cost += fill_value * f["units"] * multiplier
             running_units += f["units"]
             open_lots.append({"fill": f, "units_remaining": f["units"]})
+            last_avg_cost = running_cost / running_units
         elif f["kind"] == "exit":
             if running_units <= 0:
                 continue  # malformed data guard -- an exit with nothing open, ignore rather than divide by zero
@@ -455,7 +461,7 @@ def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
                 lot["units_remaining"] -= consumed
                 remaining_to_consume -= consumed
 
-    avg_cost = (running_cost / running_units) if running_units > 0 else None
+    avg_cost = (running_cost / running_units) if running_units > 0 else last_avg_cost
     open_lots = [lot for lot in open_lots if lot["units_remaining"] > 0]
     return {
         "units_remaining": running_units,
@@ -1107,12 +1113,21 @@ def _position_with_state(position: dict) -> dict:
         current_price = round(option_value, 4) if option_value is not None else None
     else:
         current_price = underlying_price
+    # Realized P&L% basis is avg_cost * units actually sold (entered - still remaining), not the
+    # whole position -- avg_cost is a weighted-average blend fixed at each entry, so it's still
+    # correct against units already exited. Matches PositionDetailPage's own client-side calc.
+    units_entered = sum(f["units"] for f in fills if f["kind"] == "entry")
+    units_sold = units_entered - state["units_remaining"]
+    cost_basis_sold = state["avg_cost"] * units_sold if state["avg_cost"] is not None else None
+    realized_pnl_pct = round(state["realized_pnl"] / cost_basis_sold * 100, 2) if cost_basis_sold else None
+
     return {
         **position,
         "instrument": state["instrument"],
         "units_remaining": state["units_remaining"],
         "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
         "realized_pnl": round(state["realized_pnl"], 2),
+        "realized_pnl_pct": realized_pnl_pct,
         "fill_count": len(fills),
         "current_price": current_price,
     }

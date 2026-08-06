@@ -98,7 +98,15 @@ function PositionRow({
           )}
         </td>
         <td>
-          <b className={plClass(p.realized_pnl)}>{fmtMoney(p.realized_pnl)}</b>
+          <b className={plClass(p.realized_pnl)}>
+            {fmtMoney(p.realized_pnl)}
+            {p.realized_pnl_pct != null && (
+              <>
+                <br />
+                {fmtPct(p.realized_pnl_pct)}
+              </>
+            )}
+          </b>
         </td>
         <td className="actions-cell">
           {isOpen && (
@@ -159,7 +167,7 @@ export function SpotPositionsTable({ positions, onExit, onCancel }: SpotPosition
             <th>TP</th>
             <th>Stop</th>
             <th>Last / Unrealized %</th>
-            <th>Realized $</th>
+            <th>Realized $ / %</th>
             <th></th>
           </tr>
         </thead>

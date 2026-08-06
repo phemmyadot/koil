@@ -117,6 +117,8 @@ export interface Position {
   units_remaining: number;
   avg_cost: number | null;
   realized_pnl: number;
+  // realized_pnl / (avg_cost * units actually sold) -- null when nothing's been sold yet.
+  realized_pnl_pct: number | null;
   fill_count: number;
   // Latest known price for this ticker -- spot only meaning (an option's avg_cost isn't
   // comparable to a stock price without re-pricing the contract). null if never fetched.
