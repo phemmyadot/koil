@@ -331,8 +331,12 @@ def chat_reply(
         messages.append({"role": "user", "content": tool_results})
         response = client.messages.create(
             model=MODEL,
-            max_tokens=1500,
+            # This follow-up turn only needs a short acknowledgment of the save (e.g. "Got it,
+            # I'll remember that.") -- 1500 was the same ceiling as a full review-chat reply,
+            # far more than this turn ever needs.
+            max_tokens=200,
             thinking={"type": "disabled"},
+            output_config={"effort": "low"},
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
             tools=[REMEMBER_FACT_TOOL],
             messages=messages,
