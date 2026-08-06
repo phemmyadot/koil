@@ -129,6 +129,14 @@ Spot: limit ${{spot_limit}} (support ${{support_used}}) — {{order_method}}
      position yet). Every listed signal has already cleared the shared quality filter
      (backend/quality_filter.py), so there is no watch-only tier here. -->
 
+{{spot_vs_options_lean}}
+<!-- Claude-authored, not computed — the snapshot has no live options chain/IV/liquidity for a
+     signal with no position yet, so this is a general lean, not a claim about this ticker's
+     real chain: either "spot is the better fit, enter at $X.XX" (using the order block's own
+     number), or a conditional rule of thumb ("options could work if IV is under ~40% and DTE is
+     30+ days, keep the spread under $0.10-0.15") calibrated to the setup, never an invented IV
+     or strike. One short clause, not a paragraph. -->
+
 > **Verdict:** {{verdict}}
 
 ---
@@ -140,11 +148,11 @@ Spot: limit ${{spot_limit}} (support ${{support_used}}) — {{order_method}}
 *Optional — only appears when there's a real judgment call to make. Tickers where a strategy's
 own simulated backtest is IN TRADE but the user never entered, signal fired within the last 3
 days. Not every open_signals entry gets written up -- Claude selects which are worth a late
-entry, one line each: a short verdict, then a short reason. No stats, no multi-sentence
-justification — this section is a scan, not a writeup.*
+entry, one line each: a short verdict, a short reason, and the same spot-vs-options lean as
+above. No stats, no multi-sentence justification — this section is a scan, not a writeup.*
 
 {{#each open_signals_discussed}}
-- **{{ticker}} — {{verdict}}.** {{short_reason}}
+- **{{ticker}} — {{verdict}}.** {{short_reason}} {{spot_vs_options_lean}}
 {{/each}}
 
 ---

@@ -137,19 +137,37 @@ One entry per ticker in pending_signals, in the order given. Every listed signal
 cleared the app's own quality filter, so all of them get a real order line -- there is no \
 watch-only tier here. For each: ticker, score, a one-line stats summary (trade count/win \
 rate/profit factor from the snapshot), the order block exactly as given (spot limit price, \
-support level, and order_method -- these are pre-computed, do not alter the numbers), and a \
-short verdict sentence giving your own take on the setup's strength relative to the others \
-listed today.
+support level, and order_method -- these are pre-computed, do not alter the numbers), a short \
+verdict sentence giving your own take on the setup's strength relative to the others listed \
+today, and a spot-vs-options lean (see below).
 
 ### 3.5 Missed Entries Worth Discussing
 
 Only include this section when open_signals actually contains something worth raising -- do \
 not print a header for an empty list. One line per ticker, no exceptions: a bolded short \
 verdict (e.g. "Skip", "Watch", "Worth a late entry") plus a single short clause with the one \
-reason that matters. No stats, no multi-sentence writeups, no restating the numbers already in \
-the snapshot -- this is a scan the user skims in two seconds, not a mini-analysis. Format: \
-`- **TICKER — Verdict.** Short reason.` Skip this section entirely on a day with nothing here \
-worth a second look.
+reason that matters, then a spot-vs-options lean (see below) on its own short clause. No stats, \
+no multi-sentence writeups, no restating the numbers already in the snapshot -- this is a scan \
+the user skims in two seconds, not a mini-analysis. Format: \
+`- **TICKER — Verdict.** Short reason. {{spot-vs-options lean}}` Skip this section entirely on \
+a day with nothing here worth a second look.
+
+**Spot-vs-options lean** (used in both 3 and 3.5): the snapshot has no live options chain, IV, \
+or liquidity data for a signal with no position yet -- never claim a specific IV number, \
+strike, or spread exists for it, and never invent one. Give a short, general-purpose lean \
+instead:
+- If spot looks like the better fit here, say so plainly and give the entry price/limit already \
+  in the order block -- e.g. "Spot is fine here -- enter at $X.XX, no need for leverage on a \
+  setup this clean."
+- If options could make sense, phrase it as a conditional rule of thumb for the user to check \
+  themselves against the real chain, not a claim about this ticker's actual chain -- e.g. \
+  "Options could work here if IV is under ~40% and DTE is 30+ days; keep the bid/ask spread \
+  under $0.10-0.15 or the entry cost eats the edge." Calibrate the specific IV/DTE/spread \
+  numbers to the setup (a tighter stop or higher-conviction setup can justify more aggressive \
+  numbers; a choppier one should lean more conservative) rather than repeating the same \
+  boilerplate thresholds every time.
+- This is a lean, not an instruction -- keep it to one short clause or sentence, not a separate \
+  paragraph.
 
 ### 4. Session Notes
 
