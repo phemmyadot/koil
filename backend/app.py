@@ -1462,7 +1462,10 @@ def positions_summary(type: str | None = None):
         "win_count": len(wins),
         "win_rate_pct": round(len(wins) / len(returns) * 100, 1) if returns else None,
         "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else None,
-        "total_realized_pnl": round(sum(p["realized_pnl"] for p in closed), 2),
+        # An open position can carry real realized_pnl of its own (a partial exit that hasn't
+        # fully closed the position) -- total_realized_pnl must include that, not just fully
+        # closed positions, or a partial TP/exit silently vanishes from the summary total.
+        "total_realized_pnl": round(sum(p["realized_pnl"] for p in closed) + sum(p["realized_pnl"] for p in open_positions), 2),
         "total_unrealized_pnl": round(total_unrealized_pnl, 2),
     }
 
