@@ -47,6 +47,18 @@ def with_earnings_flags(bars: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return df
 
 
+def days_to_earnings(ticker: str, today: pd.Timestamp) -> int | None:
+    """Calendar days to the next known earnings date on/after today, from the same cached
+    source as with_earnings_flags's EarningsWithinAvoidWindow (21-day) flag -- this is just a
+    countdown view of the same underlying dates, not a new fetch or a new threshold. None if no
+    upcoming earnings date is known."""
+    dates = cached_earnings_dates(ticker)
+    upcoming = dates[dates >= today]
+    if upcoming.empty:
+        return None
+    return int((upcoming.min() - today).days)
+
+
 def wilder_atr(h, l, c, length):
     tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     atr = tr.copy()

@@ -167,6 +167,14 @@ def _init_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read_at);
 
+            -- Ticker-scoped (not position-scoped): a ticker held across multiple open positions
+            -- still gets exactly one earnings push per calendar day -- see
+            -- _fire_earnings_alerts() in app.py.
+            CREATE TABLE IF NOT EXISTS earnings_alert_log (
+                ticker TEXT PRIMARY KEY,
+                alert_date TEXT NOT NULL
+            );
+
             -- No user/account table exists in this single-user app, so subscriptions aren't
             -- scoped to a user id -- every stored subscription receives every push (see
             -- docs/superpowers/specs/2026-07-31-pwa-push-design.md).
@@ -1049,6 +1057,22 @@ def insert_notification(position_id: int | None, kind: str, pct: float | None, m
             VALUES (?, ?, ?, ?, ?)
         """, (position_id, kind, pct, message, created_at))
         return cur.lastrowid
+
+
+def get_earnings_alert_date(ticker: str) -> str | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT alert_date FROM earnings_alert_log WHERE ticker = ?", (ticker,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_earnings_alert_date(ticker: str, alert_date: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO earnings_alert_log (ticker, alert_date) VALUES (?, ?)
+            ON CONFLICT (ticker) DO UPDATE SET alert_date = excluded.alert_date
+        """, (ticker, alert_date))
 
 
 NOTIFICATIONS_LIST_MIN = 20  # see list_notifications's own docstring

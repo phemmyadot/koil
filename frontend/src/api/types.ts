@@ -73,6 +73,7 @@ export interface TickerPayload {
   strategy_vcp: StrategyResult | null;
   strategy_vcpo: StrategyResult | null;
   earnings_risk: boolean | null;
+  days_to_earnings: number | null;
   prebreak: PrebreakResult | null;
   setup_score: Partial<Record<StrategyKey, number | null>>;
   _schema_version: number;

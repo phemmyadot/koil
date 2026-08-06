@@ -38,6 +38,7 @@ function ticker(overrides: Partial<TickerPayload> = {}): TickerPayload {
     strategy_vcp: null,
     strategy_vcpo: null,
     earnings_risk: false,
+    days_to_earnings: null,
     prebreak: null,
     setup_score: {},
     _schema_version: 1,

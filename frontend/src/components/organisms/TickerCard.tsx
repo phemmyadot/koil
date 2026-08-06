@@ -86,6 +86,14 @@ export function TickerCard({ row, scoreStrategy, selected, onToggleSelect, onOpe
           ) : (
             <span className="firetag">ENTRY</span>
           ))}
+        {row.days_to_earnings != null && row.days_to_earnings <= 21 && row.days_to_earnings >= 0 && (
+          <span
+            className={`earningsbadge ${row.days_to_earnings <= 5 ? "soon" : ""}`}
+            title="days until this ticker's next known earnings report"
+          >
+            Earnings {row.days_to_earnings === 0 ? "0D" : `+${row.days_to_earnings}D`}
+          </span>
+        )}
         <input
           type="checkbox"
           className="cardcheck"

@@ -238,8 +238,12 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
         if vexh_result is not None:
             df = strategy_common.with_earnings_flags(bars, ticker)
             payload["earnings_risk"] = bool(df["EarningsWithinAvoidWindow"].iloc[-1])
+            # Card-facing countdown (21-day window, same source as earnings_risk above) --
+            # display only, does not feed score.py's own earnings_risk-gated scoring dimension.
+            payload["days_to_earnings"] = strategy_common.days_to_earnings(ticker, df.index[-1])
         else:
             payload["earnings_risk"] = None
+            payload["days_to_earnings"] = None
         if all(payload[key] is None for key in _STRATEGY_MODULES):
             raise ValueError("insufficient history")
         # Ticker-level, not strategy-specific -- same as a Pine indicator overlaying any strategy's chart.
@@ -580,6 +584,32 @@ def _update_trade_marks_and_alerts() -> None:
 
         _fire_threshold_alerts(position, "tp_progress", pct_to_tp, position["last_alert_tp_pct"])
         _fire_threshold_alerts(position, "stop_progress", pct_to_stop, position["last_alert_stop_pct"])
+
+    # Ticker-scoped, not position-scoped: a ticker held across multiple open positions still
+    # gets exactly one push (see earnings_alert_log's own docstring in db.py).
+    _fire_earnings_alerts({p["ticker"] for p in open_positions}, now_iso)
+
+
+def _fire_earnings_alerts(open_tickers: set[str], now_iso: str) -> None:
+    """Real open positions only, never signals/candidates/watchlist-only tickers -- pushes once
+    per ticker per calendar day, days 5 through 0 (the earnings day itself) inclusive.
+    days_to_earnings comes from the same per-cycle compute pass as everything else here, no new
+    fetch (see payload["days_to_earnings"] in _compute_one)."""
+    today = now_iso[:10]
+    with _compute_lock:
+        days_by_ticker = {p["ticker"]: p.get("days_to_earnings") for p in _computed}
+    for ticker in open_tickers:
+        days = days_by_ticker.get(ticker)
+        if days is None or not (0 <= days <= 5):
+            continue
+        if db.get_earnings_alert_date(ticker) == today:
+            continue  # already pushed today for this ticker
+        when = "today" if days == 0 else f"in {days} day{'s' if days != 1 else ''}"
+        message = f"{ticker} reports earnings {when}"
+        db.insert_notification(None, "earnings", float(days), message, now_iso)
+        payload = json.dumps({"title": f"{ticker} — Earnings {when}", "body": message, "ticker": ticker})
+        push.send_push_to_all(payload, now_iso)
+        db.set_earnings_alert_date(ticker, today)
 
 
 def _fire_threshold_alerts(position: dict, kind: str, pct: float, last_alert_pct: float | None) -> None:
