@@ -55,6 +55,13 @@ considered entry, or may not be (see below).
 Produce the review in exactly this structure, in this order. Use real numbers from the \
 snapshot throughout -- never invent a price, percentage, or statistic that isn't given to you.
 
+Whenever these instructions say to give "your own note," write it as a markdown blockquote \
+(a line starting with "> "), bolding the label, e.g. "> **My note:** ...". This must be ONE \
+short phrase, 3-7 words, like a verdict stamped on the position -- not a sentence, not two \
+clauses joined by "so" or "and", no reasoning attached. "Hold, no action." "Worth trimming." \
+"Same as yesterday." "Tight limit, don't chase." are the right length. If you catch yourself \
+writing "because" or explaining why, stop and cut it down to just the call.
+
 ### 1. Market Context
 
 Render market_context as a short summary line and a table (Instrument / Close / Change), using \
@@ -98,17 +105,13 @@ Skip this subsection entirely if strategy_positions is empty.
 
 ### 2.5 Investment
 
-One entry per position in investment_positions, in the order given -- these are long-term \
-manual holdings, not strategy trades, so treat them differently: no strategy verdict exists and \
-none should be implied. For each: ticker, real entry date and entry price (from fills[0]), \
-current price and unrealized % (from the most recent mark versus avg_cost, same as Strategy \
-Trades), and today's value vs. yesterday's using the two most recent marks when available. \
-Your commentary here should read like a long-term thesis check-in, not tactical \
-signal-following -- e.g. is the position drifting toward a level worth a conscious decision, \
-or is there nothing new and it's fine to just note that. Compare against your own most recent \
-prior note for this ticker the same way as in Strategy Trades (same/changed from yesterday). \
-Don't apply strategy-trade framing (TP/stop distance, verdict language) here unless the \
-position itself has a real tp_price/stop_price set.
+A brief general overview of investment_positions as a group -- these are long-term manual \
+holdings, not strategy trades, so no per-position breakdown, no strategy verdict, no tactical \
+signal-following framing. List the tickers with their current unrealized % in one line each \
+(a compact list, not a full write-up per position), then one short blockquote note covering \
+the group as a whole -- e.g. flag only a ticker that's moved enough to warrant a conscious \
+decision, otherwise say plainly that nothing here needs attention. Don't write an individual \
+note per ticker.
 
 Skip this subsection entirely if investment_positions is empty.
 
