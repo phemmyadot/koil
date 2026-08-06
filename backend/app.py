@@ -1057,9 +1057,18 @@ def _seed_todays_mark(position_id: int, ticker: str) -> None:
 def _position_with_state(position: dict) -> dict:
     """Annotates a position with its derived replay state (avg_cost, units_remaining,
     realized_pnl, instrument) -- computed fresh from position_fills every time, never cached
-    beyond the stored status/closed_at (see db.py's positions docstring)."""
+    beyond the stored status/closed_at (see db.py's positions docstring). current_price is the
+    ticker's latest known price (same source as positions_summary's total_unrealized_pnl) --
+    None if never fetched."""
     fills = db.list_fills(position["id"])
     state = replay_fills(fills)
+    with _compute_lock:
+        payload = next((p for p in _computed if p["ticker"] == position["ticker"]), None)
+    current_price = payload["price"] if payload else None
+    if current_price is None:
+        bars = data.get_bars(position["ticker"])
+        if bars is not None and not bars.empty:
+            current_price = round(float(bars.Close.iloc[-1]), 4)
     return {
         **position,
         "instrument": state["instrument"],
@@ -1067,6 +1076,7 @@ def _position_with_state(position: dict) -> dict:
         "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
         "realized_pnl": round(state["realized_pnl"], 2),
         "fill_count": len(fills),
+        "current_price": current_price,
     }
 
 
@@ -1352,14 +1362,79 @@ def positions_summary():
         if cost_basis:
             returns.append(p["realized_pnl"] / cost_basis * 100)
     wins = [r for r in returns if r >= 0]
+
+    # Straight aggregate against each open position's current_price (see _position_with_state)
+    # -- spot positions only, an option's avg_cost isn't comparable to a stock price without
+    # re-pricing the contract, same reasoning as build_daily_snapshot's spot-only unrealized_pct.
+    open_positions = [_position_with_state(p) for p in db.list_positions("open")]
+    total_unrealized_pnl = sum(
+        (p["current_price"] - p["avg_cost"]) * p["units_remaining"]
+        for p in open_positions
+        if p["instrument"] == "spot" and p["avg_cost"] is not None and p["current_price"] is not None
+    )
+
     return {
-        "open_count": len(db.list_positions("open")),
+        "open_count": len(open_positions),
         "closed_count": len(closed),
         "win_count": len(wins),
         "win_rate_pct": round(len(wins) / len(returns) * 100, 1) if returns else None,
         "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else None,
         "total_realized_pnl": round(sum(p["realized_pnl"] for p in closed), 2),
+        "total_unrealized_pnl": round(total_unrealized_pnl, 2),
     }
+
+
+@app.get("/api/positions/pnl-series")
+def positions_pnl_series():
+    """Portfolio-wide daily cumulative realized/unrealized P&L -- ported from the frontend's
+    former computePnlSeries()/replayAsOf() (frontend/src/lib/pnlSeries.ts) to a single backend
+    call, so the Trades page no longer needs one marks + one fills request per position just to
+    draw this chart. realized is a step function (flat between exits, steps on each exit fill's
+    own date); unrealized is mark-to-market against each position's own daily marks."""
+    positions = db.list_positions(None)
+    position_ids = [p["id"] for p in positions]
+    fills_by_position = db.list_fills_bulk(position_ids)
+    marks_by_position = db.get_trade_daily_marks_bulk(position_ids)
+
+    dates = set()
+    for p in positions:
+        for m in marks_by_position.get(p["id"], []):
+            dates.add(m["mark_date"])
+        for f in fills_by_position.get(p["id"], []):
+            if f["kind"] == "exit":
+                dates.add(f["fill_date"])
+    dates = sorted(dates)
+
+    realized: list[float] = []
+    unrealized: list[float] = []
+    for as_of in dates:
+        day_realized = 0.0
+        day_unrealized = 0.0
+        for p in positions:
+            fills = fills_by_position.get(p["id"], [])
+            if not fills:
+                continue
+            state = replay_fills(fills, as_of_date=as_of)
+            day_realized += state["realized_pnl"]
+
+            if state["units_remaining"] <= 0 or state["avg_cost"] is None:
+                continue
+            marks = marks_by_position.get(p["id"], [])
+            if state["instrument"] == "option":
+                marks = _with_option_values(p, fills, marks)
+            mark = next((m for m in marks if m["mark_date"] == as_of), None)
+            if mark is None:
+                continue
+            value = mark.get("option_value", mark["close_price"])
+            if value is None:
+                value = mark["close_price"]
+            avg_cost_per_share = state["avg_cost"] / state["multiplier"]
+            day_unrealized += (value - avg_cost_per_share) * state["units_remaining"] * state["multiplier"]
+
+        realized.append(round(day_realized, 2))
+        unrealized.append(round(day_unrealized, 2))
+
+    return {"dates": dates, "realized": realized, "unrealized": unrealized}
 
 
 @app.get("/api/positions/analytics")

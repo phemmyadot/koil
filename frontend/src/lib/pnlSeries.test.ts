@@ -43,6 +43,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     avg_cost: 100,
     realized_pnl: 0,
     fill_count: 1,
+    current_price: null,
     ...overrides,
   };
 }

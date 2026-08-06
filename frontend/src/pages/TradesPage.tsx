@@ -1,19 +1,19 @@
 import { useMemo, useState } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { usePositions, usePositionsSummary } from "../hooks/usePositions";
-import { addFill, cancelPosition, getMarks, listFills } from "../api/positions";
-import type { DailyMark, ExitReason, Fill } from "../api/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { usePositions, usePositionsSummary, usePnlSeries } from "../hooks/usePositions";
+import { addFill, cancelPosition } from "../api/positions";
+import type { ExitReason, Fill } from "../api/types";
 import { StatBox } from "../components/atoms/StatBox";
 import { PositionsTable } from "../components/organisms/PositionsTable";
 import { PnlChart } from "../components/organisms/PnlChart";
 import { fmtMoney, fmtPct } from "../lib/format";
-import { computePnlSeries } from "../lib/pnlSeries";
 import { todayIsoDate } from "../lib/dates";
 import "./TradesPage.css";
 
 export function TradesPage() {
   const { data: positions } = usePositions();
   const { data: summary } = usePositionsSummary();
+  const { data: pnlSeries } = usePnlSeries();
   const queryClient = useQueryClient();
 
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
@@ -21,59 +21,7 @@ export function TradesPage() {
 
   const positionIds = positions?.map((p) => p.id) ?? [];
 
-  const marksQueries = useQueries({
-    queries: positionIds.map((id) => ({ queryKey: ["position", id, "marks"], queryFn: () => getMarks(id) })),
-  });
-  const fillsQueries = useQueries({
-    queries: positionIds.map((id) => ({ queryKey: ["position", id, "fills"], queryFn: () => listFills(id) })),
-  });
-
-  const marksUpdatedKey = marksQueries.map((q) => q.dataUpdatedAt).join(",");
-  const fillsUpdatedKey = fillsQueries.map((q) => q.dataUpdatedAt).join(",");
-
-  const marksByPosition = useMemo(() => {
-    const map: Record<number, DailyMark[]> = {};
-    positionIds.forEach((id, i) => {
-      map[id] = marksQueries[i]?.data ?? [];
-    });
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [positions, marksUpdatedKey]);
-
-  const fillsByPosition = useMemo(() => {
-    const map: Record<number, Fill[]> = {};
-    positionIds.forEach((id, i) => {
-      map[id] = fillsQueries[i]?.data ?? [];
-    });
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [positions, fillsUpdatedKey]);
-
-  const pnlSeries = useMemo(
-    () => computePnlSeries(positions ?? [], marksByPosition, fillsByPosition),
-    [positions, marksByPosition, fillsByPosition],
-  );
-
   const tickers = useMemo(() => [...new Set((positions ?? []).map((p) => p.ticker))].sort(), [positions]);
-
-  // avg_cost has the 100x multiplier baked in for options; marks/option_value are per-share.
-  const { totalCost, totalUnrealized, totalValue } = useMemo(() => {
-    let cost = 0;
-    let unrealized = 0;
-    for (const p of positions ?? []) {
-      if (p.status !== "open" || p.avg_cost == null) continue;
-      const marks = marksByPosition[p.id] ?? [];
-      if (!marks.length) continue;
-      const isOption = p.instrument === "option";
-      const hasOptionValues = isOption && marks[0].option_value != null;
-      const last = hasOptionValues ? (marks[marks.length - 1].option_value as number) : marks[marks.length - 1].close_price;
-      const avgCostPerShare = isOption ? p.avg_cost / 100 : p.avg_cost;
-      const multiplier = isOption ? 100 : 1;
-      cost += avgCostPerShare * p.units_remaining * multiplier;
-      unrealized += (last - avgCostPerShare) * p.units_remaining * multiplier;
-    }
-    return { totalCost: cost, totalUnrealized: unrealized, totalValue: cost + unrealized };
-  }, [positions, marksByPosition]);
 
   const filtered = (positions ?? []).filter(
     (p) => (!statusFilter || p.status === statusFilter) && (!tickerFilter || p.ticker === tickerFilter),
@@ -87,11 +35,11 @@ export function TradesPage() {
   // `amount` is the exit price (spot) or exit option price (option) -- PositionsTable's single
   // generic input, routed to the right field here since options carry their price in premium,
   // never price. See docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
-  async function handleExit(positionId: number, amount: number, units: number, exitReason: ExitReason) {
-    const fills = fillsByPosition[positionId] ?? [];
-    const lastFill = fills[fills.length - 1];
+  // lastFill is fetched by PositionRow itself, on demand when the Exit form opens, rather than
+  // eagerly for every position on page load.
+  async function handleExit(positionId: number, lastFill: Fill, amount: number, units: number, exitReason: ExitReason) {
     const position = positions?.find((p) => p.id === positionId);
-    if (!position || !lastFill) return;
+    if (!position) return;
     await addFill(positionId, {
       kind: "exit",
       instrument: position.instrument,
@@ -136,18 +84,20 @@ export function TradesPage() {
           value={summary?.avg_return_pct != null ? fmtPct(summary.avg_return_pct) : "—"}
           tone={summary?.avg_return_pct ?? undefined}
         />
-        <StatBox label="Total unrealized" value={fmtMoney(totalUnrealized)} tone={totalUnrealized} />
+        <StatBox
+          label="Total unrealized"
+          value={summary?.total_unrealized_pnl != null ? fmtMoney(summary.total_unrealized_pnl) : "—"}
+          tone={summary?.total_unrealized_pnl ?? undefined}
+        />
         <StatBox
           label="Total realized"
           value={summary?.total_realized_pnl != null ? fmtMoney(summary.total_realized_pnl) : "—"}
           tone={summary?.total_realized_pnl ?? undefined}
         />
-        <StatBox label="Portfolio cost" value={fmtMoney(totalCost)} />
-        <StatBox label="Portfolio value" value={fmtMoney(totalValue)} />
       </div>
 
       <h2>Daily P&amp;L</h2>
-      <PnlChart series={pnlSeries} />
+      <PnlChart series={pnlSeries ?? { dates: [], realized: [], unrealized: [] }} />
 
       <div className="trades-filterbar">
         <label>Status</label>
@@ -168,7 +118,7 @@ export function TradesPage() {
       </div>
 
       <h2>Positions</h2>
-      <PositionsTable positions={filtered} marksByPosition={marksByPosition} onExit={handleExit} onCancel={handleCancel} />
+      <PositionsTable positions={filtered} onExit={handleExit} onCancel={handleCancel} />
     </div>
   );
 }

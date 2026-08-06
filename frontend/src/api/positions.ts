@@ -4,6 +4,7 @@ import type {
   CreatePositionBody,
   DailyMark,
   Fill,
+  PnlSeriesResponse,
   Position,
   PositionsSummary,
   PositionStatus,
@@ -24,6 +25,10 @@ export function listPositions(status?: PositionStatus): Promise<Position[]> {
 
 export function getPositionsSummary(): Promise<PositionsSummary> {
   return apiGet<PositionsSummary>("/api/positions/summary");
+}
+
+export function getPnlSeries(): Promise<PnlSeriesResponse> {
+  return apiGet<PnlSeriesResponse>("/api/positions/pnl-series");
 }
 
 export function getPosition(id: number): Promise<Position> {

@@ -16,6 +16,13 @@ export function usePositionsSummary() {
   });
 }
 
+export function usePnlSeries() {
+  return useQuery({
+    queryKey: ["positions", "pnl-series"],
+    queryFn: api.getPnlSeries,
+  });
+}
+
 function useInvalidatePositions() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: ["positions"] });

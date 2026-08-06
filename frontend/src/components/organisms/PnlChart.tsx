@@ -1,12 +1,12 @@
 import { fmtMoney } from "../../lib/format";
-import type { PnlSeries } from "../../lib/pnlSeries";
+import type { PnlSeriesResponse } from "../../api/types";
 import "./PnlChart.css";
 
 const W = 860;
 const H = 220;
 const PAD = { l: 54, r: 14, t: 14, b: 24 };
 
-export function PnlChart({ series }: { series: PnlSeries }) {
+export function PnlChart({ series }: { series: PnlSeriesResponse }) {
   const { dates, realized, unrealized } = series;
   if (!dates.length) {
     return (

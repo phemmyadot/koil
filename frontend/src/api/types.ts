@@ -117,6 +117,9 @@ export interface Position {
   avg_cost: number | null;
   realized_pnl: number;
   fill_count: number;
+  // Latest known price for this ticker -- spot only meaning (an option's avg_cost isn't
+  // comparable to a stock price without re-pricing the contract). null if never fetched.
+  current_price: number | null;
 }
 
 export interface Fill {
@@ -153,6 +156,15 @@ export interface PositionsSummary {
   win_rate_pct: number | null;
   avg_return_pct: number | null;
   total_realized_pnl: number;
+  // Spot positions only -- an option's avg_cost isn't comparable to a stock price without
+  // re-pricing the contract.
+  total_unrealized_pnl: number;
+}
+
+export interface PnlSeriesResponse {
+  dates: string[];
+  realized: number[];
+  unrealized: number[];
 }
 
 export interface CreatePositionBody {
