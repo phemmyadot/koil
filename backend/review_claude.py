@@ -337,6 +337,9 @@ def extract_enrichment_fact(review_summary_text: str) -> str | None:
         model=MODEL,
         max_tokens=200,
         thinking={"type": "disabled"},
+        # Narrow single-fact extraction, not open-ended reasoning -- low effort matches the
+        # task's complexity (see prompt-audit finding: this ran at the API's "high" default).
+        output_config={"effort": "low"},
         messages=[{
             "role": "user",
             "content": (
@@ -364,6 +367,9 @@ def update_rolling_memory(prior_summary: str | None, new_review_text: str) -> st
         model=MODEL,
         max_tokens=500,
         thinking={"type": "disabled"},
+        # Prose folding/reorganization, not deep reasoning -- medium effort (see prompt-audit
+        # finding: this ran at the API's "high" default).
+        output_config={"effort": "medium"},
         messages=[{
             "role": "user",
             "content": (
