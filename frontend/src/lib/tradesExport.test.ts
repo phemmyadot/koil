@@ -79,8 +79,8 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary(),
       makeSummary({ open_count: 1 }),
     );
-    // premium = 200/100 = $2.00, current_total = 3*1*100 = $300, unrealized = 300 - 200 = $100 (+50%)
-    expect(md).toContain("| AAPL | Manual | 1 | $2.00 | $3.00 | $300.00 | $100.00 | +50.0% |");
+    // premium = 200/100 = $2.00, total_cost = 200*1 = $200, current_total = 3*1*100 = $300, unrealized = 300 - 200 = $100 (+50%)
+    expect(md).toContain("| AAPL | Manual | 1 | $2.00 | $200.00 | $3.00 | $300.00 | $100.00 | +50.0% |");
   });
 
   it("shows the strategy label on an open row", () => {

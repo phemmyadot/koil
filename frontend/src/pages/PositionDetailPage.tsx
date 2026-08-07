@@ -30,6 +30,8 @@ export function PositionDetailPage() {
 
   const [showFillForm, setShowFillForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
+  const [showIvForm, setShowIvForm] = useState(false);
+  const [ivInput, setIvInput] = useState("");
   const [marksPage, setMarksPage] = useState(1);
 
   if (isError) {
@@ -87,6 +89,22 @@ export function PositionDetailPage() {
   const unitsSold = unitsEntered - position.units_remaining;
   const costBasisSold = position.avg_cost != null ? position.avg_cost * unitsSold : null;
   const realizedPct = costBasisSold ? (position.realized_pnl / costBasisSold) * 100 : null;
+
+  // The entry fill's iv_at_entry is what _blended_option_value uses to reprice the position
+  // going forward (see backend/app.py) -- it's frozen at entry and never auto-refreshed, so it
+  // drifts from the option's real current IV over time. This lets the user correct it manually.
+  const entryFill = fillsList.find((f) => f.kind === "entry");
+
+  async function handleUpdateIv() {
+    const iv = parseFloat(ivInput);
+    if (!Number.isFinite(iv) || iv <= 0) {
+      window.alert("Enter a valid IV (e.g. 0.45 for 45%)");
+      return;
+    }
+    if (!entryFill) return;
+    await updateFill.mutateAsync({ fillId: entryFill.id, body: { iv_at_entry: iv } });
+    setShowIvForm(false);
+  }
 
   async function handleCancelPosition() {
     if (!window.confirm("Cancel this position? This permanently deletes it and all its fills, and cannot be undone.")) return;
@@ -155,6 +173,18 @@ export function PositionDetailPage() {
             Add Fill
           </button>
         )}
+        {position.status === "open" && isOption && entryFill && (
+          <button
+            type="button"
+            className="small-btn"
+            onClick={() => {
+              setIvInput(entryFill.iv_at_entry != null ? String(entryFill.iv_at_entry) : "");
+              setShowIvForm((v) => !v);
+            }}
+          >
+            Update IV
+          </button>
+        )}
         <button type="button" className="small-btn" onClick={() => setShowEditForm((v) => !v)}>
           Edit Position
         </button>
@@ -172,6 +202,22 @@ export function PositionDetailPage() {
             setShowFillForm(false);
           }}
         />
+      )}
+      {position.status === "open" && isOption && showIvForm && entryFill && (
+        <div className="fill-form">
+          <div className="form-row">
+            <label>Current IV (decimal, e.g. 0.45 for 45%)</label>
+            <input type="number" step={0.001} value={ivInput} onChange={(e) => setIvInput(e.target.value)} />
+          </div>
+          <div className="form-actions">
+            <button type="button" className="small-btn" onClick={handleUpdateIv}>
+              Save
+            </button>
+            <button type="button" className="small-btn" onClick={() => setShowIvForm(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
       {showEditForm && (
         <EditPositionForm

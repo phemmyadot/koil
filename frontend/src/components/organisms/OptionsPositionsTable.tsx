@@ -92,6 +92,7 @@ function PositionRow({
         <td>{isOpen && <StrategyCellLink ticker={p.ticker} strategyKey={p.strategy_key} />}</td>
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{premium != null ? fmtMoney(premium) : "—"}</td>
+        <td>{totalCost != null ? fmtMoney(totalCost) : "—"}</td>
         <td>{p.current_price != null ? fmtMoney(p.current_price) : "—"}</td>
         <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
@@ -132,7 +133,7 @@ function PositionRow({
       </tr>
       {isOpen && exitOpen && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={11}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -174,6 +175,7 @@ export function OptionsPositionsTable({ positions, onExit, onCancel }: OptionsPo
             <th>Strategy</th>
             <th>Units</th>
             <th>Premium</th>
+            <th>Total Cost</th>
             <th>Last</th>
             <th>Current Total</th>
             <th>Unrealized $ / %</th>

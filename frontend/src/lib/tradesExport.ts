@@ -35,19 +35,16 @@ function realizedCell(p: Position): string {
 function openTable(positions: Position[], instrument: "spot" | "option"): string {
   const rows = positions.filter((p) => p.status === "open" && p.instrument === instrument);
   const multiplier = instrument === "option" ? 100 : 1;
-  const costCol = instrument === "spot" ? "| Total Cost " : "";
-  const costSep = instrument === "spot" ? "|---" : "";
   if (!rows.length) return "*No open positions.*";
   const header =
-    `| Ticker | Strategy | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} ${costCol}| Last | Current Total | Unrealized $ | Unrealized % | Realized |\n` +
-    `|---|---|---|---${costSep}|---|---|---|---|---|`;
+    `| Ticker | Strategy | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Total Cost | Last | Current Total | Unrealized $ | Unrealized % | Realized |\n` +
+    `|---|---|---|---|---|---|---|---|---|---|`;
   const lines = rows.map((p) => {
     const { totalCost, currentTotal, unrealizedDollar, unrealizedPct } = totals(p, multiplier);
     const perShareCost = instrument === "option" && p.avg_cost != null ? p.avg_cost / multiplier : p.avg_cost;
-    const costCell = instrument === "spot" ? `| ${totalCost != null ? fmtMoney(totalCost) : "—"} ` : "";
     return (
-      `| ${p.ticker} | ${stratLabel(p.strategy_key)} | ${fmtUnits(p.units_remaining)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} ${costCell}` +
-      `| ${p.current_price != null ? fmtMoney(p.current_price) : "—"} | ${currentTotal != null ? fmtMoney(currentTotal) : "—"} | ` +
+      `| ${p.ticker} | ${stratLabel(p.strategy_key)} | ${fmtUnits(p.units_remaining)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} | ` +
+      `${totalCost != null ? fmtMoney(totalCost) : "—"} | ${p.current_price != null ? fmtMoney(p.current_price) : "—"} | ${currentTotal != null ? fmtMoney(currentTotal) : "—"} | ` +
       `${unrealizedDollar != null ? fmtMoney(unrealizedDollar) : "—"} | ${unrealizedPct != null ? fmtPct(unrealizedPct) : "—"} | ${realizedCell(p)} |`
     );
   });
