@@ -104,6 +104,7 @@ function PositionRow({
           )}
         </td>
         <td>
+          {isOpen && p.units_sold > 0 && <div className="partial-realized-label">{fmtUnits(p.units_sold)} units —</div>}
           <b className={plClass(p.realized_pnl)}>
             {fmtMoney(p.realized_pnl)}
             {p.realized_pnl_pct != null && (

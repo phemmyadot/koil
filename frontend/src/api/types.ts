@@ -115,6 +115,8 @@ export interface Position {
   notes: string | null;
   instrument: Instrument;
   units_remaining: number;
+  // Units entered minus units_remaining -- 0 for a position with no exits yet.
+  units_sold: number;
   avg_cost: number | null;
   realized_pnl: number;
   // realized_pnl / (avg_cost * units actually sold) -- null when nothing's been sold yet.

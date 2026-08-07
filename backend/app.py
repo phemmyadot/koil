@@ -1155,6 +1155,7 @@ def _position_with_state(position: dict) -> dict:
         **position,
         "instrument": state["instrument"],
         "units_remaining": state["units_remaining"],
+        "units_sold": units_sold,
         "avg_cost": round(state["avg_cost"], 4) if state["avg_cost"] is not None else None,
         "realized_pnl": round(state["realized_pnl"], 2),
         "realized_pnl_pct": realized_pnl_pct,

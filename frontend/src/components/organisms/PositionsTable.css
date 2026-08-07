@@ -99,3 +99,7 @@
   font-size: 13px;
   padding: 12px 0;
 }
+.partial-realized-label {
+  color: var(--muted);
+  font-size: 10.5px;
+}

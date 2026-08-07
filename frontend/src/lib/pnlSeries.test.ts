@@ -40,6 +40,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     notes: null,
     instrument: "spot",
     units_remaining: 10,
+    units_sold: 0,
     avg_cost: 100,
     realized_pnl: 0,
     realized_pnl_pct: null,
