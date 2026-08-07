@@ -118,7 +118,7 @@ function AnalyzerMain() {
 
       <TriggerCard status={status} onTrigger={() => trigger.mutate()} pending={trigger.isPending} error={trigger.error} />
 
-      {activeReviewDate && <ReviewAndChat reviewDate={activeReviewDate} />}
+      {activeReviewDate && <ReviewAndChat reviewDate={activeReviewDate} reviewGenerating={trigger.isPending} />}
     </div>
   );
 }
@@ -213,7 +213,7 @@ function TriggerCard({
   );
 }
 
-function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
+function ReviewAndChat({ reviewDate, reviewGenerating }: { reviewDate: string; reviewGenerating: boolean }) {
   const { data: review, isLoading } = useDailyReview(reviewDate);
   const sendMessage = useSendReviewChatMessage(reviewDate);
   const [draft, setDraft] = useState("");
@@ -253,49 +253,67 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
   return (
     <div className="analyzer-review">
       <div className="analyzer-chat-messages" ref={scrollRef}>
-        <div className="analyzer-chat-msg analyzer-chat-msg-assistant">
-          <span className="analyzer-chat-role">Analyzer</span>
-          {hasStreamedSummary ? (
-            <Streamdown>{review.summary_text}</Streamdown>
-          ) : (
-            <StreamingReview
-              chunks={review.summary_text_chunks}
-              onDone={() => setHasStreamedSummary(true)}
-              onProgress={scrollToBottom}
-            />
-          )}
-        </div>
-        {review.chat_messages.map((m, i) => (
-          <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
-            <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
-            {m.role === "assistant" && i === streamingReplyIndex && streamingReplyChunks ? (
-              <StreamingReview
-                chunks={streamingReplyChunks}
-                onDone={() => setStreamingReplyChunks(null)}
-                onProgress={scrollToBottom}
-              />
-            ) : (
-              <Streamdown>{m.content}</Streamdown>
-            )}
-          </div>
-        ))}
-        {sendMessage.isPending && (
+        {reviewGenerating ? (
+          // The old review's thread is stale the moment a new one starts generating -- clear it
+          // from view rather than leave it sitting there while a fresh review (and possibly a
+          // different reviewDate) is being built underneath. The real content swaps in once
+          // ["review"] invalidates on trigger success.
           <div className="analyzer-chat-msg analyzer-chat-msg-assistant analyzer-chat-msg-thinking">
             <span className="analyzer-chat-role">Analyzer</span>
-            <span className="analyzer-thinking-dots" aria-label="Analyzer is thinking">
+            <span>Generating today's review…</span>
+            <span className="analyzer-thinking-dots" aria-label="Generating today's review">
               <span />
               <span />
               <span />
             </span>
           </div>
+        ) : (
+          <>
+            <div className="analyzer-chat-msg analyzer-chat-msg-assistant">
+              <span className="analyzer-chat-role">Analyzer</span>
+              {hasStreamedSummary ? (
+                <Streamdown>{review.summary_text}</Streamdown>
+              ) : (
+                <StreamingReview
+                  chunks={review.summary_text_chunks}
+                  onDone={() => setHasStreamedSummary(true)}
+                  onProgress={scrollToBottom}
+                />
+              )}
+            </div>
+            {review.chat_messages.map((m, i) => (
+              <div key={i} className={`analyzer-chat-msg analyzer-chat-msg-${m.role}`}>
+                <span className="analyzer-chat-role">{m.role === "system" ? "Session" : m.role === "user" ? "You" : "Analyzer"}</span>
+                {m.role === "assistant" && i === streamingReplyIndex && streamingReplyChunks ? (
+                  <StreamingReview
+                    chunks={streamingReplyChunks}
+                    onDone={() => setStreamingReplyChunks(null)}
+                    onProgress={scrollToBottom}
+                  />
+                ) : (
+                  <Streamdown>{m.content}</Streamdown>
+                )}
+              </div>
+            ))}
+            {sendMessage.isPending && (
+              <div className="analyzer-chat-msg analyzer-chat-msg-assistant analyzer-chat-msg-thinking">
+                <span className="analyzer-chat-role">Analyzer</span>
+                <span className="analyzer-thinking-dots" aria-label="Analyzer is thinking">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              </div>
+            )}
+          </>
         )}
       </div>
       <div className="analyzer-chat-input-row">
         <input
           type="text"
           value={draft}
-          disabled={sendMessage.isPending}
-          placeholder="Ask a follow-up…"
+          disabled={sendMessage.isPending || reviewGenerating}
+          placeholder={reviewGenerating ? "Generating today's review…" : "Ask a follow-up…"}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -304,7 +322,12 @@ function ReviewAndChat({ reviewDate }: { reviewDate: string }) {
             }
           }}
         />
-        <button type="button" className="small-btn" disabled={sendMessage.isPending || !draft.trim()} onClick={handleSend}>
+        <button
+          type="button"
+          className="small-btn"
+          disabled={sendMessage.isPending || reviewGenerating || !draft.trim()}
+          onClick={handleSend}
+        >
           Send
         </button>
       </div>
