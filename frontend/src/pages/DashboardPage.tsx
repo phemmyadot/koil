@@ -187,7 +187,7 @@ export function DashboardPage() {
     tradeFlow && tradeRow && tradeFlow.stratKey !== "manual" ? tradeRow[tradeFlow.stratKey] : null;
 
   return (
-    <div>
+    <div className="dashboard-page">
       <div className="dashboard-header">
         <h1>Exhaustion Dashboard</h1>
         <span className="dashboard-meta">{metaText}</span>
