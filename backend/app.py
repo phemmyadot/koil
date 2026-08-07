@@ -198,6 +198,55 @@ def _fire_strategy_state_alert(ticker: str, strat_key: str, prior_state: str, ne
     push.send_push_to_all(payload, now_iso)
 
 
+SCORE_ALERT_THRESHOLD = 9
+
+
+def _fire_score_alert(ticker: str, strat_key: str, prior_payload: dict | None, new_payload: dict | None, now_iso: str) -> None:
+    """setup_score reaches 9+/10, 🟡 -- an in-memory prior-vs-new diff, same shape as
+    _fire_strategy_state_alert's verdict-transition check, just keyed off setup_score instead of
+    verdict. prior_payload/new_payload are the TICKER-level payloads (setup_score is a per-ticker
+    dict keyed by strategy, not part of the per-strategy payload) -- fires once per ticker+strategy
+    on the crossing, not every cycle it stays >=9, no separate dedup column needed since
+    prior_payload's own setup_score already carries last cycle's value for the comparison."""
+    if new_payload is None:
+        return
+    new_score = new_payload.get("setup_score", {}).get(strat_key)
+    if new_score is None or new_score < SCORE_ALERT_THRESHOLD:
+        return
+    prior_score = (prior_payload or {}).get("setup_score", {}).get(strat_key)
+    if prior_score is not None and prior_score >= SCORE_ALERT_THRESHOLD:
+        return
+    label = _STRATEGY_LABELS.get(strat_key, strat_key)
+    message = f"{ticker} — {label} setup score reached {new_score}/10 — top setup in universe"
+    db.insert_notification(None, "score_high", float(new_score), message, now_iso)
+    push_payload = json.dumps({"title": f"🟡 {ticker} — {label} score {new_score}", "body": message, "ticker": ticker})
+    push.send_push_to_all(push_payload, now_iso)
+
+
+PHASE_ALERT_STATES = {"PRE-BREAKOUT": "🟡", "BREAKOUT": "🔴"}
+
+
+def _fire_phase_alert(ticker: str, prior_prebreak: dict | None, new_prebreak: dict | None, now_iso: str) -> None:
+    """Phase upgrades to PRE-BREAKOUT (🟡, "setup loading") or BREAKOUT (🔴, "confirmed, entry
+    tomorrow") -- prior-vs-new state diff, same shape as _fire_strategy_state_alert. Ticker-level
+    (prebreak overlays all strategies, not one), no quality-bar gate (unlike strategy-state
+    alerts) since this isn't tied to any one strategy's own backtest track record."""
+    if new_prebreak is None:
+        return
+    prior_state = (prior_prebreak or {}).get("state")
+    new_state = new_prebreak.get("state")
+    if new_state not in PHASE_ALERT_STATES or new_state == prior_state:
+        return
+    emoji = PHASE_ALERT_STATES[new_state]
+    if new_state == "BREAKOUT":
+        message = f"{ticker} — BREAKOUT confirmed, entry tomorrow"
+    else:
+        message = f"{ticker} — setup loading (PRE-BREAKOUT), alert set"
+    db.insert_notification(None, "phase_upgrade", None, message, now_iso)
+    push_payload = json.dumps({"title": f"{emoji} {ticker} — {new_state}", "body": message, "ticker": ticker})
+    push.send_push_to_all(push_payload, now_iso)
+
+
 def _eval_strategy(module, ticker: str, bars, ind: dict | None) -> dict | None:
     """Independently error-isolated -- one strategy failing on a ticker shouldn't drop the others."""
     try:
@@ -393,6 +442,14 @@ def compute_all(force: bool = False) -> None:
                                     _fire_strategy_state_alert(tk, strat_key, prior_state, new_state, _computed_asof)
                                 except Exception as e:  # noqa: BLE001 - one bad alert must not break the pass
                                     print(f"app: strategy state alert failed for {tk}/{strat_key} ({e}).")
+                            try:
+                                _fire_score_alert(tk, strat_key, prior_payload, payload, _computed_asof)
+                            except Exception as e:  # noqa: BLE001
+                                print(f"app: score alert failed for {tk}/{strat_key} ({e}).")
+                        try:
+                            _fire_phase_alert(tk, (prior_payload or {}).get("prebreak"), payload.get("prebreak"), _computed_asof)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"app: phase alert failed for {tk} ({e}).")
         finally:
             with _compute_lock:
                 _compute_progress = None
@@ -519,8 +576,10 @@ def _update_trade_marks_and_alerts() -> None:
 
     with _compute_lock:
         price_by_ticker = {p["ticker"]: (p["price"], p["date"]) for p in _computed}
+        payload_by_ticker = {p["ticker"]: p for p in _computed}
 
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    today = datetime.now(timezone.utc).date()
     for position in open_positions:
         current = price_by_ticker.get(position["ticker"])
         if current is None:
@@ -579,8 +638,44 @@ def _update_trade_marks_and_alerts() -> None:
             continue
         db.set_position_status(position["id"], "open", None)
 
+        # Ticker-level payload (trend state, per-strategy open_position/avg_mae_wins_pct) --
+        # None if the ticker never made it into _computed this pass (same fallback case as the
+        # price lookup above), in which case the alerts below that need it are skipped, not
+        # crashed on.
+        payload = payload_by_ticker.get(position["ticker"])
+        entry_strategy_key = fills[0]["strategy_key"] if fills else "manual"
+        strat_payload = payload.get(entry_strategy_key) if payload and entry_strategy_key != "manual" else None
+
         if state["instrument"] == "option":
             _fire_option_gain_alert(position, state, current_price)
+            live_result = _blended_live_option_value(position["ticker"], state["open_lots"], current_price, today)
+            current_iv = live_result[1] if live_result is not None else None
+            priced_lots = [lot for lot in state["open_lots"] if lot["fill"].get("iv_at_entry") is not None]
+            iv_at_entry = None
+            if priced_lots:
+                total_units = sum(lot["units_remaining"] for lot in priced_lots)
+                iv_at_entry = sum(lot["fill"]["iv_at_entry"] * lot["units_remaining"] for lot in priced_lots) / total_units
+            _fire_iv_alert(position, current_iv, iv_at_entry, now_iso)
+
+            avg_cost_per_share = state["avg_cost"] / state["multiplier"] if state["avg_cost"] else None
+            option_gain_pct = None
+            if live_result is not None and avg_cost_per_share:
+                option_gain_pct = (live_result[0] - avg_cost_per_share) / avg_cost_per_share * 100
+            if option_gain_pct is not None and strat_payload and strat_payload.get("open_position"):
+                _fire_early_profit_alert(
+                    position, option_gain_pct, strat_payload["open_position"]["days_held"],
+                    strat_payload.get("avg_trade_days"), now_iso,
+                )
+            _fire_expiry_alerts(position, state["open_lots"], option_gain_pct, today, now_iso)
+        elif state["avg_cost"] not in (None, 0):
+            spot_unrealized_pct = (current_price - state["avg_cost"]) / state["avg_cost"] * 100
+            _fire_spot_gain_alert(position, spot_unrealized_pct, now_iso)
+
+        if payload and payload.get("prebreak"):
+            _fire_trend_alert(position, payload["prebreak"].get("state"), now_iso)
+
+        if strat_payload and strat_payload.get("open_position"):
+            _fire_mae_alert(position, strat_payload["open_position"].get("mae_pct"), strat_payload.get("avg_mae_wins_pct"), now_iso)
 
         tp, stop = position["tp_price"], position["stop_price"]
         # TP/stop are ALWAYS stock-price levels the user set, for both spot and option
@@ -598,6 +693,8 @@ def _update_trade_marks_and_alerts() -> None:
     # Ticker-scoped, not position-scoped: a ticker held across multiple open positions still
     # gets exactly one push (see earnings_alert_log's own docstring in db.py).
     _fire_earnings_alerts({p["ticker"] for p in open_positions}, now_iso)
+    _fire_market_context_alerts(now_iso)
+    _fire_fed_day_alert(now_iso)
 
 
 def _fire_earnings_alerts(open_tickers: set[str], now_iso: str) -> None:
@@ -620,6 +717,62 @@ def _fire_earnings_alerts(open_tickers: set[str], now_iso: str) -> None:
         payload = json.dumps({"title": f"{ticker} — Earnings {when}", "body": message, "ticker": ticker})
         push.send_push_to_all(payload, now_iso)
         db.set_earnings_alert_date(ticker, today)
+
+
+# Manually maintained -- no live macro-calendar data source exists anywhere in this app (see
+# docs/superpowers/specs/2026-08-07-alert-system-audit.md's "Fed calendar" resolution). Needs
+# updating each time the Fed publishes its next set of meeting dates.
+FOMC_MEETING_DATES_2026 = [
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+    "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+]
+
+
+def _fire_fed_day_alert(now_iso: str) -> None:
+    """Fed announcement day, 🟡 -- fires once, the morning of, regardless of open positions
+    (a market-wide review prompt, not tied to any specific trade). Dedup uses
+    market_context_alert_log with symbol="FOMC" (not a real ticker, but the table's shape fits:
+    one row per (symbol, kind) per day)."""
+    today = now_iso[:10]
+    if today not in FOMC_MEETING_DATES_2026:
+        return
+    if db.get_market_context_alert_date("FOMC", "fed_day") == today:
+        return
+    message = "Fed announcement today — review all open options"
+    db.insert_notification(None, "fed_day", None, message, now_iso)
+    payload = json.dumps({"title": "🟡 Fed day", "body": message})
+    push.send_push_to_all(payload, now_iso)
+    db.set_market_context_alert_date("FOMC", "fed_day", today)
+
+
+def _fire_market_context_alerts(now_iso: str) -> None:
+    """Oil (USO) spike > +3% (🟡) and Nasdaq (QQQ) selloff < -1.5% (🟡) -- both are close-to-close
+    day-over-day moves (this app has no intraday data feed, only daily bars via the background
+    fetch loop -- see data.py's own docstring), not truly intraday despite the proposal's
+    wording. Fires at most once per calendar day per symbol+kind."""
+    today = now_iso[:10]
+    checks = [("USO", "oil_spike", OIL_SPIKE_PCT, "above"), ("QQQ", "nasdaq_selloff", NASDAQ_SELLOFF_PCT, "below")]
+    for symbol, kind, threshold, direction in checks:
+        bars = data.get_bars(symbol)
+        if bars is None or len(bars) < 2:
+            continue
+        close, prior_close = float(bars.Close.iloc[-1]), float(bars.Close.iloc[-2])
+        if not prior_close:
+            continue
+        change_pct = (close - prior_close) / prior_close * 100
+        crossed = change_pct >= threshold if direction == "above" else change_pct <= threshold
+        if not crossed:
+            continue
+        if db.get_market_context_alert_date(symbol, kind) == today:
+            continue
+        if symbol == "USO":
+            message = f"Oil up {change_pct:.1f}% today — macro shift, review energy exposure"
+        else:
+            message = f"Nasdaq down {change_pct:.1f}% today — broad selloff, check BEARISH flags"
+        db.insert_notification(None, kind, round(change_pct, 2), message, now_iso)
+        payload = json.dumps({"title": f"🟡 {symbol} — {kind.replace('_', ' ').title()}", "body": message})
+        push.send_push_to_all(payload, now_iso)
+        db.set_market_context_alert_date(symbol, kind, today)
 
 
 def _fire_threshold_alerts(position: dict, kind: str, pct: float, last_alert_pct: float | None) -> None:
@@ -667,6 +820,157 @@ def _fire_option_gain_alert(position: dict, state: dict, underlying_price: float
 
     payload = json.dumps({"title": f"{position['ticker']} — Option +{highest}%", "body": message, "position_id": position["id"]})
     push.send_push_to_all(payload, now_iso)
+
+
+# See docs/superpowers/specs/2026-08-07-alert-system-audit.md for the full proposed alert
+# framework this section implements. Priority tier is carried only in the notification title
+# emoji (matches the doc's 🔴/🟡/🟢 scheme) -- there's no separate priority column, notifications
+# already sort by recency and the emoji is enough to scan for severity.
+IV_CRUSH_THRESHOLD = -10  # percentage points
+IV_SPIKE_THRESHOLD = 15
+EARLY_PROFIT_GAIN_PCT = 50
+EARLY_PROFIT_DAYS_FRACTION = 1 / 3
+EXPIRY_RISK_DAYS = 15
+EXPIRY_FINAL_WEEK_DAYS = 7
+SPOT_GAIN_ALERT_THRESHOLD = 15
+DEEP_MAE_MULTIPLIER = 1.5
+OIL_SPIKE_PCT = 3.0
+NASDAQ_SELLOFF_PCT = -1.5
+
+
+def _fire_position_alert(position: dict, kind: str, pct: float | None, message: str, title: str, now_iso: str) -> None:
+    """Shared insert+push for the position-scoped alerts below -- same shape as
+    _fire_threshold_alerts/_fire_option_gain_alert's own inline insert+push, factored out since
+    this section adds several more of them."""
+    db.insert_notification(position["id"], kind, pct, message, now_iso)
+    payload = json.dumps({"title": title, "body": message, "position_id": position["id"]})
+    push.send_push_to_all(payload, now_iso)
+
+
+def _fire_iv_alert(position: dict, current_iv: float | None, iv_at_entry: float | None, now_iso: str) -> None:
+    """IV crush (<-10pts, 🔴) / IV spike (>+15pts, 🟢) -- options only, see
+    _blended_live_option_value for where current_iv/iv_at_entry come from. Re-fires only when the
+    flag itself changes (e.g. crush -> back to neutral -> crush again), not every cycle it stays
+    in the same flagged state -- last_alert_iv_flag stores "crush"/"spike"/None."""
+    if current_iv is None or iv_at_entry is None:
+        return
+    change_pts = (current_iv - iv_at_entry) * 100
+    flag = "crush" if change_pts < IV_CRUSH_THRESHOLD else "spike" if change_pts > IV_SPIKE_THRESHOLD else None
+    if flag == position["last_alert_iv_flag"]:
+        return
+    db.update_position_fields(position["id"], {"last_alert_iv_flag": flag})
+    if flag is None:
+        return  # recovered back into the neutral band -- update the stored flag, don't alert
+    if flag == "crush":
+        message = f"{position['ticker']} IV crushed {change_pts:.1f}% since entry — reassess immediately"
+        title = f"🔴 {position['ticker']} — IV crush"
+    else:
+        message = f"{position['ticker']} IV up {change_pts:.1f}% since entry — favorable, monitor"
+        title = f"🟢 {position['ticker']} — IV spike"
+    _fire_position_alert(position, "iv_" + flag, round(change_pts, 2), message, title, now_iso)
+
+
+def _fire_expiry_alerts(position: dict, open_lots: list[dict], unrealized_pct: float | None, today, now_iso: str) -> None:
+    """Expiry risk (<15 days + losing, 🔴) and final week (<7 days, any position, 🔴) -- once per
+    calendar day per position (last_alert_expiry_date), same day-based dedup shape as
+    earnings_alert_log but position-scoped since a ticker's expiry is specific to that position's
+    own fills. Uses the nearest expiry across the position's still-open lots (a multi-lot position
+    with mixed expiries is most at risk from whichever lot expires soonest)."""
+    expiries = [lot["fill"]["expiry_date"] for lot in open_lots if lot["fill"].get("expiry_date")]
+    if not expiries:
+        return
+    nearest_expiry = min(datetime.strptime(e, "%Y-%m-%d").date() for e in expiries)
+    days_to_expiry = (nearest_expiry - today).days
+    if days_to_expiry < 0:
+        return  # already past expiry -- _update_trade_marks_and_alerts's own auto-close handles this
+    today_iso = now_iso[:10]
+    if position["last_alert_expiry_date"] == today_iso:
+        return
+    if days_to_expiry < EXPIRY_FINAL_WEEK_DAYS:
+        message = f"{position['ticker']} expires in {days_to_expiry} day{'s' if days_to_expiry != 1 else ''} — final week, decision required"
+        title = f"🔴 {position['ticker']} — Final week"
+    elif days_to_expiry < EXPIRY_RISK_DAYS and unrealized_pct is not None and unrealized_pct < 0:
+        message = f"{position['ticker']} expires in {days_to_expiry} days, currently at a loss — exit or roll"
+        title = f"🔴 {position['ticker']} — Expiry risk"
+    else:
+        return
+    db.update_position_fields(position["id"], {"last_alert_expiry_date": today_iso})
+    _fire_position_alert(position, "expiry_risk", float(days_to_expiry), message, title, now_iso)
+
+
+def _fire_early_profit_alert(position: dict, gain_pct: float, days_held: int | None, avg_trade_days: float | None, now_iso: str) -> None:
+    """+50% unrealized in under 1/3 of this strategy's average hold time, 🟡 -- one-shot (never
+    un-fires, unlike the IV/trend flags, since there's only one band to cross here). Options only
+    -- gain_pct here is the same option gain% _fire_option_gain_alert already computes, this just
+    adds the days-held comparison on top of it."""
+    if position["last_alert_early_profit"]:
+        return
+    if days_held is None or avg_trade_days is None or avg_trade_days <= 0:
+        return
+    if gain_pct < EARLY_PROFIT_GAIN_PCT or days_held >= avg_trade_days * EARLY_PROFIT_DAYS_FRACTION:
+        return
+    message = f"{position['ticker']} is up {gain_pct:.0f}% after only {days_held} days (avg hold {avg_trade_days:.0f}) — consider exit"
+    title = f"🟡 {position['ticker']} — Early profit target"
+    db.update_position_fields(position["id"], {"last_alert_early_profit": 1})
+    _fire_position_alert(position, "early_profit", round(gain_pct, 2), message, title, now_iso)
+
+
+def _fire_trend_alert(position: dict, trend_state: str | None, now_iso: str) -> None:
+    """BEARISH trend filter on an open position, 🔴 -- re-fires only on entering BEARISH from a
+    non-BEARISH state (same change-only dedup as _fire_iv_alert), not every cycle it stays
+    BEARISH. Applies to spot and option positions alike -- a bearish underlying threatens both."""
+    is_bearish = trend_state == "BEARISH"
+    was_bearish = position["last_alert_trend_state"] == "BEARISH"
+    db.update_position_fields(position["id"], {"last_alert_trend_state": trend_state})
+    if not is_bearish or was_bearish:
+        return
+    message = f"{position['ticker']} trend filter turned BEARISH — exit per framework"
+    title = f"🔴 {position['ticker']} — BEARISH signal"
+    _fire_position_alert(position, "trend_bearish", None, message, title, now_iso)
+
+
+def _fire_spot_gain_alert(position: dict, unrealized_pct: float, now_iso: str) -> None:
+    """Spot unrealized > +15%, 🟡 -- spot-only equivalent of _fire_option_gain_alert, single
+    threshold (not a ladder) since the proposal only specifies one band for spot."""
+    if unrealized_pct < SPOT_GAIN_ALERT_THRESHOLD:
+        return
+    last_alert_pct = position["last_alert_spot_gain_pct"]
+    if last_alert_pct is not None and last_alert_pct >= SPOT_GAIN_ALERT_THRESHOLD:
+        return
+    message = f"{position['ticker']} is up {unrealized_pct:.1f}% — check TP distance"
+    title = f"🟡 {position['ticker']} — Strong gain"
+    db.update_position_fields(position["id"], {"last_alert_spot_gain_pct": unrealized_pct})
+    _fire_position_alert(position, "spot_gain", round(unrealized_pct, 2), message, title, now_iso)
+
+
+def _fire_mae_alert(position: dict, mae_pct: float | None, avg_mae_wins_pct: float | None, now_iso: str) -> None:
+    """Open MAE exceeds this strategy's average winning-trade MAE (🟡) or 1.5x that average (🔴)
+    -- mae_pct comes from the SAME ticker+strategy's own live open_position (strategy_common's
+    build_open_position, computed fresh every cycle from a running low-water-mark since the
+    strategy's own signal date), not a value tracked separately for the user's actual fill. See
+    docs/superpowers/specs/2026-08-07-alert-system-audit.md's "MAE source" resolution.
+    last_alert_mae_level ("exceeded"/"deep"/None) re-fires only when the level itself changes,
+    same change-only shape as last_alert_iv_flag/last_alert_trend_state."""
+    if mae_pct is None or avg_mae_wins_pct is None or avg_mae_wins_pct <= 0:
+        level = None
+    elif mae_pct > avg_mae_wins_pct * DEEP_MAE_MULTIPLIER:
+        level = "deep"
+    elif mae_pct > avg_mae_wins_pct:
+        level = "exceeded"
+    else:
+        level = None
+    if level == position["last_alert_mae_level"]:
+        return
+    db.update_position_fields(position["id"], {"last_alert_mae_level": level})
+    if level is None:
+        return  # MAE recovered back under the average -- update the stored level, don't alert
+    if level == "deep":
+        message = f"{position['ticker']} MAE at {mae_pct:.1f}% — 1.5x+ average, review trend filter"
+        title = f"🔴 {position['ticker']} — Deep MAE"
+    else:
+        message = f"{position['ticker']} MAE at {mae_pct:.1f}% — exceeded average ({avg_mae_wins_pct:.1f}%), monitor"
+        title = f"🟡 {position['ticker']} — MAE exceeded"
+    _fire_position_alert(position, "mae_" + level, round(mae_pct, 2), message, title, now_iso)
 
 
 def refresh_and_compute(force: bool = False) -> None:

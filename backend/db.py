@@ -105,7 +105,29 @@ def _init_schema() -> None:
                 notes TEXT,
                 -- Appended last -- must match ALTER TABLE's real column order (always appends),
                 -- not this CREATE TABLE's text order, since _POSITION_COLUMNS reads positionally.
-                last_alert_option_gain_pct REAL
+                last_alert_option_gain_pct REAL,
+                -- "crush" | "spike" | NULL -- last IV-change flag alerted on, so a position only
+                -- re-fires when the flag actually changes (crush->recovered->crush again, etc.),
+                -- not every cycle it stays in the same flagged state. See
+                -- docs/superpowers/specs/2026-08-07-alert-system-audit.md.
+                last_alert_iv_flag TEXT,
+                -- Calendar date (YYYY-MM-DD) the expiry-risk alert last fired on this position --
+                -- once per day, like earnings_alert_log but position- not ticker-scoped since
+                -- TP/expiry are position-specific even for the same ticker.
+                last_alert_expiry_date TEXT,
+                -- "BEARISH" | NULL -- last trend-filter state alerted on, mirrors last_alert_iv_flag's
+                -- change-only re-fire logic.
+                last_alert_trend_state TEXT,
+                -- Running high-water-mark, same shape as last_alert_option_gain_pct but for spot
+                -- unrealized% (option_gain alert is option-only).
+                last_alert_spot_gain_pct REAL,
+                -- 0/1 -- one-shot "gain achieved early relative to this strategy's average hold
+                -- time" flag, never un-fires (unlike the threshold columns, there's only one
+                -- band here, not several to re-cross).
+                last_alert_early_profit INTEGER,
+                -- "exceeded" | "deep" | NULL -- last MAE severity level alerted on, same
+                -- change-only re-fire shape as last_alert_iv_flag/last_alert_trend_state.
+                last_alert_mae_level TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
             -- Only one OPEN position per ticker at a time -- a later entry after a position
@@ -176,6 +198,17 @@ def _init_schema() -> None:
             CREATE TABLE IF NOT EXISTS earnings_alert_log (
                 ticker TEXT PRIMARY KEY,
                 alert_date TEXT NOT NULL
+            );
+
+            -- Same shape as earnings_alert_log, one row per (symbol, kind) -- e.g. ("USO",
+            -- "oil_spike"), ("QQQ", "nasdaq_selloff") -- so distinct market-context alert kinds
+            -- on the same symbol don't clobber each other's dedup state. See
+            -- _fire_market_context_alerts() in app.py.
+            CREATE TABLE IF NOT EXISTS market_context_alert_log (
+                symbol TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                alert_date TEXT NOT NULL,
+                PRIMARY KEY (symbol, kind)
             );
 
             -- No user/account table exists in this single-user app, so subscriptions aren't
@@ -483,8 +516,30 @@ def _migrate_positions_add_option_gain_alert_column() -> None:
         _conn.execute("ALTER TABLE positions ADD COLUMN last_alert_option_gain_pct REAL")
 
 
+def _migrate_positions_add_alert_framework_columns() -> None:
+    """See docs/superpowers/specs/2026-08-07-alert-system-audit.md -- ALTER TABLE always appends
+    at the physical end of the table regardless of where a column appears in CREATE TABLE's text
+    (see this project's own prior migration gotcha), so _POSITION_COLUMNS's order below must
+    match the order these ALTERs actually run in, not the CREATE TABLE text order."""
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(positions)").fetchall()]
+        new_cols = [
+            ("last_alert_iv_flag", "TEXT"),
+            ("last_alert_expiry_date", "TEXT"),
+            ("last_alert_trend_state", "TEXT"),
+            ("last_alert_spot_gain_pct", "REAL"),
+            ("last_alert_early_profit", "INTEGER"),
+            ("last_alert_mae_level", "TEXT"),
+        ]
+        for name, sql_type in new_cols:
+            if name in cols:
+                continue
+            _conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {sql_type}")
+
+
 _init_schema()
 _migrate_positions_add_option_gain_alert_column()
+_migrate_positions_add_alert_framework_columns()
 
 
 # ─────────────────────────── price bars ───────────────────────────
@@ -862,6 +917,8 @@ def set_last_close_fetch_at(iso: str) -> None:
 _POSITION_COLUMNS = [
     "id", "ticker", "status", "tp_price", "stop_price", "opened_at", "closed_at",
     "last_alert_tp_pct", "last_alert_stop_pct", "notes", "last_alert_option_gain_pct",
+    "last_alert_iv_flag", "last_alert_expiry_date", "last_alert_trend_state",
+    "last_alert_spot_gain_pct", "last_alert_early_profit", "last_alert_mae_level",
 ]
 
 _FILL_COLUMNS = [
@@ -1087,6 +1144,22 @@ def set_earnings_alert_date(ticker: str, alert_date: str) -> None:
             INSERT INTO earnings_alert_log (ticker, alert_date) VALUES (?, ?)
             ON CONFLICT (ticker) DO UPDATE SET alert_date = excluded.alert_date
         """, (ticker, alert_date))
+
+
+def get_market_context_alert_date(symbol: str, kind: str) -> str | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT alert_date FROM market_context_alert_log WHERE symbol = ? AND kind = ?", (symbol, kind)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_market_context_alert_date(symbol: str, kind: str, alert_date: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO market_context_alert_log (symbol, kind, alert_date) VALUES (?, ?, ?)
+            ON CONFLICT (symbol, kind) DO UPDATE SET alert_date = excluded.alert_date
+        """, (symbol, kind, alert_date))
 
 
 NOTIFICATIONS_LIST_MIN = 20  # see list_notifications's own docstring
