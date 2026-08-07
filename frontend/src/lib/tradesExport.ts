@@ -32,20 +32,32 @@ function realizedCell(p: Position): string {
   return p.status === "open" && p.units_sold > 0 ? `${fmtUnits(p.units_sold)} units — ${value}` : value;
 }
 
+// Percentage points, e.g. -18.2 -- see PositionDetailPage's own IV crush/spike thresholds (kept
+// in sync manually, no shared constant since these are the only two call sites).
+function ivCell(p: Position): string {
+  if (p.current_iv == null || p.iv_at_entry == null) return "—";
+  const changePts = (p.current_iv - p.iv_at_entry) * 100;
+  const flag = changePts < -10 ? " ⚠️ crush" : changePts > 15 ? " ⚠️ spike" : "";
+  return `${fmtPct(changePts)}${flag}`;
+}
+
 function openTable(positions: Position[], instrument: "spot" | "option"): string {
   const rows = positions.filter((p) => p.status === "open" && p.instrument === instrument);
   const multiplier = instrument === "option" ? 100 : 1;
+  const ivCol = instrument === "option" ? "| IV Δ " : "";
+  const ivSep = instrument === "option" ? "|---" : "";
   if (!rows.length) return "*No open positions.*";
   const header =
-    `| Ticker | Strategy | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Total Cost | Last | Current Total | Unrealized $ | Unrealized % | Realized |\n` +
-    `|---|---|---|---|---|---|---|---|---|---|`;
+    `| Ticker | Strategy | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Total Cost | Last | Current Total | Unrealized $ | Unrealized % ${ivCol}| Realized |\n` +
+    `|---|---|---|---|---|---|---|---|---${ivSep}|---|`;
   const lines = rows.map((p) => {
     const { totalCost, currentTotal, unrealizedDollar, unrealizedPct } = totals(p, multiplier);
     const perShareCost = instrument === "option" && p.avg_cost != null ? p.avg_cost / multiplier : p.avg_cost;
+    const ivCellStr = instrument === "option" ? `| ${ivCell(p)} ` : "";
     return (
       `| ${p.ticker} | ${stratLabel(p.strategy_key)} | ${fmtUnits(p.units_remaining)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} | ` +
       `${totalCost != null ? fmtMoney(totalCost) : "—"} | ${p.current_price != null ? fmtMoney(p.current_price) : "—"} | ${currentTotal != null ? fmtMoney(currentTotal) : "—"} | ` +
-      `${unrealizedDollar != null ? fmtMoney(unrealizedDollar) : "—"} | ${unrealizedPct != null ? fmtPct(unrealizedPct) : "—"} | ${realizedCell(p)} |`
+      `${unrealizedDollar != null ? fmtMoney(unrealizedDollar) : "—"} | ${unrealizedPct != null ? fmtPct(unrealizedPct) : "—"} ${ivCellStr}| ${realizedCell(p)} |`
     );
   });
   return [header, ...lines].join("\n");

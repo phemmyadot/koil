@@ -46,6 +46,10 @@ function PositionRow({
   const currentTotal = p.current_price != null ? p.current_price * p.units_remaining * 100 : null;
   const totalCost = p.avg_cost != null ? p.avg_cost * p.units_remaining : null;
   const unrealizedDollar = totalCost != null && currentTotal != null ? currentTotal - totalCost : null;
+  // Percentage points, e.g. -18.2 -- see PositionDetailPage's own IV crush/spike thresholds
+  // (kept in sync manually, no shared constant since this is the only other call site).
+  const ivChangePts = p.current_iv != null && p.iv_at_entry != null ? (p.current_iv - p.iv_at_entry) * 100 : null;
+  const ivFlag = ivChangePts == null ? null : ivChangePts < -10 ? "crush" : ivChangePts > 15 ? "spike" : null;
 
   async function submitExit() {
     const premium = parseFloat(exitPremium);
@@ -93,7 +97,14 @@ function PositionRow({
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{premium != null ? fmtMoney(premium) : "—"}</td>
         <td>{totalCost != null ? fmtMoney(totalCost) : "—"}</td>
-        <td>{p.current_price != null ? fmtMoney(p.current_price) : "—"}</td>
+        <td>
+          {p.current_price != null ? fmtMoney(p.current_price) : "—"}
+          {ivFlag && (
+            <div className={`iv-flag-label ${ivFlag}`}>
+              {ivFlag === "crush" ? "⚠️ IV crush" : "⚠️ IV spike"} ({fmtPct(ivChangePts as number)})
+            </div>
+          )}
+        </td>
         <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
           {unrealizedDollar != null ? (

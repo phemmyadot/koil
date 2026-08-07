@@ -91,12 +91,16 @@ export function PositionDetailPage() {
   const costBasisSold = position.avg_cost != null ? position.avg_cost * unitsSold : null;
   const realizedPct = costBasisSold ? (position.realized_pnl / costBasisSold) * 100 : null;
 
-  // ivChange < 0 is IV crush -- the position's premium can decay even while the stock itself
-  // hasn't moved against it, since current_price/current option value already reflects the
-  // live-quoted (crushed) IV, not just the underlying's move. See backend's
-  // _blended_live_option_value.
-  const ivChange = position.current_iv != null && position.iv_at_entry != null ? position.current_iv - position.iv_at_entry : null;
-  const IV_CRUSH_WARN_THRESHOLD = 0.15;
+  // ivChangePts is in percentage points (e.g. -18.2), not a decimal delta -- the position's
+  // premium can decay even while the stock itself hasn't moved against it, since
+  // current_price/current option value already reflects the live-quoted (crushed) IV, not just
+  // the underlying's move. See backend's _blended_live_option_value.
+  const ivChangePts =
+    position.current_iv != null && position.iv_at_entry != null ? (position.current_iv - position.iv_at_entry) * 100 : null;
+  const IV_CRUSH_THRESHOLD = -10;
+  const IV_SPIKE_THRESHOLD = 15;
+  const ivFlag =
+    ivChangePts == null ? null : ivChangePts < IV_CRUSH_THRESHOLD ? "crush" : ivChangePts > IV_SPIKE_THRESHOLD ? "spike" : null;
 
   async function handleCancelPosition() {
     if (!window.confirm("Cancel this position? This permanently deletes it and all its fills, and cannot be undone.")) return;
@@ -151,10 +155,11 @@ export function PositionDetailPage() {
                   label="IV at entry"
                   value={fmtPct(position.iv_at_entry * 100)}
                   sub={
-                    ivChange != null ? (
-                      <span className={ivChange < -IV_CRUSH_WARN_THRESHOLD ? "neg" : ""}>
-                        Now {fmtPct((position.current_iv as number) * 100)} ({fmtPct(ivChange * 100)})
-                        {ivChange < -IV_CRUSH_WARN_THRESHOLD ? " ⚠️ IV crush" : ""}
+                    ivChangePts != null ? (
+                      <span className={ivFlag === "crush" ? "neg" : ivFlag === "spike" ? "pos" : ""}>
+                        Now {fmtPct((position.current_iv as number) * 100)} ({fmtPct(ivChangePts)})
+                        {ivFlag === "crush" && " ⚠️ IV crush — reassess"}
+                        {ivFlag === "spike" && " ⚠️ IV spike — favorable, monitor"}
                       </span>
                     ) : (
                       <span style={{ color: "var(--muted)" }}>No live quote right now</span>
