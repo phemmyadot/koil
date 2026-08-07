@@ -7,8 +7,10 @@ import { StatBox } from "../components/atoms/StatBox";
 import { SpotPositionsTable } from "../components/organisms/SpotPositionsTable";
 import { OptionsPositionsTable } from "../components/organisms/OptionsPositionsTable";
 import { PnlChart } from "../components/organisms/PnlChart";
+import { TradesExportModal } from "../components/organisms/TradesExportModal";
 import { fmtMoney, fmtPct } from "../lib/format";
 import { todayIsoDate } from "../lib/dates";
+import { buildTradesExportMarkdown } from "../lib/tradesExport";
 import "./TradesPage.css";
 
 function SummaryRow({ label, summary }: { label: string; summary: PositionsSummary | undefined }) {
@@ -49,6 +51,7 @@ export function TradesPage() {
 
   const [typeFilter, setTypeFilter] = useState<"spot" | "options">("spot");
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
+  const [showExport, setShowExport] = useState(false);
 
   const positions = typeFilter === "spot" ? spotPositions : optionsPositions;
   const summary = typeFilter === "spot" ? spotSummary : optionsSummary;
@@ -101,7 +104,17 @@ export function TradesPage() {
     <div className="trades-page">
       <div className="trades-header">
         <h1>Trades</h1>
+        <button type="button" className="small-btn" onClick={() => setShowExport(true)}>
+          Export
+        </button>
       </div>
+
+      {showExport && (
+        <TradesExportModal
+          markdown={buildTradesExportMarkdown(spotPositions, optionsPositions, spotSummary, optionsSummary)}
+          onClose={() => setShowExport(false)}
+        />
+      )}
 
       <div className="trades-tabs">
         <button
