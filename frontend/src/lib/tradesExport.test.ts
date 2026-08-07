@@ -96,7 +96,7 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary({ open_count: 2 }),
     );
     expect(md).toContain("-18.2% ⚠️ crush");
-    expect(md).toContain("+20.0% ⚠️ spike");
+    expect(md).toContain("+20.0% 📈 spike");
   });
 
   it("shows the strategy label on an open row", () => {

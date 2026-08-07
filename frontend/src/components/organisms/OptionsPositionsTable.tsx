@@ -101,7 +101,7 @@ function PositionRow({
           {p.current_price != null ? fmtMoney(p.current_price) : "—"}
           {ivFlag && (
             <div className={`iv-flag-label ${ivFlag}`}>
-              {ivFlag === "crush" ? "⚠️ IV crush" : "⚠️ IV spike"} ({fmtPct(ivChangePts as number)})
+              {ivFlag === "crush" ? "⚠️ IV crush" : "📈 IV spike"} ({fmtPct(ivChangePts as number)})
             </div>
           )}
         </td>

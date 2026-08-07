@@ -159,7 +159,7 @@ export function PositionDetailPage() {
                       <span className={ivFlag === "crush" ? "neg" : ivFlag === "spike" ? "pos" : ""}>
                         Now {fmtPct((position.current_iv as number) * 100)} ({fmtPct(ivChangePts)})
                         {ivFlag === "crush" && " ⚠️ IV crush — reassess"}
-                        {ivFlag === "spike" && " ⚠️ IV spike — favorable, monitor"}
+                        {ivFlag === "spike" && " 📈 IV spike — favorable, monitor"}
                       </span>
                     ) : (
                       <span style={{ color: "var(--muted)" }}>No live quote right now</span>

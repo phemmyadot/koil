@@ -37,7 +37,7 @@ function realizedCell(p: Position): string {
 function ivCell(p: Position): string {
   if (p.current_iv == null || p.iv_at_entry == null) return "—";
   const changePts = (p.current_iv - p.iv_at_entry) * 100;
-  const flag = changePts < -10 ? " ⚠️ crush" : changePts > 15 ? " ⚠️ spike" : "";
+  const flag = changePts < -10 ? " ⚠️ crush" : changePts > 15 ? " 📈 spike" : "";
   return `${fmtPct(changePts)}${flag}`;
 }
 
