@@ -38,8 +38,10 @@ function PositionRow({
   const lastFill = fillsQuery.data?.[fillsQuery.data.length - 1];
 
   const isOpen = p.status === "open";
-  const pct = p.current_price != null && p.avg_cost ? ((p.current_price - p.avg_cost) / p.avg_cost) * 100 : 0;
+  const totalCost = p.avg_cost != null ? p.avg_cost * p.units_remaining : null;
   const currentTotal = p.current_price != null ? p.current_price * p.units_remaining : null;
+  const unrealizedDollar = totalCost != null && currentTotal != null ? currentTotal - totalCost : null;
+  const unrealizedPct = p.current_price != null && p.avg_cost ? ((p.current_price - p.avg_cost) / p.avg_cost) * 100 : 0;
 
   async function submitExit() {
     const price = parseFloat(exitPrice);
@@ -85,20 +87,20 @@ function PositionRow({
         </td>
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{p.avg_cost != null ? fmtMoney(p.avg_cost) : "—"}</td>
-        <td>{fmtMoney(p.tp_price)}</td>
-        <td>{fmtMoney(p.stop_price)}</td>
+        <td>{totalCost != null ? fmtMoney(totalCost) : "—"}</td>
+        <td>{p.current_price != null ? fmtMoney(p.current_price) : "—"}</td>
+        <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
-          {p.current_price != null ? (
-            <b className={plClass(pct)}>
-              {fmtMoney(p.current_price)}
+          {unrealizedDollar != null ? (
+            <b className={plClass(unrealizedDollar)}>
+              {fmtMoney(unrealizedDollar)}
               <br />
-              {fmtPct(pct)}
+              {fmtPct(unrealizedPct)}
             </b>
           ) : (
             "—"
           )}
         </td>
-        <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
           <b className={plClass(p.realized_pnl)}>
             {fmtMoney(p.realized_pnl)}
@@ -166,10 +168,10 @@ export function SpotPositionsTable({ positions, onExit, onCancel }: SpotPosition
             <th>Status</th>
             <th>Units</th>
             <th>Avg Cost</th>
-            <th>TP</th>
-            <th>Stop</th>
-            <th>Last / Unrealized %</th>
+            <th>Total Cost</th>
+            <th>Last</th>
             <th>Current Total</th>
+            <th>Unrealized $ / %</th>
             <th>Realized $ / %</th>
             <th></th>
           </tr>

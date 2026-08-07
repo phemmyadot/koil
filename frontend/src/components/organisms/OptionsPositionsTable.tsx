@@ -41,10 +41,10 @@ function PositionRow({
   // per-share premium before comparing against current_price, which is the modeled per-share
   // option value for option positions (backend's _position_with_state).
   const premium = p.avg_cost != null ? p.avg_cost / 100 : null;
-  const pct = p.current_price != null && premium ? ((p.current_price - premium) / premium) * 100 : 0;
-  // current_price is per-share (option value); the contract multiplier (100) applies the same
-  // way it does everywhere else option $ totals are derived from a per-share figure.
+  const unrealizedPct = p.current_price != null && premium ? ((p.current_price - premium) / premium) * 100 : 0;
   const currentTotal = p.current_price != null ? p.current_price * p.units_remaining * 100 : null;
+  const totalCost = p.avg_cost != null ? p.avg_cost * p.units_remaining : null;
+  const unrealizedDollar = totalCost != null && currentTotal != null ? currentTotal - totalCost : null;
 
   async function submitExit() {
     const premium = parseFloat(exitPremium);
@@ -90,20 +90,19 @@ function PositionRow({
         </td>
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{premium != null ? fmtMoney(premium) : "—"}</td>
-        <td>{fmtMoney(p.tp_price)}</td>
-        <td>{fmtMoney(p.stop_price)}</td>
+        <td>{p.current_price != null ? fmtMoney(p.current_price) : "—"}</td>
+        <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
-          {p.current_price != null ? (
-            <b className={plClass(pct)}>
-              {fmtMoney(p.current_price)}
+          {unrealizedDollar != null ? (
+            <b className={plClass(unrealizedDollar)}>
+              {fmtMoney(unrealizedDollar)}
               <br />
-              {fmtPct(pct)}
+              {fmtPct(unrealizedPct)}
             </b>
           ) : (
             "—"
           )}
         </td>
-        <td>{currentTotal != null ? fmtMoney(currentTotal) : "—"}</td>
         <td>
           <b className={plClass(p.realized_pnl)}>
             {fmtMoney(p.realized_pnl)}
@@ -130,7 +129,7 @@ function PositionRow({
       </tr>
       {isOpen && exitOpen && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={9}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -171,10 +170,9 @@ export function OptionsPositionsTable({ positions, onExit, onCancel }: OptionsPo
             <th>Status</th>
             <th>Units</th>
             <th>Premium</th>
-            <th>TP</th>
-            <th>Stop</th>
-            <th>Last / Unrealized %</th>
+            <th>Last</th>
             <th>Current Total</th>
+            <th>Unrealized $ / %</th>
             <th>Realized $ / %</th>
             <th></th>
           </tr>
