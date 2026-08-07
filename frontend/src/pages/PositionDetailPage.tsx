@@ -69,12 +69,15 @@ export function PositionDetailPage() {
   const isOption = position.instrument === "option";
   const hasOptionValues = isOption && marksList.length > 0 && marksList[0].option_value != null;
   const values = marksList.map((m) => (hasOptionValues ? (m.option_value as number) : m.close_price));
-  const last = marksList.length ? values[values.length - 1] : (position.avg_cost ?? 0);
   // position.avg_cost from the backend has the 100x contract multiplier baked in for options
   // (see replay_fills's own docstring) -- option_value/last is per-share, so avg_cost needs to
   // be scaled back down to per-share before comparing, or the pct comes out ~100x too negative.
   // See docs/superpowers/specs/2026-08-01-separate-spot-option-pnl-design.md.
   const avgCostPerShare = position.avg_cost != null && isOption ? position.avg_cost / 100 : position.avg_cost;
+  // Falls back to avgCostPerShare (not raw avg_cost) when there are no marks yet (e.g. a
+  // position added before the background loop has run once) -- avg_cost is the contract-total
+  // figure for options, so using it unscaled here made pctLive read ~9900% on a fresh position.
+  const last = marksList.length ? values[values.length - 1] : (avgCostPerShare ?? 0);
   const pctLive = avgCostPerShare ? ((last - avgCostPerShare) / avgCostPerShare) * 100 : 0;
   const lastLabel = hasOptionValues ? "Option value" : "Last price";
 

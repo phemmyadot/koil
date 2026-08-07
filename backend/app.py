@@ -1056,20 +1056,28 @@ def _blended_live_option_value(ticker: str, open_lots: list[dict], underlying_pr
 
 
 def _with_option_values(position: dict, fills: list[dict], marks: list[dict]) -> list[dict]:
-    """Annotates each daily stock-price mark with the position's modeled option value that day
-    (see _blended_option_value). Spot positions, or option positions with no fills carrying
-    iv_at_entry, pass marks through unchanged."""
+    """Annotates each daily stock-price mark with the position's option value that day. Past
+    dates always use the modeled Black-Scholes value (_blended_option_value) -- there's no live
+    chain to fetch for a date that's already gone. Today's mark instead prefers a real live
+    quote (_blended_live_option_value, same source _position_with_state uses for current_price),
+    falling back to the model only if the chain has no live quote right now. Spot positions, or
+    option positions with no fills carrying iv_at_entry, pass marks through unchanged."""
     if not fills or fills[0]["instrument"] != "option":
         return marks
+    today_iso = datetime.now(timezone.utc).date().isoformat()
     out = []
     for m in marks:
         state = replay_fills(fills, as_of_date=m["mark_date"])
         mark_date = datetime.strptime(m["mark_date"], "%Y-%m-%d").date()
-        blended_value = _blended_option_value(state["open_lots"], m["close_price"], mark_date)
-        if blended_value is None:
+        if m["mark_date"] == today_iso:
+            live_result = _blended_live_option_value(position["ticker"], state["open_lots"], m["close_price"], mark_date)
+            option_value = live_result[0] if live_result is not None else None
+        else:
+            option_value = _blended_option_value(state["open_lots"], m["close_price"], mark_date)
+        if option_value is None:
             out.append(m)
             continue
-        out.append({**m, "option_value": round(blended_value, 4)})
+        out.append({**m, "option_value": round(option_value, 4)})
     return out
 
 
