@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { listFills } from "../../api/positions";
 import type { ExitReason, Fill, Position } from "../../api/types";
 import { fmtMoney, fmtPct, fmtUnits, plClass } from "../../lib/format";
+import { StrategyCellLink } from "../molecules/StrategyCellLink";
 import "./PositionsTable.css";
 
 export interface SpotPositionsTableProps {
@@ -85,6 +86,7 @@ function PositionRow({
         <td>
           <span className={`status-tag ${p.status}`}>{p.status}</span>
         </td>
+        <td>{isOpen && <StrategyCellLink ticker={p.ticker} strategyKey={p.strategy_key} />}</td>
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{p.avg_cost != null ? fmtMoney(p.avg_cost) : "—"}</td>
         <td>{totalCost != null ? fmtMoney(totalCost) : "—"}</td>
@@ -128,7 +130,7 @@ function PositionRow({
       </tr>
       {isOpen && exitOpen && (
         <tr>
-          <td colSpan={10}>
+          <td colSpan={11}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -167,6 +169,7 @@ export function SpotPositionsTable({ positions, onExit, onCancel }: SpotPosition
           <tr>
             <th>Ticker</th>
             <th>Status</th>
+            <th>Strategy</th>
             <th>Units</th>
             <th>Avg Cost</th>
             <th>Total Cost</th>

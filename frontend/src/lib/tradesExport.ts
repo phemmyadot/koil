@@ -1,6 +1,7 @@
 // Builds the copiable Markdown trades export -- see TradesPage's Export modal. Pure function
 // over already-fetched data (no new requests), so it can run entirely client-side.
 import type { Position, PositionsSummary } from "../api/types";
+import { stratLabel } from "../constants/strategy";
 import { fmtMoney, fmtPct, fmtUnits } from "./format";
 
 function summaryLine(label: string, summary: PositionsSummary | undefined): string {
@@ -38,14 +39,14 @@ function openTable(positions: Position[], instrument: "spot" | "option"): string
   const costSep = instrument === "spot" ? "|---" : "";
   if (!rows.length) return "*No open positions.*";
   const header =
-    `| Ticker | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} ${costCol}| Last | Current Total | Unrealized $ | Unrealized % | Realized |\n` +
-    `|---|---|---${costSep}|---|---|---|---|---|`;
+    `| Ticker | Strategy | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} ${costCol}| Last | Current Total | Unrealized $ | Unrealized % | Realized |\n` +
+    `|---|---|---|---${costSep}|---|---|---|---|---|`;
   const lines = rows.map((p) => {
     const { totalCost, currentTotal, unrealizedDollar, unrealizedPct } = totals(p, multiplier);
     const perShareCost = instrument === "option" && p.avg_cost != null ? p.avg_cost / multiplier : p.avg_cost;
     const costCell = instrument === "spot" ? `| ${totalCost != null ? fmtMoney(totalCost) : "—"} ` : "";
     return (
-      `| ${p.ticker} | ${fmtUnits(p.units_remaining)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} ${costCell}` +
+      `| ${p.ticker} | ${stratLabel(p.strategy_key)} | ${fmtUnits(p.units_remaining)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} ${costCell}` +
       `| ${p.current_price != null ? fmtMoney(p.current_price) : "—"} | ${currentTotal != null ? fmtMoney(currentTotal) : "—"} | ` +
       `${unrealizedDollar != null ? fmtMoney(unrealizedDollar) : "—"} | ${unrealizedPct != null ? fmtPct(unrealizedPct) : "—"} | ${realizedCell(p)} |`
     );

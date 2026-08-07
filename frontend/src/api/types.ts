@@ -125,6 +125,9 @@ export interface Position {
   // Latest known price for this ticker -- spot only meaning (an option's avg_cost isn't
   // comparable to a stock price without re-pricing the contract). null if never fetched.
   current_price: number | null;
+  // Entry fill's strategy_key -- "manual" for a trade added outside the screener (see
+  // constants/strategy.ts's STRATEGY_LABELS).
+  strategy_key: string;
 }
 
 export interface Fill {

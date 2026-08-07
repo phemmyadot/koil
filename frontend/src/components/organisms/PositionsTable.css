@@ -103,3 +103,20 @@
   color: var(--muted);
   font-size: 10.5px;
 }
+.strategy-cell-link {
+  background: none;
+  border: none;
+  color: inherit;
+  font-weight: 700;
+  font-size: inherit;
+  padding: 0;
+  cursor: pointer;
+  border-bottom: 1px dashed var(--muted);
+}
+.strategy-cell-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.strategy-cell-label {
+  color: var(--muted);
+}

@@ -8,6 +8,7 @@ import { AddFillForm } from "../components/organisms/AddFillForm";
 import { EditPositionForm } from "../components/organisms/EditPositionForm";
 import { FillsTable } from "../components/organisms/FillsTable";
 import { Pagination } from "../components/organisms/TickerCardGrid";
+import { StrategyCellLink } from "../components/molecules/StrategyCellLink";
 import { fmtMoney, fmtPct, fmtUnits, plClass } from "../lib/format";
 import "./PositionDetailPage.css";
 
@@ -148,6 +149,7 @@ export function PositionDetailPage() {
       <BigChart values={values} dates={marksList.map((m) => m.mark_date)} />
 
       <div className="actions">
+        <StrategyCellLink ticker={position.ticker} strategyKey={position.strategy_key} variant="button" />
         {position.status === "open" && (
           <button type="button" className="small-btn" onClick={() => setShowFillForm((v) => !v)}>
             Add Fill

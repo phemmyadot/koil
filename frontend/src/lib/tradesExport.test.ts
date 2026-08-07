@@ -17,6 +17,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     instrument: "spot",
     units_remaining: 10,
     units_sold: 0,
+    strategy_key: "manual",
     avg_cost: 100,
     realized_pnl: 0,
     realized_pnl_pct: null,
@@ -79,7 +80,17 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary({ open_count: 1 }),
     );
     // premium = 200/100 = $2.00, current_total = 3*1*100 = $300, unrealized = 300 - 200 = $100 (+50%)
-    expect(md).toContain("| AAPL | 1 | $2.00 | $3.00 | $300.00 | $100.00 | +50.0% |");
+    expect(md).toContain("| AAPL | Manual | 1 | $2.00 | $3.00 | $300.00 | $100.00 | +50.0% |");
+  });
+
+  it("shows the strategy label on an open row", () => {
+    const md = buildTradesExportMarkdown(
+      [makePosition({ ticker: "PWP", strategy_key: "vexh" })],
+      [],
+      makeSummary({ open_count: 1 }),
+      makeSummary(),
+    );
+    expect(md).toContain("| PWP | VEXH | 10 |");
   });
 
   it("shows the empty-state note when a section has no matching positions", () => {

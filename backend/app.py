@@ -1163,6 +1163,7 @@ def _position_with_state(position: dict) -> dict:
         "realized_pnl_pct": realized_pnl_pct,
         "fill_count": len(fills),
         "current_price": current_price,
+        "strategy_key": fills[0]["strategy_key"] if fills else "manual",
     }
 
 

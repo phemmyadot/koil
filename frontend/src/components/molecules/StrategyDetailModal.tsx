@@ -8,7 +8,7 @@ export interface StrategyDetailModalProps {
   stratKey: StrategyKey;
   s: StrategyResult;
   onClose: () => void;
-  onTrade: () => void;
+  onTrade?: () => void;
 }
 
 function last5(trades: StrategyResult["last5_trades"]) {
@@ -69,10 +69,14 @@ export function StrategyDetailModal({ ticker, stratKey, s, onClose, onTrade }: S
           </div>
         </>
       )}
-      <div className="modal-sep" />
-      <button type="button" className="trade-btn" onClick={onTrade}>
-        TRADE
-      </button>
+      {onTrade && (
+        <>
+          <div className="modal-sep" />
+          <button type="button" className="trade-btn" onClick={onTrade}>
+            TRADE
+          </button>
+        </>
+      )}
     </Modal>
   );
 }
