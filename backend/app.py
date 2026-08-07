@@ -1148,6 +1148,8 @@ def _position_with_state(position: dict) -> dict:
     # correct against units already exited. Matches PositionDetailPage's own client-side calc.
     units_entered = sum(f["units"] for f in fills if f["kind"] == "entry")
     units_sold = units_entered - state["units_remaining"]
+    if abs(units_sold) < 1e-6:
+        units_sold = 0.0
     cost_basis_sold = state["avg_cost"] * units_sold if state["avg_cost"] is not None else None
     realized_pnl_pct = round(state["realized_pnl"] / cost_basis_sold * 100, 2) if cost_basis_sold else None
 
