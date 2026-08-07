@@ -1341,7 +1341,12 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
                 "entry_plan": entry_plan,
             })
 
-    today_iso_date = datetime.now(timezone.utc).date().isoformat()
+    # The trading-day boundary (4pm ET close), NOT raw UTC calendar date -- review_trigger_daily()
+    # resolves review_date the same way, and in the evening review window (4pm-midnight ET) UTC's
+    # calendar date has already rolled to the next day while the trading day being reviewed is
+    # still "today" in market terms. Using UTC date here silently excluded same-day closes/alerts
+    # from every review generated after ~8pm ET (UTC midnight) until the next review window.
+    today_iso_date = market_hours.most_recent_close_boundary(datetime.now(timezone.utc)).date().isoformat()
     today_start = today_iso_date + "T00:00:00"
     today_notifications = db.list_notifications_since(today_start)
 
