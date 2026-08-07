@@ -1021,6 +1021,40 @@ def _blended_option_value(open_lots: list[dict], spot_price: float, as_of_date) 
     return blended_value
 
 
+def _blended_live_option_value(ticker: str, open_lots: list[dict], underlying_price: float, today) -> tuple[float, float | None] | None:
+    """Live-market equivalent of _blended_option_value -- current value blended across a
+    position's open lots, weighted by units remaining, but from each lot's real yfinance quote
+    instead of a Black-Scholes model. A lot with no live quote (illiquid, after-hours, chain
+    error) falls back to that lot's own modeled value so one bad lot doesn't blank the whole
+    position. Returns (blended_value, blended_iv) -- blended_iv is None if no lot had a live
+    quote (nothing to compare iv_at_entry against). None only if there are no priced lots at
+    all (mirrors _blended_option_value's None case)."""
+    priced_lots = [lot for lot in open_lots if lot["fill"].get("iv_at_entry") is not None]
+    if not priced_lots:
+        return None
+    total_units = sum(lot["units_remaining"] for lot in priced_lots)
+    blended_value = 0.0
+    live_iv_weighted = 0.0
+    live_units = 0.0
+    for lot in priced_lots:
+        f = lot["fill"]
+        weight = lot["units_remaining"] / total_units
+        quote = data.get_live_option_price(ticker, f["strike"], f["expiry_date"], f["opt_type"])
+        if quote is not None:
+            blended_value += quote["mark"] * weight
+            live_iv_weighted += quote["iv"] * lot["units_remaining"]
+            live_units += lot["units_remaining"]
+        else:
+            expiry = datetime.strptime(f["expiry_date"], "%Y-%m-%d").date()
+            days_to_expiry = max((expiry - today).days, 0)
+            T = days_to_expiry / 365
+            r = options_pricing.risk_free_rate_for(days_to_expiry)
+            value = options_pricing.option_price(f["opt_type"], underlying_price, f["strike"], T, f["iv_at_entry"], r)
+            blended_value += value * weight
+    blended_iv = live_iv_weighted / live_units if live_units > 0 else None
+    return blended_value, blended_iv
+
+
 def _with_option_values(position: dict, fills: list[dict], marks: list[dict]) -> list[dict]:
     """Annotates each daily stock-price mark with the position's modeled option value that day
     (see _blended_option_value). Spot positions, or option positions with no fills carrying
@@ -1125,9 +1159,12 @@ def _position_with_state(position: dict) -> dict:
     realized_pnl, instrument) -- computed fresh from position_fills every time, never cached
     beyond the stored status/closed_at (see db.py's positions docstring). current_price is
     per-share and comparable against avg_cost: for spot it's the ticker's latest known price
-    (same source as positions_summary's total_unrealized_pnl); for options it's the modeled
-    option value (_blended_option_value, same model used by PositionDetailPage's chart and
-    positions_pnl_series) rather than the raw underlying price. None if unpriceable."""
+    (same source as positions_summary's total_unrealized_pnl); for options it's the real
+    live-market value (_blended_live_option_value -- a fresh yfinance option-chain quote per
+    lot, TTL-cached in data.py), falling back to the modeled Black-Scholes value
+    (_blended_option_value's own per-lot logic) only when the chain has no live quote. None if
+    unpriceable. current_iv/iv_at_entry let the frontend flag IV crush -- see
+    _blended_live_option_value."""
     fills = db.list_fills(position["id"])
     state = replay_fills(fills)
     with _compute_lock:
@@ -1137,10 +1174,20 @@ def _position_with_state(position: dict) -> dict:
         bars = data.get_bars(position["ticker"])
         if bars is not None and not bars.empty:
             underlying_price = round(float(bars.Close.iloc[-1]), 4)
+    current_iv = None
+    iv_at_entry = None
     if state["instrument"] == "option" and state["open_lots"] and underlying_price is not None:
         today = datetime.now(timezone.utc).date()
-        option_value = _blended_option_value(state["open_lots"], underlying_price, today)
-        current_price = round(option_value, 4) if option_value is not None else None
+        result = _blended_live_option_value(position["ticker"], state["open_lots"], underlying_price, today)
+        if result is not None:
+            option_value, current_iv = result
+            current_price = round(option_value, 4) if option_value is not None else None
+        else:
+            current_price = None
+        priced_lots = [lot for lot in state["open_lots"] if lot["fill"].get("iv_at_entry") is not None]
+        if priced_lots:
+            total_units = sum(lot["units_remaining"] for lot in priced_lots)
+            iv_at_entry = sum(lot["fill"]["iv_at_entry"] * lot["units_remaining"] for lot in priced_lots) / total_units
     else:
         current_price = underlying_price
     # Realized P&L% basis is avg_cost * units actually sold (entered - still remaining), not the
@@ -1164,6 +1211,11 @@ def _position_with_state(position: dict) -> dict:
         "fill_count": len(fills),
         "current_price": current_price,
         "strategy_key": fills[0]["strategy_key"] if fills else "manual",
+        # Live-quote IV vs the position's own entry IV (units-weighted across lots) -- None for
+        # spot, or for an option position whose chain has no live quote right now (illiquid /
+        # after-hours). See _blended_live_option_value.
+        "current_iv": round(current_iv, 4) if current_iv is not None else None,
+        "iv_at_entry": round(iv_at_entry, 4) if iv_at_entry is not None else None,
     }
 
 

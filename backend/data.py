@@ -277,3 +277,48 @@ def get_fetched_at(ticker: str) -> float | None:
 
 def last_fetch_time() -> float | None:
     return _last_fetch_time
+
+
+# Live option chain quotes, keyed by (ticker, expiry, opt_type, strike). Unlike bars (fetched
+# only by the background loop, see this module's docstring), this is fetched on read -- a
+# position detail/list request needs today's real mark, not the last background-loop snapshot.
+# The short TTL keeps that on-read fetch from hitting yfinance on every request during normal
+# browsing, without the complexity of a background schedule for what's a small, bursty read.
+_OPTION_QUOTE_TTL = 180  # seconds
+_option_quote_cache: dict[tuple, tuple[float, dict | None]] = {}  # key -> (fetched_at, quote)
+
+
+def get_live_option_price(ticker: str, strike: float, expiry: str, opt_type: str) -> dict | None:
+    """Live mark price + IV for one option contract, from yfinance's option chain. Returns None
+    if the chain has no data for this contract (after-hours, illiquid, or no market) or the
+    request fails for any reason -- callers fall back to the modeled (Black-Scholes) value.
+    `opt_type`: "call" | "put"."""
+    key = (ticker, expiry, opt_type, strike)
+    now = time.time()
+    with _lock:
+        cached = _option_quote_cache.get(key)
+    if cached is not None and now - cached[0] < _OPTION_QUOTE_TTL:
+        return cached[1]
+
+    quote = None
+    try:
+        chain = yf.Ticker(ticker).option_chain(expiry)
+        rows = chain.calls if opt_type == "call" else chain.puts
+        row = rows[rows["strike"] == strike]
+        if not row.empty:
+            bid, ask = float(row["bid"].values[0]), float(row["ask"].values[0])
+            quote = {
+                "last": float(row["lastPrice"].values[0]),
+                "bid": bid,
+                "ask": ask,
+                "iv": float(row["impliedVolatility"].values[0]),
+                # bid/ask of 0 (no active market) makes the midpoint meaningless -- last trade
+                # price is the better fallback in that case.
+                "mark": (bid + ask) / 2 if bid > 0 and ask > 0 else float(row["lastPrice"].values[0]),
+            }
+    except Exception as e:  # noqa: BLE001 - illiquid ticker, bad expiry, network hiccup, etc.
+        print(f"data: live option price fetch failed for {ticker} {expiry} {opt_type} {strike}: {e}")
+
+    with _lock:
+        _option_quote_cache[key] = (now, quote)
+    return quote

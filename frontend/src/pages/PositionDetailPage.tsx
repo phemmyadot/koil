@@ -30,8 +30,6 @@ export function PositionDetailPage() {
 
   const [showFillForm, setShowFillForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
-  const [showIvForm, setShowIvForm] = useState(false);
-  const [ivInput, setIvInput] = useState("");
   const [marksPage, setMarksPage] = useState(1);
 
   if (isError) {
@@ -90,21 +88,12 @@ export function PositionDetailPage() {
   const costBasisSold = position.avg_cost != null ? position.avg_cost * unitsSold : null;
   const realizedPct = costBasisSold ? (position.realized_pnl / costBasisSold) * 100 : null;
 
-  // The entry fill's iv_at_entry is what _blended_option_value uses to reprice the position
-  // going forward (see backend/app.py) -- it's frozen at entry and never auto-refreshed, so it
-  // drifts from the option's real current IV over time. This lets the user correct it manually.
-  const entryFill = fillsList.find((f) => f.kind === "entry");
-
-  async function handleUpdateIv() {
-    const iv = parseFloat(ivInput);
-    if (!Number.isFinite(iv) || iv <= 0) {
-      window.alert("Enter a valid IV (e.g. 0.45 for 45%)");
-      return;
-    }
-    if (!entryFill) return;
-    await updateFill.mutateAsync({ fillId: entryFill.id, body: { iv_at_entry: iv } });
-    setShowIvForm(false);
-  }
+  // ivChange < 0 is IV crush -- the position's premium can decay even while the stock itself
+  // hasn't moved against it, since current_price/current option value already reflects the
+  // live-quoted (crushed) IV, not just the underlying's move. See backend's
+  // _blended_live_option_value.
+  const ivChange = position.current_iv != null && position.iv_at_entry != null ? position.current_iv - position.iv_at_entry : null;
+  const IV_CRUSH_WARN_THRESHOLD = 0.15;
 
   async function handleCancelPosition() {
     if (!window.confirm("Cancel this position? This permanently deletes it and all its fills, and cannot be undone.")) return;
@@ -154,6 +143,22 @@ export function PositionDetailPage() {
                   value is converted to a dollar total (avg_cost, the trades tables' own
                   Current Total column). */}
               <StatBox label="Current Total" value={fmtMoney(last * position.units_remaining * 100)} />
+              {position.iv_at_entry != null && (
+                <StatBox
+                  label="IV at entry"
+                  value={fmtPct(position.iv_at_entry * 100)}
+                  sub={
+                    ivChange != null ? (
+                      <span className={ivChange < -IV_CRUSH_WARN_THRESHOLD ? "neg" : ""}>
+                        Now {fmtPct((position.current_iv as number) * 100)} ({fmtPct(ivChange * 100)})
+                        {ivChange < -IV_CRUSH_WARN_THRESHOLD ? " ⚠️ IV crush" : ""}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--muted)" }}>No live quote right now</span>
+                    )
+                  }
+                />
+              )}
             </>
           ) : (
             <>
@@ -173,18 +178,6 @@ export function PositionDetailPage() {
             Add Fill
           </button>
         )}
-        {position.status === "open" && isOption && entryFill && (
-          <button
-            type="button"
-            className="small-btn"
-            onClick={() => {
-              setIvInput(entryFill.iv_at_entry != null ? String(entryFill.iv_at_entry) : "");
-              setShowIvForm((v) => !v);
-            }}
-          >
-            Update IV
-          </button>
-        )}
         <button type="button" className="small-btn" onClick={() => setShowEditForm((v) => !v)}>
           Edit Position
         </button>
@@ -202,22 +195,6 @@ export function PositionDetailPage() {
             setShowFillForm(false);
           }}
         />
-      )}
-      {position.status === "open" && isOption && showIvForm && entryFill && (
-        <div className="fill-form">
-          <div className="form-row">
-            <label>Current IV (decimal, e.g. 0.45 for 45%)</label>
-            <input type="number" step={0.001} value={ivInput} onChange={(e) => setIvInput(e.target.value)} />
-          </div>
-          <div className="form-actions">
-            <button type="button" className="small-btn" onClick={handleUpdateIv}>
-              Save
-            </button>
-            <button type="button" className="small-btn" onClick={() => setShowIvForm(false)}>
-              Cancel
-            </button>
-          </div>
-        </div>
       )}
       {showEditForm && (
         <EditPositionForm

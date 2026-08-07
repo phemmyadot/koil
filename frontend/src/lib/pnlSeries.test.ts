@@ -47,6 +47,8 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     realized_pnl_pct: null,
     fill_count: 1,
     current_price: null,
+    current_iv: null,
+    iv_at_entry: null,
     ...overrides,
   };
 }

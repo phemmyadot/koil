@@ -128,6 +128,12 @@ export interface Position {
   // Entry fill's strategy_key -- "manual" for a trade added outside the screener (see
   // constants/strategy.ts's STRATEGY_LABELS).
   strategy_key: string;
+  // Options only -- units-weighted IV blend, decimals (0.45 = 45%). current_iv is from a live
+  // yfinance option-chain quote, null when the chain has no live quote right now (illiquid /
+  // after-hours). iv_at_entry is the same blend of each lot's frozen entry-time IV. Both null
+  // for spot. See backend's _blended_live_option_value.
+  current_iv: number | null;
+  iv_at_entry: number | null;
 }
 
 export interface Fill {
