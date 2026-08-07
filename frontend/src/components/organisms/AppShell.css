@@ -5,6 +5,10 @@
 }
 
 /* ---------------- Top bar (desktop) ---------------- */
+/* Normal document flow (no sticky/fixed) -- .app-shell stacks topbar / content / bottomnav as
+   three ordinary blocks, .app-content is sized to exactly the leftover space between them and
+   owns the only scroll, so the bars never need to float over content or reserve clearance
+   padding for each other. */
 .app-topbar {
   display: flex;
   align-items: center;
@@ -12,9 +16,7 @@
   padding: 10px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  flex: 0 0 auto;
 }
 .app-brand {
   display: flex;
@@ -62,9 +64,6 @@
   margin-left: auto;
 }
 
-/* Full-width scroll container -- the scrollbar this produces sits at the true viewport edge.
-   Centering/max-width lives on .app-content-inner instead, so the two concerns (where the
-   scrollbar renders vs. how wide the content column is) don't fight each other. */
 .app-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -73,8 +72,6 @@
   flex-direction: column;
 }
 .app-content-inner {
-  flex: 1 1 auto;
-  min-height: 0;
   padding: 16px 20px 32px;
   max-width: 1200px;
   width: 100%;
@@ -93,21 +90,13 @@
     display: none;
   }
   .app-content-inner {
-    /* Clears the fixed bottom nav (its own height + safe-area inset) -- generous rather than
-       exact since the nav's actual rendered height varies slightly by content/label wrapping. */
-    padding: 12px 12px calc(96px + env(safe-area-inset-bottom, 0px));
+    padding: 12px 12px 24px;
   }
   .app-bottomnav {
     display: flex;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    flex: 0 0 auto;
     background: var(--panel);
     border-top: 1px solid var(--line);
-    z-index: 10;
-    /* Extra bottom inset on notched iPhones so the nav isn't flush against the home
-       indicator -- falls back to 0 on devices without a safe-area inset. */
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
   }
   .app-bottomnav-item {
