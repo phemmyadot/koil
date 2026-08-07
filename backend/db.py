@@ -102,7 +102,10 @@ def _init_schema() -> None:
                 closed_at TEXT,
                 last_alert_tp_pct REAL,
                 last_alert_stop_pct REAL,
-                notes TEXT
+                notes TEXT,
+                -- Appended last -- must match ALTER TABLE's real column order (always appends),
+                -- not this CREATE TABLE's text order, since _POSITION_COLUMNS reads positionally.
+                last_alert_option_gain_pct REAL
             );
             CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
             -- Only one OPEN position per ticker at a time -- a later entry after a position
@@ -472,7 +475,16 @@ def _migrate_notifications_position_id_nullable() -> None:
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read_at)")
 
 
+def _migrate_positions_add_option_gain_alert_column() -> None:
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(positions)").fetchall()]
+        if "last_alert_option_gain_pct" in cols:
+            return
+        _conn.execute("ALTER TABLE positions ADD COLUMN last_alert_option_gain_pct REAL")
+
+
 _init_schema()
+_migrate_positions_add_option_gain_alert_column()
 
 
 # ─────────────────────────── price bars ───────────────────────────
@@ -849,7 +861,7 @@ def set_last_close_fetch_at(iso: str) -> None:
 
 _POSITION_COLUMNS = [
     "id", "ticker", "status", "tp_price", "stop_price", "opened_at", "closed_at",
-    "last_alert_tp_pct", "last_alert_stop_pct", "notes",
+    "last_alert_tp_pct", "last_alert_stop_pct", "notes", "last_alert_option_gain_pct",
 ]
 
 _FILL_COLUMNS = [
@@ -935,16 +947,18 @@ def delete_position(position_id: int) -> None:
 
 
 def update_position_alert_pct(position_id: int, *, tp_pct: float | None = None,
-                               stop_pct: float | None = None) -> None:
-    """Bumps last_alert_tp_pct/last_alert_stop_pct -- only the side(s) passed are touched,
-    so the alert engine can update one side without clobbering the other."""
-    if tp_pct is None and stop_pct is None:
+                               stop_pct: float | None = None, option_gain_pct: float | None = None) -> None:
+    """Bumps last_alert_tp_pct/last_alert_stop_pct/last_alert_option_gain_pct -- only the
+    side(s) passed are touched, so the alert engine can update one without clobbering another."""
+    if tp_pct is None and stop_pct is None and option_gain_pct is None:
         return
     with _lock, _conn:
         if tp_pct is not None:
             _conn.execute("UPDATE positions SET last_alert_tp_pct = ? WHERE id = ?", (tp_pct, position_id))
         if stop_pct is not None:
             _conn.execute("UPDATE positions SET last_alert_stop_pct = ? WHERE id = ?", (stop_pct, position_id))
+        if option_gain_pct is not None:
+            _conn.execute("UPDATE positions SET last_alert_option_gain_pct = ? WHERE id = ?", (option_gain_pct, position_id))
 
 
 # ─────────────────────────── position fills ───────────────────────────

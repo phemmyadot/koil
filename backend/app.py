@@ -401,6 +401,7 @@ def compute_all(force: bool = False) -> None:
 
 
 TP_STOP_ALERT_THRESHOLDS = [30, 50, 70, 80, 90, 95]
+OPTION_GAIN_ALERT_THRESHOLDS = [50, 75, 90, 100]
 
 
 def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
@@ -578,6 +579,9 @@ def _update_trade_marks_and_alerts() -> None:
             continue
         db.set_position_status(position["id"], "open", None)
 
+        if state["instrument"] == "option":
+            _fire_option_gain_alert(position, state, current_price)
+
         tp, stop = position["tp_price"], position["stop_price"]
         # TP/stop are ALWAYS stock-price levels the user set, for both spot and option
         # positions -- same familiar input either way, see
@@ -636,6 +640,32 @@ def _fire_threshold_alerts(position: dict, kind: str, pct: float, last_alert_pct
     # notificationclick handler can deep-link to the right trade -- see
     # docs/superpowers/specs/2026-07-31-pwa-push-design.md.
     payload = json.dumps({"title": f"{position['ticker']} — {side}", "body": message, "position_id": position["id"]})
+    push.send_push_to_all(payload, now_iso)
+
+
+def _fire_option_gain_alert(position: dict, state: dict, underlying_price: float) -> None:
+    if not state["open_lots"] or state["avg_cost"] is None:
+        return
+    today = datetime.now(timezone.utc).date()
+    option_value = _blended_option_value(state["open_lots"], underlying_price, today)
+    if option_value is None:
+        return
+    avg_cost_per_share = state["avg_cost"] / state["multiplier"]
+    if avg_cost_per_share == 0:
+        return
+    gain_pct = (option_value - avg_cost_per_share) / avg_cost_per_share * 100
+
+    last_alert_pct = position["last_alert_option_gain_pct"]
+    crossed = [t for t in OPTION_GAIN_ALERT_THRESHOLDS if gain_pct >= t and (last_alert_pct is None or t > last_alert_pct)]
+    if not crossed:
+        return
+    highest = max(crossed)
+    message = f"{position['ticker']} option is up {highest}% from entry"
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.insert_notification(position["id"], "option_gain", highest, message, now_iso)
+    db.update_position_alert_pct(position["id"], option_gain_pct=highest)
+
+    payload = json.dumps({"title": f"{position['ticker']} — Option +{highest}%", "body": message, "position_id": position["id"]})
     push.send_push_to_all(payload, now_iso)
 
 
