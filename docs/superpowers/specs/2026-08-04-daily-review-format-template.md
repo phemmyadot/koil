@@ -15,8 +15,11 @@ multi-day pending backlog to show.
 "Your Trades" (2.0/2.5) splits real open positions by how they were entered: **Strategy Trades**
 (entered off an actual strategy signal — mechanical verdict + AI note, as before) and
 **Investment** (entered manually as a long-term holding — no strategy verdict exists or is
-implied; commentary reads as a thesis check-in, not signal-following). Either subsection is
-omitted entirely if its list is empty.
+implied; commentary reads as a thesis check-in, not signal-following). Each subsection also
+leads with any positions **closed today** (a real TP hit, stop, or manual exit) before its
+still-open positions — what got exited today is a completed fact and more time-sensitive to
+surface than what's still running. A subsection is omitted entirely only if both its closed-
+today and still-open lists are empty.
 
 ```markdown
 # KOIL Daily Review
@@ -47,6 +50,24 @@ omitted entirely if its list is empty.
 ## 2.0 Strategy Trades
 *Real open positions entered off an actual strategy signal. Act now.*
 
+{{#each closed_today_strategy_positions}}
+### {{ticker}} — Closed Today | {{exit_reason}}
+
+Entry {{fills.0.fill_date}} at {{fills.0.price}} → Exit {{fills.1.fill_date}} at {{fills.1.price}}
+Realized: **{{realized_pnl}}** ({{realized_pnl_pct}}%)
+
+{{#if verdict}}
+> **Verdict:** {{verdict}}
+{{/if}}
+
+---
+{{/each}}
+<!-- Closed-today positions render FIRST in this section, before the still-open ones below --
+     what got exited today is done and more time-sensitive to surface than what's still
+     running. No Status line (no strategy_verdicts exists for a closed position); exit_reason
+     ("tp"/"stop"/"manual"/"expired") is the mechanical fact instead, shown verbatim. Verdict is
+     optional here -- most closed-today entries need no commentary beyond the facts. -->
+
 {{#each strategy_positions}}
 ### {{ticker}} | {{current_price}} | {{unrealized_pct}}% | {{strategy_verdict}}
 
@@ -70,13 +91,29 @@ Status: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal �
 
 ---
 {{/each}}
-<!-- Subsection omitted entirely if strategy_positions is empty. -->
+<!-- Subsection omitted entirely if closed_today_strategy_positions AND strategy_positions are
+     both empty. -->
 
 ---
 
 ## 2.5 Investment
 *Real open positions entered manually as a long-term holding, not from a strategy signal.
 No strategy verdict — never invented for these.*
+
+{{#each closed_today_investment_positions}}
+### {{ticker}} — Closed Today | {{exit_reason}}
+
+Entry {{fills.0.fill_date}} at {{fills.0.price}} → Exit {{fills.1.fill_date}} at {{fills.1.price}}
+Realized: **{{realized_pnl}}** ({{realized_pnl_pct}}%)
+
+{{#if verdict}}
+> **Verdict:** {{verdict}}
+{{/if}}
+
+---
+{{/each}}
+<!-- Same closed-today-first ordering as Strategy Trades, framed as a thesis check-in rather
+     than tactical signal-following (no Status line applies to manual holdings either way). -->
 
 {{#each investment_positions}}
 ### {{ticker}} | {{current_price}} | {{unrealized_pct}}%
@@ -95,7 +132,8 @@ No strategy verdict — never invented for these.*
 
 ---
 {{/each}}
-<!-- Subsection omitted entirely if investment_positions is empty. -->
+<!-- Subsection omitted entirely if closed_today_investment_positions AND investment_positions
+     are both empty. -->
 
 ---
 
@@ -169,6 +207,14 @@ above. No stats, no multi-sentence justification — this section is a scan, not
   `db.get_trade_daily_marks(position_id)`, yesterday's `close_price` diffed against today's).
   `strategy_verdict` only applies to Strategy Trades, shown as "Status" (mechanical, unchanged);
   Claude's own opinion, shown as "Verdict," is generated text either way, not stored input.
+- **Closed Today (Strategy / Investment)**: `build_daily_snapshot()` separately loops
+  `db.list_positions("closed")`, filters to `closed_at` matching today's date, and splits by the
+  same `entry_strategy_key` rule into `closed_today_strategy_positions` /
+  `closed_today_investment_positions`. Each carries `exit_reason` from the position's actual
+  last fill (`"tp"`/`"stop"`/`"manual"`/`"expired"`) plus the same `realized_pnl`/
+  `realized_pnl_pct` fields the Trades page itself shows. Rendered first in both 2.0 and 2.5,
+  before the still-open positions — what closed today is a completed fact, more time-sensitive
+  to surface than what's still running.
 - **Take — Enter Tomorrow**: every ticker whose current strategy verdict is TAKE, restricted to
   `quality_filter.DEFAULT_FILTER["strategies"]` (VCPO today) and passing the shared quality bar
   — no watch-only tier, everything listed already cleared the filter. Order limit comes from

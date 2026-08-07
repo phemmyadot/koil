@@ -1346,15 +1346,34 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     today_notifications = db.list_notifications_since(today_start)
 
     realized_pnl_today = 0.0
+    closed_today_positions = []
     for position in db.list_positions("closed"):
         closed_at = position.get("closed_at")
-        if closed_at and closed_at[:10] == today_iso_date:
-            state = replay_fills(db.list_fills(position["id"]))
-            realized_pnl_today += state["realized_pnl"]
+        if not closed_at or closed_at[:10] != today_iso_date:
+            continue
+        state = _position_with_state(position)
+        realized_pnl_today += state["realized_pnl"]
+
+        fills = db.list_fills(position["id"])
+        exit_fill = fills[-1] if fills and fills[-1]["kind"] == "exit" else None
+        state = {k: v for k, v in state.items() if k not in ("last_alert_tp_pct", "last_alert_stop_pct")}
+        closed_today_positions.append({
+            **state,
+            "fills": _summarize_fills_for_review(fills),
+            "exit_reason": exit_fill["exit_reason"] if exit_fill else None,
+            "entry_strategy_key": fills[0]["strategy_key"] if fills else "manual",
+        })
+
+    closed_today_strategy = []
+    closed_today_investment = []
+    for p in closed_today_positions:
+        (closed_today_investment if p.pop("entry_strategy_key") == "manual" else closed_today_strategy).append(p)
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "market_context": _build_market_context(),
+        "closed_today_strategy_positions": closed_today_strategy,
+        "closed_today_investment_positions": closed_today_investment,
         "strategy_positions": strategy_positions,
         "investment_positions": investment_positions,
         "pending_signals": pending_signals,

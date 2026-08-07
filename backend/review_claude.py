@@ -29,19 +29,29 @@ learned about them so far), a rolling summary of patterns observed across past r
 (including your own most recent call on each open position -- see "Your Trades" below), and a \
 compact snapshot of today's state: market_context (index/commodity ETF proxies with today's \
 close and change %, already fetched by the app -- not something you need to look up), \
-strategy_positions -- real open positions entered off an actual strategy signal, \
+closed_today_strategy_positions and closed_today_investment_positions -- positions the user \
+fully or partially exited TODAY (a real TP hit, stop, or manual exit that already happened, \
+not a still-open position), same split (real strategy signal vs. manual long-term holding) and \
+same object shape as strategy_positions/investment_positions below, plus exit_reason (the \
+actual reason logged for the exit: "tp", "stop", "manual", or "expired" for an option -- state \
+this verbatim, it's a mechanical fact from what the user actually recorded, not your \
+judgment). realized_pnl on a closed_today position is what was actually locked in by that \
+exit -- always real, never an estimate. strategy_positions -- real open positions entered off \
+an actual strategy signal, \
 investment_positions -- real open positions the user entered manually as a long-term holding, \
-not from any strategy signal (no strategy verdict exists for these -- never invent one). Both \
-are the exact same object shape the app's own Trades page uses: ticker, tp_price, stop_price, \
-avg_cost, units_remaining, instrument (spot/option), realized_pnl, plus fills (every fill on \
-this position, oldest first -- fills[0] is the real entry: its fill_date and price/premium are \
-the actual entry date and entry price, more reliable than anything else for "how long has this \
-been held" or "what was it entered at" -- and for options, fills[0] also carries opt_type, \
-opt_side, strike, expiry_date, and iv_at_entry, the real contract terms) and marks (this \
-position's daily price history, oldest first -- close_price per day, plus option_value per day \
-for option positions, the modeled current value of the contract; compare the most recent two \
-marks for "today vs. yesterday"). strategy_verdicts (the underlying strategy's own verdict) is \
-attached separately alongside these, on strategy_positions only. pending_signals -- tickers that fired a \
+not from any strategy signal (no strategy verdict exists for these -- never invent one). All \
+four lists share the same object shape the app's own Trades page uses: ticker, tp_price, \
+stop_price, avg_cost, units_remaining, instrument (spot/option), realized_pnl, plus fills (every \
+fill on this position, oldest first -- fills[0] is the real entry: its fill_date and \
+price/premium are the actual entry date and entry price, more reliable than anything else for \
+"how long has this been held" or "what was it entered at" -- and for options, fills[0] also \
+carries opt_type, opt_side, strike, expiry_date, and iv_at_entry, the real contract terms) and \
+marks (this position's daily price history, oldest first -- close_price per day, plus \
+option_value per day for option positions, the modeled current value of the contract; compare \
+the most recent two marks for "today vs. yesterday"). strategy_verdicts (the underlying \
+strategy's own verdict) is attached separately alongside these, on strategy_positions only -- \
+a closed_today position has no strategy_verdicts (the strategy no longer tracks a position \
+that's been exited; use exit_reason instead, never invent a Status for these). pending_signals -- tickers that fired a \
 fresh TAKE signal today and already cleared the app's own quality-bar filter (win rate, profit \
 factor, trade count, and chart pattern), each with a computed entry limit and order-staging \
 method -- and open_signals: tickers where a strategy's own simulated backtest is currently \
@@ -77,7 +87,21 @@ what the numbers themselves show (e.g. a broad rally, a risk-off day, a flat ses
 
 ### 2.0 Strategy Trades
 
-One entry per position in strategy_positions, in the order given. For each: the ticker, its \
+If closed_today_strategy_positions has any entries, cover those FIRST, under their own \
+"Closed Today" lead-in before the still-open positions -- what got exited today is done, \
+already decided, and more time-sensitive to surface than what's still running. One entry per \
+position in closed_today_strategy_positions, in the order given: ticker, entry date/price (from \
+fills[0]), exit price/premium and exit date (from the position's last fill in fills), \
+exit_reason stated verbatim ("TP", "Stop", "Manual", or "Expired" -- capitalize for readability \
+but don't reinterpret which one it was), and realized_pnl with its $ and % both shown -- this \
+already happened, so state it as a completed fact, not a projection. No Status line (no \
+strategy_verdicts exists for a closed position) and no separate Verdict note unless something \
+about the exit is genuinely worth a comment (e.g. it closed right before a move that would have \
+mattered, or matches/breaks a pattern you've noted before) -- most closed-today entries need no \
+commentary beyond the facts themselves.
+
+Then, one entry per position in strategy_positions (the still-open ones), in the order given. \
+For each: the ticker, its \
 real entry date and entry price/premium (from fills[0] -- never estimate these from anything \
 else), current price and unrealized % (derive from the most recent mark's close_price, or \
 option_value for an option position, versus avg_cost), and the strategy's own state from \
@@ -106,19 +130,26 @@ and state explicitly whether today's call is "same as yesterday" or "changed fro
 never silently repeat or silently reverse a prior call without saying so. Omit the note \
 entirely for a position with nothing new to say; don't manufacture commentary.
 
-Skip this subsection entirely if strategy_positions is empty.
+Skip this subsection entirely if both closed_today_strategy_positions and strategy_positions \
+are empty.
 
 ### 2.5 Investment
 
-A brief general overview of investment_positions as a group -- these are long-term manual \
-holdings, not strategy trades, so no per-position breakdown, no Status line, no tactical \
-signal-following framing. List the tickers with their current unrealized % in one line each \
-(a compact list, not a full write-up per position), then one short blockquote Verdict covering \
-the group as a whole -- e.g. flag only a ticker that's moved enough to warrant a conscious \
-decision, otherwise say plainly that nothing here needs attention. Don't write an individual \
-Verdict per ticker.
+If closed_today_investment_positions has any entries, list those first under their own \
+"Closed Today" lead-in, same per-position facts as closed_today_strategy_positions above \
+(entry, exit price/date, exit_reason, realized $/%) but framed as a thesis check-in like the \
+rest of this subsection, not tactical signal-following -- no Status line applies here either.
 
-Skip this subsection entirely if investment_positions is empty.
+Then, a brief general overview of investment_positions (the still-open ones) as a group -- \
+these are long-term manual holdings, not strategy trades, so no per-position breakdown, no \
+Status line, no tactical signal-following framing. List the tickers with their current \
+unrealized % in one line each (a compact list, not a full write-up per position), then one \
+short blockquote Verdict covering the group as a whole -- e.g. flag only a ticker that's moved \
+enough to warrant a conscious decision, otherwise say plainly that nothing here needs \
+attention. Don't write an individual Verdict per ticker.
+
+Skip this subsection entirely if closed_today_investment_positions and investment_positions \
+are both empty.
 
 ### 3. Take — Enter Tomorrow
 
