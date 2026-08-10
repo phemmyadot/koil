@@ -14,106 +14,86 @@ export interface OptionsPositionsTableProps {
   onCancel: (positionId: number) => Promise<void>;
 }
 
-// One row per exit fill (TP1, TP2, ..., the final close) instead of one aggregated row -- see
-// SpotPositionsTable's own ClosedPositionRows for the same pattern.
-function ClosedPositionRows({ p }: { p: Position }) {
-  const { data: fills, isLoading } = useQuery({
-    queryKey: ["position", p.id, "fills"],
-    queryFn: () => listFills(p.id),
+// A completed exit fill belongs in the Closed table regardless of whether its parent position
+// still has units open (e.g. a partial TP on a position that's 1-of-2 sold) -- this is a
+// row-level split, not a position-level one. Fetches fills for every position with at least one
+// exit fill (units_sold > 0 OR status closed, covering the "closed with a single full exit"
+// case where units_sold still equals units entered).
+function ClosedExitsTable({ positions }: { positions: Position[] }) {
+  const candidates = positions.filter((p) => p.status === "closed" || p.units_sold > 0);
+  const fillsQueries = useQuery({
+    queryKey: ["options-closed-exits-fills", candidates.map((p) => p.id)],
+    queryFn: async () => {
+      const entries = await Promise.all(candidates.map(async (p) => [p.id, await listFills(p.id)] as const));
+      return Object.fromEntries(entries) as Record<number, Fill[]>;
+    },
+    enabled: candidates.length > 0,
   });
 
-  if (isLoading || !fills) {
-    return (
-      <tr>
-        <td>
-          <Link className="tk-link" to={`/trades/${p.id}`}>
-            {p.ticker}
-          </Link>
-        </td>
-        <td colSpan={9}>Loading…</td>
-      </tr>
-    );
+  const rows: { p: Position; row: ReturnType<typeof exitBreakdown>[number] }[] = [];
+  if (fillsQueries.data) {
+    for (const p of candidates) {
+      const fills = fillsQueries.data[p.id];
+      if (!fills) continue;
+      for (const row of exitBreakdown(fills)) rows.push({ p, row });
+    }
   }
 
-  const premium = p.avg_cost != null ? p.avg_cost / 100 : null;
-  const rows = exitBreakdown(fills);
   return (
-    <>
-      {rows.map((row) => (
-        <tr key={row.fillId}>
-          <td>
-            <Link className="tk-link" to={`/trades/${p.id}`}>
-              {p.ticker}
-            </Link>
-          </td>
-          <td>
-            <span className="status-tag closed">{exitLabel(row.exitReason, row.tpIndex)}</span>
-          </td>
-          <td></td>
-          <td>{fmtUnits(row.units)}</td>
-          <td>{premium != null ? fmtMoney(premium) : "—"}</td>
-          <td>{p.avg_cost != null ? fmtMoney(p.avg_cost * row.units) : "—"}</td>
-          <td>{fmtMoney(row.exitValue)}</td>
-          <td>{fmtMoney(row.exitValue * row.units * 100)}</td>
-          <td>—</td>
-          <td>
-            <b className={plClass(row.realizedDollar)}>
-              {fmtMoney(row.realizedDollar)}
-              {row.realizedPct != null && (
-                <>
-                  <br />
-                  {fmtPct(row.realizedPct)}
-                </>
-              )}
-            </b>
-          </td>
-          <td></td>
-        </tr>
-      ))}
-    </>
-  );
-}
-
-// One row per partial-exit fill (TP1, TP2, ...) on a still-open position, above the final
-// "remainder" row (current units/price/unrealized + the Exit/Cancel actions) -- same per-exit
-// breakdown as ClosedPositionRows, just for a position that isn't fully closed yet.
-function PartialExitRows({ p, fills }: { p: Position; fills: Fill[] }) {
-  const rows = exitBreakdown(fills);
-  if (!rows.length) return null;
-  return (
-    <>
-      {rows.map((row) => (
-        <tr key={row.fillId}>
-          <td>
-            <Link className="tk-link" to={`/trades/${p.id}`}>
-              {p.ticker}
-            </Link>
-          </td>
-          <td>
-            <span className="status-tag closed">{exitLabel(row.exitReason, row.tpIndex)}</span>
-          </td>
-          <td></td>
-          <td>{fmtUnits(row.units)}</td>
-          <td>—</td>
-          <td>—</td>
-          <td>{fmtMoney(row.exitValue)}</td>
-          <td>{fmtMoney(row.exitValue * row.units * 100)}</td>
-          <td>—</td>
-          <td>
-            <b className={plClass(row.realizedDollar)}>
-              {fmtMoney(row.realizedDollar)}
-              {row.realizedPct != null && (
-                <>
-                  <br />
-                  {fmtPct(row.realizedPct)}
-                </>
-              )}
-            </b>
-          </td>
-          <td></td>
-        </tr>
-      ))}
-    </>
+    <div className="table-scroll">
+      <table className="postable">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Exit</th>
+            <th>Units</th>
+            <th>Premium</th>
+            <th>Total</th>
+            <th>Realized $ / %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {candidates.length === 0 ? (
+            <tr>
+              <td colSpan={6} className="empty">
+                No closed exits yet.
+              </td>
+            </tr>
+          ) : fillsQueries.isLoading ? (
+            <tr>
+              <td colSpan={6}>Loading…</td>
+            </tr>
+          ) : (
+            rows.map(({ p, row }) => (
+              <tr key={row.fillId}>
+                <td>
+                  <Link className="tk-link" to={`/trades/${p.id}`}>
+                    {p.ticker}
+                  </Link>
+                </td>
+                <td>
+                  <span className="status-tag closed">{exitLabel(row.exitReason, row.tpIndex)}</span>
+                </td>
+                <td>{fmtUnits(row.units)}</td>
+                <td>{fmtMoney(row.exitValue)}</td>
+                <td>{fmtMoney(row.exitValue * row.units * 100)}</td>
+                <td>
+                  <b className={plClass(row.realizedDollar)}>
+                    {fmtMoney(row.realizedDollar)}
+                    {row.realizedPct != null && (
+                      <>
+                        <br />
+                        {fmtPct(row.realizedPct)}
+                      </>
+                    )}
+                  </b>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -132,15 +112,15 @@ function PositionRow({
   const [exitReason, setExitReason] = useState<ExitReason>("tp");
   const [submitting, setSubmitting] = useState(false);
 
-  // Always fetched (not just when the Exit form opens) -- PartialExitRows above needs the full
-  // fill history to render this position's TP breakdown, not just handleExit's last-fill lookup.
+  // Fetched only when the Exit form is actually opened -- handleExit needs the position's last
+  // fill (strategy_key, opt_side/opt_type/strike/expiry_date -- required on every option fill).
   const fillsQuery = useQuery({
     queryKey: ["position", p.id, "fills"],
     queryFn: () => listFills(p.id),
+    enabled: exitOpen,
   });
   const lastFill = fillsQuery.data?.[fillsQuery.data.length - 1];
 
-  const isOpen = p.status === "open";
   // avg_cost has the 100x contract multiplier baked in (see replay_fills) -- unwind to
   // per-share premium before comparing against current_price, which is the modeled per-share
   // option value for option positions (backend's _position_with_state).
@@ -187,7 +167,6 @@ function PositionRow({
 
   return (
     <>
-      {isOpen && p.units_sold > 0 && fillsQuery.data && <PartialExitRows p={p} fills={fillsQuery.data} />}
       <tr>
         <td>
           <Link className="tk-link" to={`/trades/${p.id}`}>
@@ -197,7 +176,9 @@ function PositionRow({
         <td>
           <span className={`status-tag ${p.status}`}>{p.status}</span>
         </td>
-        <td>{isOpen && <StrategyCellLink ticker={p.ticker} strategyKey={p.strategy_key} />}</td>
+        <td>
+          <StrategyCellLink ticker={p.ticker} strategyKey={p.strategy_key} />
+        </td>
         <td>{fmtUnits(p.units_remaining)}</td>
         <td>{premium != null ? fmtMoney(premium) : "—"}</td>
         <td>{totalCost != null ? fmtMoney(totalCost) : "—"}</td>
@@ -221,33 +202,18 @@ function PositionRow({
             "—"
           )}
         </td>
-        <td>
-          <b className={plClass(p.realized_pnl)}>
-            {fmtMoney(p.realized_pnl)}
-            {p.realized_pnl_pct != null && (
-              <>
-                <br />
-                {fmtPct(p.realized_pnl_pct)}
-              </>
-            )}
-          </b>
-        </td>
         <td className="actions-cell">
-          {isOpen && (
-            <>
-              <button type="button" className="small-btn" onClick={() => setExitOpen((v) => !v)}>
-                Exit
-              </button>{" "}
-              <button type="button" className="small-btn danger" onClick={handleCancel}>
-                Cancel
-              </button>
-            </>
-          )}
+          <button type="button" className="small-btn" onClick={() => setExitOpen((v) => !v)}>
+            Exit
+          </button>{" "}
+          <button type="button" className="small-btn danger" onClick={handleCancel}>
+            Cancel
+          </button>
         </td>
       </tr>
-      {isOpen && exitOpen && (
+      {exitOpen && (
         <tr>
-          <td colSpan={11}>
+          <td colSpan={9}>
             {fillsQuery.isLoading ? (
               <div className="exit-form">Loading…</div>
             ) : (
@@ -277,32 +243,53 @@ function PositionRow({
   );
 }
 
-export function OptionsPositionsTable({ positions, onExit, onCancel }: OptionsPositionsTableProps) {
-  if (!positions.length) return <p className="empty">No option positions match this filter.</p>;
+export function OptionsPositionsTable({
+  positions,
+  onExit,
+  onCancel,
+  showOpen = true,
+}: OptionsPositionsTableProps & { showOpen?: boolean }) {
+  // Open remainder rows: still-open quantity only, regardless of whether this position already
+  // had partial exits -- those exits show in ClosedExitsTable below instead. Every position
+  // passed in (of this instrument) is eligible to appear here as long as it has units left.
+  const openRows = positions.filter((p) => p.units_remaining > 0);
+
   return (
-    <div className="table-scroll">
-      <table className="postable">
-        <thead>
-          <tr>
-            <th>Ticker</th>
-            <th>Status</th>
-            <th>Strategy</th>
-            <th>Units</th>
-            <th>Premium</th>
-            <th>Total Cost</th>
-            <th>Last</th>
-            <th>Current Total</th>
-            <th>Unrealized $ / %</th>
-            <th>Realized $ / %</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((p) =>
-            p.status === "closed" ? <ClosedPositionRows key={p.id} p={p} /> : <PositionRow key={p.id} p={p} onExit={onExit} onCancel={onCancel} />,
-          )}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {showOpen && (
+        <div className="table-scroll">
+          <table className="postable">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Status</th>
+                <th>Strategy</th>
+                <th>Units</th>
+                <th>Premium</th>
+                <th>Total Cost</th>
+                <th>Last</th>
+                <th>Current Total</th>
+                <th>Unrealized $ / %</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {openRows.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="empty">
+                    No open option positions.
+                  </td>
+                </tr>
+              ) : (
+                openRows.map((p) => <PositionRow key={p.id} p={p} onExit={onExit} onCancel={onCancel} />)
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h2>Closed Exits</h2>
+      <ClosedExitsTable positions={positions} />
+    </>
   );
 }

@@ -67,7 +67,7 @@ function makeSummary(overrides: Partial<PositionsSummary> = {}): PositionsSummar
 }
 
 describe("buildTradesExportMarkdown", () => {
-  it("shows a TP row plus the remainder row for an open position with a partial exit", () => {
+  it("shows the still-open remainder in the Open table and the TP in the Closed table for a partial exit", () => {
     const fills = [
       makeFill({ id: 1, position_id: 1, kind: "entry", fill_date: "2026-01-01", price: 10, units: 10 }),
       makeFill({ id: 2, position_id: 1, kind: "exit", fill_date: "2026-01-05", price: 15, units: 4, exit_reason: "tp" }),
@@ -79,33 +79,35 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary(),
       { 1: fills },
     );
-    expect(md).toContain("| PWP | TP 1 | 4 | — | — | — | $15.00 | $60.00 | — | — | $20.00 / +50.0% |");
-    expect(md).toContain("| PWP | — | 6 |");
+    // Open table: remainder row only, no exit label/column.
+    expect(md).toContain("| PWP | Manual | 6 | $10.00 | $60.00 | $15.00 | $90.00 | $30.00 | +50.0% |");
+    // Closed table: the TP itself, dated by its own exit fill.
+    expect(md).toContain("| PWP | TP 1 | 4 | $15.00 | $20.00 | +50.0% |");
   });
 
-  it("shows only the remainder row (no TP rows) for a position with no exits yet", () => {
+  it("shows no rows in the Closed table for a position with no exits yet", () => {
     const md = buildTradesExportMarkdown(
       [makePosition({ ticker: "PWP", units_remaining: 1, units_sold: 0, avg_cost: 15, current_price: 17.06, realized_pnl: 0, realized_pnl_pct: null })],
       [],
       makeSummary({ open_count: 1 }),
       makeSummary(),
     );
-    expect(md).toContain("| $0.00 |");
-    expect(md).not.toContain("| TP");
+    expect(md).toContain("*No closed exits yet.*");
   });
 
-  it("falls back to one aggregated row when a closed position's fills aren't loaded", () => {
+  it("skips a position from the Closed table when its fills aren't loaded", () => {
     const md = buildTradesExportMarkdown(
       [makePosition({ id: 8, ticker: "PWP", status: "closed", units_remaining: 0, units_sold: 4, avg_cost: 17.965, realized_pnl: 16.14, realized_pnl_pct: 22.46 })],
       [],
       makeSummary({ closed_count: 1 }),
       makeSummary(),
-      // no fills passed for position id 8 -- closedTable's defensive fallback path
+      // no fills passed for position id 8
     );
-    expect(md).toContain("| PWP | — | 4 | — | $16.14 | +22.5% |");
+    expect(md).toContain("*No closed exits yet.*");
+    expect(md).not.toContain("PWP");
   });
 
-  it("shows one row per exit fill (TP1, TP2, final close) for a closed position", () => {
+  it("shows one row per exit fill (TP1, TP2, final close) for a fully closed position", () => {
     const fills = [
       makeFill({ id: 1, position_id: 8, kind: "entry", fill_date: "2026-01-01", price: 10, units: 5 }),
       makeFill({ id: 2, position_id: 8, kind: "exit", fill_date: "2026-01-05", price: 12, units: 2, exit_reason: "tp" }),
@@ -132,7 +134,7 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary({ open_count: 1 }),
     );
     // premium = 200/100 = $2.00, total_cost = 200*1 = $200, current_total = 3*1*100 = $300, unrealized = 300 - 200 = $100 (+50%)
-    expect(md).toContain("| AAPL | — | 1 | Manual | $2.00 | $200.00 | $3.00 | $300.00 | $100.00 | +50.0% | — | $0.00 |");
+    expect(md).toContain("| AAPL | Manual | 1 | $2.00 | $200.00 | $3.00 | $300.00 | $100.00 | +50.0% | — |");
   });
 
   it("flags IV crush and IV spike in the options open table", () => {
@@ -156,12 +158,12 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary({ open_count: 1 }),
       makeSummary(),
     );
-    expect(md).toContain("| PWP | — | 10 | VEXH |");
+    expect(md).toContain("| PWP | VEXH | 10 |");
   });
 
   it("shows the empty-state note when a section has no matching positions", () => {
     const md = buildTradesExportMarkdown([], [], makeSummary(), makeSummary());
     expect(md).toContain("*No open positions.*");
-    expect(md).toContain("*No closed positions.*");
+    expect(md).toContain("*No closed exits yet.*");
   });
 });

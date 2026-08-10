@@ -50,7 +50,11 @@ export function TradesPage() {
   const queryClient = useQueryClient();
 
   const [typeFilter, setTypeFilter] = useState<"spot" | "options">("spot");
-  const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
+  // Only toggles the Open table (remaining-quantity rows) -- the Closed Exits table below it
+  // always shows every exit fill regardless, since a completed TP/Stop/Manual/Expired exit
+  // belongs there even on a position that's still partially open. See SpotPositionsTable/
+  // OptionsPositionsTable's own ClosedExitsTable.
+  const [showOpen, setShowOpen] = useState(true);
   const [showExport, setShowExport] = useState(false);
 
   // Only fetched once the export modal is actually opened -- the export's per-exit breakdown
@@ -73,7 +77,6 @@ export function TradesPage() {
   const summary = typeFilter === "spot" ? spotSummary : optionsSummary;
   const pnlSeries = typeFilter === "spot" ? spotPnlSeries : optionsPnlSeries;
   const positionIds = positions?.map((p) => p.id) ?? [];
-  const filtered = (positions ?? []).filter((p) => !statusFilter || p.status === statusFilter);
 
   function invalidateAll() {
     queryClient.invalidateQueries({ queryKey: ["positions"] });
@@ -163,19 +166,17 @@ export function TradesPage() {
       <PnlChart series={pnlSeries ?? { dates: [], realized: [], unrealized: [] }} />
 
       <div className="trades-filterbar">
-        <label>Status</label>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | "open" | "closed")}>
-          <option value="">All</option>
-          <option value="open">Open</option>
-          <option value="closed">Closed</option>
-        </select>
+        <label>
+          <input type="checkbox" checked={showOpen} onChange={(e) => setShowOpen(e.target.checked)} />
+          Show open positions
+        </label>
       </div>
 
       <h2>Positions</h2>
       {typeFilter === "spot" ? (
-        <SpotPositionsTable positions={filtered} onExit={handleExit} onCancel={handleCancel} />
+        <SpotPositionsTable positions={positions ?? []} onExit={handleExit} onCancel={handleCancel} showOpen={showOpen} />
       ) : (
-        <OptionsPositionsTable positions={filtered} onExit={handleExit} onCancel={handleCancel} />
+        <OptionsPositionsTable positions={positions ?? []} onExit={handleExit} onCancel={handleCancel} showOpen={showOpen} />
       )}
     </div>
   );

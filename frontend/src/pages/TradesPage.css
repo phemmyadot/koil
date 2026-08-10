@@ -55,6 +55,15 @@
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+.trades-filterbar label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.trades-filterbar label input[type="checkbox"] {
+  cursor: pointer;
+}
 .trades-page h2 {
   font-size: 14px;
   margin: 20px 0 10px;
