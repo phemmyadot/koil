@@ -508,8 +508,8 @@ def replay_fills(fills: list[dict], as_of_date: str | None = None) -> dict:
                 continue  # malformed data guard -- an exit with nothing open, ignore rather than divide by zero
             avg_cost = running_cost / running_units
             exit_value = f["premium"] if instrument == "option" else f["price"]
-            realized_pnl += (exit_value - avg_cost) * f["units"] * multiplier
-            running_cost -= avg_cost * f["units"] * multiplier
+            realized_pnl += (exit_value * multiplier - avg_cost) * f["units"]
+            running_cost -= avg_cost * f["units"]
             running_units -= f["units"]
             remaining_to_consume = f["units"]
             for lot in open_lots:
