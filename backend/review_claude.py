@@ -6,8 +6,11 @@ Model is claude-sonnet-5, hardcoded (user's explicit choice for this feature, no
 Opus-by-default general rule) -- see the design doc's "Decisions (resolved)".
 """
 import json
+from datetime import datetime, timezone
 
 import anthropic
+
+import backend.market_hours as market_hours
 
 MODEL = "claude-sonnet-5"
 
@@ -19,6 +22,19 @@ SYSTEM_PROMPT = """You are a trading review assistant for a single user's person
 app. Each trading day, once the market has closed and that day's data is final, you produce a \
 review of the user's current open positions and today's new entry signals, grounded in their \
 own stated trading philosophy and past patterns you've learned about them.
+
+## Current market status
+
+Every message you receive (the review-generation turn and every chat turn) includes a "Current \
+market status" line -- computed fresh at the moment that message was sent, not part of the \
+frozen daily snapshot below. It tells you whether the market (9:30 AM-4:00 PM ET, Mon-Fri) is \
+currently open or closed, and how long it's been open/closed or until it opens/closes next. Use \
+this to ground any time-sensitive answer: if the user asks something mid-day during a live chat \
+(the market may still be open even though the review itself was generated after a prior close), \
+don't assume today's data is final the way it is for the once-daily generated review -- say so \
+if the user's question depends on live price action you don't have (this app snapshots data at \
+close, not intraday). If the market is closed, you can speak of today's session as final; if \
+it's open, treat any price-dependent detail as as-of-last-close, not current.
 
 ## What you're reviewing
 
@@ -269,7 +285,10 @@ def _mark_cache_boundary(message: dict) -> None:
 def _context_content_blocks(retrieved_chunks: list[dict], memory_summary: str | None, snapshot: dict,
                              review_summary: str | None = None) -> list[dict]:
     """Snapshot/memory/review_summary are frozen for the day and get their own cache breakpoint;
-    retrieved_chunks vary per chat turn (re-queried each time) so are left uncached."""
+    retrieved_chunks and market status vary per chat turn (retrieved_chunks are re-queried each
+    time, market status changes by the minute) so both are left uncached -- market status
+    specifically must NOT go in the frozen snapshot, or "market just opened" would still show
+    hours later in the same chat session."""
     frozen_parts = [f"Today's position and signal snapshot:\n{json.dumps(snapshot, default=str, sort_keys=True)}"]
     if memory_summary:
         frozen_parts.append(f"\nWhat you've learned about this user's patterns over time:\n{memory_summary}")
@@ -280,6 +299,8 @@ def _context_content_blocks(retrieved_chunks: list[dict], memory_summary: str | 
         "text": "\n".join(frozen_parts),
         "cache_control": {"type": "ephemeral"},
     }]
+
+    blocks.append({"type": "text", "text": f"Current market status: {market_hours.market_status_text(datetime.now(timezone.utc))}"})
 
     if retrieved_chunks:
         chunk_lines = ["Relevant context from the user's trading philosophy and past notes:"]

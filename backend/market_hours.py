@@ -22,6 +22,41 @@ def is_market_open(now: datetime) -> bool:
     return MARKET_OPEN <= local.time() < MARKET_CLOSE
 
 
+def market_status_text(now: datetime) -> str:
+    """Human-readable current market status for the review chatbot -- computed fresh per call
+    (not baked into the frozen daily snapshot, which would go stale mid-session), so it always
+    reflects the real time the message is being sent, not whenever the snapshot was generated."""
+    local = now.astimezone(MARKET_TZ)
+    weekday_closed = local.weekday() >= 5
+    if is_market_open(now):
+        open_dt = local.replace(hour=MARKET_OPEN.hour, minute=MARKET_OPEN.minute, second=0, microsecond=0)
+        close_dt = local.replace(hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute, second=0, microsecond=0)
+        minutes_open = int((local - open_dt).total_seconds() // 60)
+        minutes_to_close = int((close_dt - local).total_seconds() // 60)
+        return (
+            f"Market is OPEN (regular session, {minutes_open} minutes since 9:30 AM ET open, "
+            f"{minutes_to_close} minutes until 4:00 PM ET close). Current time: "
+            f"{local.strftime('%Y-%m-%d %I:%M %p %Z')}."
+        )
+    if weekday_closed:
+        status = f"Market is CLOSED (weekend). Current time: {local.strftime('%Y-%m-%d %I:%M %p %Z')}."
+    elif local.time() < MARKET_OPEN:
+        open_dt = local.replace(hour=MARKET_OPEN.hour, minute=MARKET_OPEN.minute, second=0, microsecond=0)
+        minutes_to_open = int((open_dt - local).total_seconds() // 60)
+        status = (
+            f"Market is CLOSED (pre-market, opens in {minutes_to_open} minutes at 9:30 AM ET). "
+            f"Current time: {local.strftime('%Y-%m-%d %I:%M %p %Z')}."
+        )
+    else:
+        close_dt = local.replace(hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute, second=0, microsecond=0)
+        minutes_since_close = int((local - close_dt).total_seconds() // 60)
+        status = (
+            f"Market is CLOSED (after-hours, {minutes_since_close} minutes since 4:00 PM ET close). "
+            f"Current time: {local.strftime('%Y-%m-%d %I:%M %p %Z')}."
+        )
+    return status
+
+
 def most_recent_close_boundary(now: datetime) -> datetime:
     """The timestamp of the most recent 4:00 PM ET close at or before `now`. If the market is
     currently open, this is the PRIOR session's close (today's close hasn't happened yet), so a
