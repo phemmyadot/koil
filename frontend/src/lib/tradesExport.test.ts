@@ -115,7 +115,7 @@ describe("buildTradesExportMarkdown", () => {
     );
     expect(md).toContain("| PWP | TP 1 | 2 | $12.00 | $4.00 | +20.0% |");
     expect(md).toContain("| PWP | TP 2 | 2 | $14.00 | $8.00 | +40.0% |");
-    expect(md).toContain("| PWP | Manual | 1 | $13.00 | $3.00 | +30.0% |");
+    expect(md).toContain("| PWP | Close | 1 | $13.00 | $3.00 | +30.0% |");
   });
 
   it("scales an option position's current/unrealized totals by the 100x contract multiplier", () => {

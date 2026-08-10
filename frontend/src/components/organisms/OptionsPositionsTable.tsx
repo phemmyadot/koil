@@ -8,7 +8,7 @@ import { exitBreakdown } from "../../lib/pnlSeries";
 import { StrategyCellLink } from "../molecules/StrategyCellLink";
 import "./PositionsTable.css";
 
-const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Manual", expired: "Expired" };
+const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Close", expired: "Expired" };
 
 function exitLabel(reason: string | null, tpIndex: number | null): string {
   if (reason === "tp") return `TP ${tpIndex}`;

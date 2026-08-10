@@ -6,7 +6,7 @@ import { stratLabel } from "../constants/strategy";
 import { exitBreakdown } from "./pnlSeries";
 import { fmtMoney, fmtPct, fmtUnits } from "./format";
 
-const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Manual", expired: "Expired" };
+const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Close", expired: "Expired" };
 
 function exitLabel(reason: string | null, tpIndex: number | null): string {
   if (reason === "tp") return `TP ${tpIndex}`;
