@@ -30,8 +30,7 @@ function totals(p: Position, multiplier: number) {
 }
 
 function realizedCell(p: Position): string {
-  const value = `${fmtMoney(p.realized_pnl)}${p.realized_pnl_pct != null ? ` / ${fmtPct(p.realized_pnl_pct)}` : ""}`;
-  return p.status === "open" && p.units_sold > 0 ? `${fmtUnits(p.units_sold)} units — ${value}` : value;
+  return `${fmtMoney(p.realized_pnl)}${p.realized_pnl_pct != null ? ` / ${fmtPct(p.realized_pnl_pct)}` : ""}`;
 }
 
 // Percentage points, e.g. -18.2 -- see PositionDetailPage's own IV crush/spike thresholds (kept
@@ -43,25 +42,49 @@ function ivCell(p: Position): string {
   return `${fmtPct(changePts)}${flag}`;
 }
 
-function openTable(positions: Position[], instrument: "spot" | "option"): string {
+// A TP row per partial exit fill on this position, matching the live tables' own
+// PartialExitRows -- no rows if the position has no exits yet, or its fills haven't been
+// fetched. Column order must match openTable's header exactly: Ticker | Exit | Units |
+// Strategy | Cost | Total Cost | Last | Current Total | Unrealized $ | Unrealized % [| IV Δ] |
+// Realized -- an exit row has nothing to say about Strategy/Cost/Total Cost/Unrealized (those
+// describe the position as a whole, not one exit), so those cells are "—"; Last/Current Total
+// carry this exit's own price/total instead.
+function partialExitLines(p: Position, instrument: "spot" | "option", ivColPresent: boolean, fillsByPositionId: Record<number, Fill[]>): string[] {
+  if (p.units_sold <= 0) return [];
+  const fills = fillsByPositionId[p.id];
+  if (!fills) return [];
+  const multiplier = instrument === "option" ? 100 : 1;
+  const ivCellStr = ivColPresent ? "| — " : "";
+  return exitBreakdown(fills).map(
+    (row) =>
+      `| ${p.ticker} | ${exitLabel(row.exitReason, row.tpIndex)} | ${fmtUnits(row.units)} | — | — | — | ${fmtMoney(row.exitValue)} | ` +
+      `${fmtMoney(row.exitValue * row.units * multiplier)} | — | — ${ivCellStr}| ` +
+      `${fmtMoney(row.realizedDollar)}${row.realizedPct != null ? ` / ${fmtPct(row.realizedPct)}` : ""} |`,
+  );
+}
+
+function openTable(positions: Position[], instrument: "spot" | "option", fillsByPositionId: Record<number, Fill[]>): string {
   const rows = positions.filter((p) => p.status === "open" && p.instrument === instrument);
   const multiplier = instrument === "option" ? 100 : 1;
-  const ivCol = instrument === "option" ? "| IV Δ " : "";
-  const ivSep = instrument === "option" ? "|---" : "";
+  const ivColPresent = instrument === "option";
+  const ivCol = ivColPresent ? "| IV Δ " : "";
+  const ivSep = ivColPresent ? "|---" : "";
   if (!rows.length) return "*No open positions.*";
   const header =
-    `| Ticker | Strategy | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Total Cost | Last | Current Total | Unrealized $ | Unrealized % ${ivCol}| Realized |\n` +
-    `|---|---|---|---|---|---|---|---|---${ivSep}|---|`;
-  const lines = rows.map((p) => {
+    `| Ticker | Exit | Units | Strategy | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Total Cost | Last | Current Total | Unrealized $ | Unrealized % ${ivCol}| Realized |\n` +
+    `|---|---|---|---|---|---|---|---|---|---${ivSep}|---|`;
+  const lines: string[] = [];
+  for (const p of rows) {
+    lines.push(...partialExitLines(p, instrument, ivColPresent, fillsByPositionId));
     const { totalCost, currentTotal, unrealizedDollar, unrealizedPct } = totals(p, multiplier);
     const perShareCost = instrument === "option" && p.avg_cost != null ? p.avg_cost / multiplier : p.avg_cost;
-    const ivCellStr = instrument === "option" ? `| ${ivCell(p)} ` : "";
-    return (
-      `| ${p.ticker} | ${stratLabel(p.strategy_key)} | ${fmtUnits(p.units_remaining)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} | ` +
-      `${totalCost != null ? fmtMoney(totalCost) : "—"} | ${p.current_price != null ? fmtMoney(p.current_price) : "—"} | ${currentTotal != null ? fmtMoney(currentTotal) : "—"} | ` +
-      `${unrealizedDollar != null ? fmtMoney(unrealizedDollar) : "—"} | ${unrealizedPct != null ? fmtPct(unrealizedPct) : "—"} ${ivCellStr}| ${realizedCell(p)} |`
+    const ivCellStr = ivColPresent ? `| ${ivCell(p)} ` : "";
+    lines.push(
+      `| ${p.ticker} | — | ${fmtUnits(p.units_remaining)} | ${stratLabel(p.strategy_key)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} | ` +
+        `${totalCost != null ? fmtMoney(totalCost) : "—"} | ${p.current_price != null ? fmtMoney(p.current_price) : "—"} | ${currentTotal != null ? fmtMoney(currentTotal) : "—"} | ` +
+        `${unrealizedDollar != null ? fmtMoney(unrealizedDollar) : "—"} | ${unrealizedPct != null ? fmtPct(unrealizedPct) : "—"} ${ivCellStr}| ${realizedCell(p)} |`,
     );
-  });
+  }
   return [header, ...lines].join("\n");
 }
 
@@ -98,7 +121,9 @@ export function buildTradesExportMarkdown(
   optionsPositions: Position[] | undefined,
   spotSummary: PositionsSummary | undefined,
   optionsSummary: PositionsSummary | undefined,
-  closedFillsByPositionId: Record<number, Fill[]> = {},
+  // Fills for every closed position, plus every open position with a partial exit -- see
+  // TradesPage.tsx's exitedPositionIds/exitedFillsByPositionId.
+  fillsByPositionId: Record<number, Fill[]> = {},
 ): string {
   const spot = spotPositions ?? [];
   const options = optionsPositions ?? [];
@@ -115,19 +140,19 @@ export function buildTradesExportMarkdown(
     "",
     "## Spot — Open",
     "",
-    openTable(spot, "spot"),
+    openTable(spot, "spot", fillsByPositionId),
     "",
     "## Spot — Closed",
     "",
-    closedTable(spot, "spot", closedFillsByPositionId),
+    closedTable(spot, "spot", fillsByPositionId),
     "",
     "## Options — Open",
     "",
-    openTable(options, "option"),
+    openTable(options, "option", fillsByPositionId),
     "",
     "## Options — Closed",
     "",
-    closedTable(options, "option", closedFillsByPositionId),
+    closedTable(options, "option", fillsByPositionId),
     "",
   ].join("\n");
 }

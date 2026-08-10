@@ -54,19 +54,20 @@ export function TradesPage() {
   const [showExport, setShowExport] = useState(false);
 
   // Only fetched once the export modal is actually opened -- the export's per-exit breakdown
-  // needs each closed position's fills, which the tables/summary above don't otherwise load.
-  const closedPositionIds = [...(spotPositions ?? []), ...(optionsPositions ?? [])]
-    .filter((p) => p.status === "closed")
+  // needs fills for every position with at least one exit (closed, or open with a partial
+  // exit), which the tables/summary above don't otherwise load.
+  const exitedPositionIds = [...(spotPositions ?? []), ...(optionsPositions ?? [])]
+    .filter((p) => p.status === "closed" || p.units_sold > 0)
     .map((p) => p.id);
-  const { data: closedFillsByPositionId, isLoading: closedFillsLoading } = useQuery({
-    queryKey: ["trades-export-fills", closedPositionIds],
+  const { data: exitedFillsByPositionId, isLoading: exitedFillsLoading } = useQuery({
+    queryKey: ["trades-export-fills", exitedPositionIds],
     queryFn: async () => {
-      const entries = await Promise.all(closedPositionIds.map(async (id) => [id, await listFills(id)] as const));
+      const entries = await Promise.all(exitedPositionIds.map(async (id) => [id, await listFills(id)] as const));
       return Object.fromEntries(entries) as Record<number, Fill[]>;
     },
-    enabled: showExport && closedPositionIds.length > 0,
+    enabled: showExport && exitedPositionIds.length > 0,
   });
-  const exportReady = !showExport || closedPositionIds.length === 0 || !closedFillsLoading;
+  const exportReady = !showExport || exitedPositionIds.length === 0 || !exitedFillsLoading;
 
   const positions = typeFilter === "spot" ? spotPositions : optionsPositions;
   const summary = typeFilter === "spot" ? spotSummary : optionsSummary;
@@ -131,7 +132,7 @@ export function TradesPage() {
             optionsPositions,
             spotSummary,
             optionsSummary,
-            closedFillsByPositionId ?? {},
+            exitedFillsByPositionId ?? {},
           )}
           onClose={() => setShowExport(false)}
         />

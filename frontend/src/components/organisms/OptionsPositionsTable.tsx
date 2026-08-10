@@ -74,6 +74,49 @@ function ClosedPositionRows({ p }: { p: Position }) {
   );
 }
 
+// One row per partial-exit fill (TP1, TP2, ...) on a still-open position, above the final
+// "remainder" row (current units/price/unrealized + the Exit/Cancel actions) -- same per-exit
+// breakdown as ClosedPositionRows, just for a position that isn't fully closed yet.
+function PartialExitRows({ p, fills }: { p: Position; fills: Fill[] }) {
+  const rows = exitBreakdown(fills);
+  if (!rows.length) return null;
+  return (
+    <>
+      {rows.map((row) => (
+        <tr key={row.fillId}>
+          <td>
+            <Link className="tk-link" to={`/trades/${p.id}`}>
+              {p.ticker}
+            </Link>
+          </td>
+          <td>
+            <span className="status-tag closed">{exitLabel(row.exitReason, row.tpIndex)}</span>
+          </td>
+          <td></td>
+          <td>{fmtUnits(row.units)}</td>
+          <td>—</td>
+          <td>—</td>
+          <td>{fmtMoney(row.exitValue)}</td>
+          <td>{fmtMoney(row.exitValue * row.units * 100)}</td>
+          <td>—</td>
+          <td>
+            <b className={plClass(row.realizedDollar)}>
+              {fmtMoney(row.realizedDollar)}
+              {row.realizedPct != null && (
+                <>
+                  <br />
+                  {fmtPct(row.realizedPct)}
+                </>
+              )}
+            </b>
+          </td>
+          <td></td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
 function PositionRow({
   p,
   onExit,
@@ -89,12 +132,11 @@ function PositionRow({
   const [exitReason, setExitReason] = useState<ExitReason>("tp");
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetched only when the Exit form is actually opened -- handleExit needs the position's last
-  // fill (strategy_key, opt_side/opt_type/strike/expiry_date -- required on every option fill).
+  // Always fetched (not just when the Exit form opens) -- PartialExitRows above needs the full
+  // fill history to render this position's TP breakdown, not just handleExit's last-fill lookup.
   const fillsQuery = useQuery({
     queryKey: ["position", p.id, "fills"],
     queryFn: () => listFills(p.id),
-    enabled: exitOpen,
   });
   const lastFill = fillsQuery.data?.[fillsQuery.data.length - 1];
 
@@ -145,6 +187,7 @@ function PositionRow({
 
   return (
     <>
+      {isOpen && p.units_sold > 0 && fillsQuery.data && <PartialExitRows p={p} fills={fillsQuery.data} />}
       <tr>
         <td>
           <Link className="tk-link" to={`/trades/${p.id}`}>
@@ -179,7 +222,6 @@ function PositionRow({
           )}
         </td>
         <td>
-          {isOpen && p.units_sold > 0 && <div className="partial-realized-label">{fmtUnits(p.units_sold)} units —</div>}
           <b className={plClass(p.realized_pnl)}>
             {fmtMoney(p.realized_pnl)}
             {p.realized_pnl_pct != null && (

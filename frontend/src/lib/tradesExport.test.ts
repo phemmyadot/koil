@@ -67,17 +67,23 @@ function makeSummary(overrides: Partial<PositionsSummary> = {}): PositionsSummar
 }
 
 describe("buildTradesExportMarkdown", () => {
-  it("marks an open position with a partial exit as partial-realized", () => {
+  it("shows a TP row plus the remainder row for an open position with a partial exit", () => {
+    const fills = [
+      makeFill({ id: 1, position_id: 1, kind: "entry", fill_date: "2026-01-01", price: 10, units: 10 }),
+      makeFill({ id: 2, position_id: 1, kind: "exit", fill_date: "2026-01-05", price: 15, units: 4, exit_reason: "tp" }),
+    ];
     const md = buildTradesExportMarkdown(
-      [makePosition({ ticker: "PWP", units_remaining: 6, units_sold: 4, avg_cost: 10, current_price: 15, realized_pnl: 20, realized_pnl_pct: 50 })],
+      [makePosition({ id: 1, ticker: "PWP", units_remaining: 6, units_sold: 4, avg_cost: 10, current_price: 15, realized_pnl: 20, realized_pnl_pct: 50 })],
       [],
       makeSummary({ open_count: 1 }),
       makeSummary(),
+      { 1: fills },
     );
-    expect(md).toContain("4 units — $20.00 / +50.0%");
+    expect(md).toContain("| PWP | TP 1 | 4 | — | — | — | $15.00 | $60.00 | — | — | $20.00 / +50.0% |");
+    expect(md).toContain("| PWP | — | 6 |");
   });
 
-  it("does not add a partial-exit prefix for a position with no exits yet", () => {
+  it("shows only the remainder row (no TP rows) for a position with no exits yet", () => {
     const md = buildTradesExportMarkdown(
       [makePosition({ ticker: "PWP", units_remaining: 1, units_sold: 0, avg_cost: 15, current_price: 17.06, realized_pnl: 0, realized_pnl_pct: null })],
       [],
@@ -85,7 +91,7 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary(),
     );
     expect(md).toContain("| $0.00 |");
-    expect(md).not.toContain("units —");
+    expect(md).not.toContain("| TP");
   });
 
   it("falls back to one aggregated row when a closed position's fills aren't loaded", () => {
@@ -126,7 +132,7 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary({ open_count: 1 }),
     );
     // premium = 200/100 = $2.00, total_cost = 200*1 = $200, current_total = 3*1*100 = $300, unrealized = 300 - 200 = $100 (+50%)
-    expect(md).toContain("| AAPL | Manual | 1 | $2.00 | $200.00 | $3.00 | $300.00 | $100.00 | +50.0% | — |");
+    expect(md).toContain("| AAPL | — | 1 | Manual | $2.00 | $200.00 | $3.00 | $300.00 | $100.00 | +50.0% | — | $0.00 |");
   });
 
   it("flags IV crush and IV spike in the options open table", () => {
@@ -150,7 +156,7 @@ describe("buildTradesExportMarkdown", () => {
       makeSummary({ open_count: 1 }),
       makeSummary(),
     );
-    expect(md).toContain("| PWP | VEXH | 10 |");
+    expect(md).toContain("| PWP | — | 10 | VEXH |");
   });
 
   it("shows the empty-state note when a section has no matching positions", () => {
