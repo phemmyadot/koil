@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ExitReason, Fill } from "../../api/types";
 import { stratLabel } from "../../constants/strategy";
-import { fmtMoney, fmtUnits } from "../../lib/format";
+import { exitLabel, fmtMoney, fmtUnits } from "../../lib/format";
 
 export interface FillsTableProps {
   fills: Fill[];
@@ -106,7 +106,7 @@ export function FillsTable({ fills, onEdit, onDelete }: FillsTableProps) {
                 </td>
                 <td>{fmtMoney(f.instrument === "option" ? (f.premium ?? 0) : (f.price ?? 0))}</td>
                 <td>{fmtUnits(f.units)}</td>
-                <td>{f.exit_reason ?? "—"}</td>
+                <td>{f.kind === "exit" ? exitLabel(f.exit_reason) : "—"}</td>
                 <td className="actions-cell">
                   <button type="button" className="small-btn tiny" onClick={() => setEditingId(editingId === f.id ? null : f.id)}>
                     Edit

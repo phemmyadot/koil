@@ -4,14 +4,7 @@
 import type { Fill, Position, PositionsSummary } from "../api/types";
 import { stratLabel } from "../constants/strategy";
 import { exitBreakdown } from "./pnlSeries";
-import { fmtMoney, fmtPct, fmtUnits } from "./format";
-
-const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Close", expired: "Expired" };
-
-function exitLabel(reason: string | null, tpIndex: number | null): string {
-  if (reason === "tp") return `TP ${tpIndex}`;
-  return reason ? (EXIT_LABELS[reason] ?? reason) : "Close";
-}
+import { exitLabel, fmtMoney, fmtPct, fmtUnits } from "./format";
 
 function summaryLine(label: string, summary: PositionsSummary | undefined): string {
   if (!summary) return `**${label}** — no data`;

@@ -3,17 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { listFills } from "../../api/positions";
 import type { ExitReason, Fill, Position } from "../../api/types";
-import { fmtMoney, fmtPct, fmtUnits, plClass } from "../../lib/format";
+import { exitLabel, fmtMoney, fmtPct, fmtUnits, plClass } from "../../lib/format";
 import { exitBreakdown } from "../../lib/pnlSeries";
 import { StrategyCellLink } from "../molecules/StrategyCellLink";
 import "./PositionsTable.css";
-
-const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Close", expired: "Expired" };
-
-function exitLabel(reason: string | null, tpIndex: number | null): string {
-  if (reason === "tp") return `TP ${tpIndex}`;
-  return reason ? (EXIT_LABELS[reason] ?? reason) : "Close";
-}
 
 export interface OptionsPositionsTableProps {
   positions: Position[];
