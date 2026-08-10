@@ -157,6 +157,7 @@
   font-weight: 600;
 }
 .analyzer-chat-role {
+  display: block;
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.03em;
