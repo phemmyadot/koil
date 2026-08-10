@@ -31,7 +31,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # _compute_one() is CPU-bound, unlike data.py's network-bound FETCH_WORKERS -- a high worker count isn't free here.
@@ -1579,9 +1579,8 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
 
     user_id is accepted (not yet threaded into db.list_positions, which has no user scoping
     today) purely so this function's signature is already correct for when multi-user auth lands
-    -- see DEFAULT_USER_ID's own docstring."""
-    del user_id  # not yet used -- db.list_positions has no user_id column to filter on today
-
+    -- see DEFAULT_USER_ID's own docstring. It IS used below to check which past dates already
+    have a generated daily_reviews row (recently_closed_uncovered_positions)."""
     with _compute_lock:
         computed_by_ticker = {p["ticker"]: p for p in _computed}
 
@@ -1747,35 +1746,72 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     today_start = today_iso_date + "T00:00:00"
     today_notifications = db.list_notifications_since(today_start)
 
-    realized_pnl_today = 0.0
-    closed_today_positions = []
-    for position in db.list_positions("closed"):
-        closed_at = position.get("closed_at")
-        if not closed_at or closed_at[:10] != today_iso_date:
-            continue
+    def _closed_position_snapshot(position: dict) -> dict:
+        """Same per-position shape closed_today_*_positions has always used -- factored out so
+        recently_closed_uncovered_* below can build identical objects for older closes."""
         state = _position_with_state(position)
-        realized_pnl_today += state["realized_pnl"]
-
         fills = db.list_fills(position["id"])
         exit_fill = fills[-1] if fills and fills[-1]["kind"] == "exit" else None
         state = {k: v for k, v in state.items() if k not in ("last_alert_tp_pct", "last_alert_stop_pct")}
-        closed_today_positions.append({
+        return {
             **state,
             "fills": _summarize_fills_for_review(fills),
             "exit_reason": exit_fill["exit_reason"] if exit_fill else None,
             "entry_strategy_key": fills[0]["strategy_key"] if fills else "manual",
-        })
+        }
+
+    all_closed = db.list_positions("closed")
+
+    realized_pnl_today = 0.0
+    closed_today_positions = []
+    for position in all_closed:
+        closed_at = position.get("closed_at")
+        if not closed_at or closed_at[:10] != today_iso_date:
+            continue
+        snapshot = _closed_position_snapshot(position)
+        realized_pnl_today += snapshot["realized_pnl"]
+        closed_today_positions.append(snapshot)
 
     closed_today_strategy = []
     closed_today_investment = []
     for p in closed_today_positions:
         (closed_today_investment if p.pop("entry_strategy_key") == "manual" else closed_today_strategy).append(p)
 
+    # Positions closed in the last few days (not today -- those are closed_today_* above)
+    # whose closing date has no daily_reviews row at all, i.e. no review was ever generated
+    # that day to cover them (a skipped review day, most commonly). Without this, an exit or TP
+    # from a missed day would never get mentioned by the chatbot at all. Checked against
+    # daily_reviews directly (not "did that day's summary_text mention this ticker," which would
+    # require fragile text search) -- if a review WAS generated that day, closed_today_* already
+    # covered it when it ran, so it's treated as discussed regardless of what the model actually
+    # said.
+    RECENTLY_CLOSED_LOOKBACK_DAYS = 3
+    uncovered_dates = set()
+    for days_back in range(1, RECENTLY_CLOSED_LOOKBACK_DAYS + 1):
+        check_date = (date.fromisoformat(today_iso_date) - timedelta(days=days_back)).isoformat()
+        if db.get_daily_review(DEFAULT_USER_ID, check_date) is None:
+            uncovered_dates.add(check_date)
+
+    recently_closed_uncovered_positions = []
+    if uncovered_dates:
+        for position in all_closed:
+            closed_at = position.get("closed_at")
+            if not closed_at or closed_at[:10] not in uncovered_dates:
+                continue
+            recently_closed_uncovered_positions.append(_closed_position_snapshot(position))
+
+    recently_closed_uncovered_strategy = []
+    recently_closed_uncovered_investment = []
+    for p in recently_closed_uncovered_positions:
+        (recently_closed_uncovered_investment if p.pop("entry_strategy_key") == "manual" else recently_closed_uncovered_strategy).append(p)
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "market_context": _build_market_context(),
         "closed_today_strategy_positions": closed_today_strategy,
         "closed_today_investment_positions": closed_today_investment,
+        "recently_closed_uncovered_strategy_positions": recently_closed_uncovered_strategy,
+        "recently_closed_uncovered_investment_positions": recently_closed_uncovered_investment,
         "strategy_positions": strategy_positions,
         "investment_positions": investment_positions,
         "pending_signals": pending_signals,

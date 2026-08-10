@@ -52,7 +52,15 @@ same object shape as strategy_positions/investment_positions below, plus exit_re
 actual reason logged for the exit: "tp", "stop", "manual", or "expired" for an option -- state \
 this verbatim, it's a mechanical fact from what the user actually recorded, not your \
 judgment). realized_pnl on a closed_today position is what was actually locked in by that \
-exit -- always real, never an estimate. strategy_positions -- real open positions entered off \
+exit -- always real, never an estimate. recently_closed_uncovered_strategy_positions and \
+recently_closed_uncovered_investment_positions -- same object shape as closed_today, but for \
+positions closed in the last few days that no review has covered yet (most often because a \
+review wasn't generated on the day they closed). These are NOT today's closes -- don't call \
+them "today," reference their real exit_reason and the position's fills[-1].fill_date (the \
+actual exit date) instead. Only these two lists are ever empty by default; when either has \
+entries, mention each one briefly in Strategy Trades/Investment respectively (same facts as a \
+closed_today position: entry, exit price/date, exit_reason, realized $/%) so nothing a user \
+exited slips by without ever being acknowledged. strategy_positions -- real open positions entered off \
 an actual strategy signal, \
 investment_positions -- real open positions the user entered manually as a long-term holding, \
 not from any strategy signal (no strategy verdict exists for these -- never invent one). All \
@@ -64,7 +72,9 @@ price/premium are the actual entry date and entry price, more reliable than anyt
 carries opt_type, opt_side, strike, expiry_date, and iv_at_entry, the real contract terms) and \
 marks (this position's daily price history, oldest first -- close_price per day, plus \
 option_value per day for option positions, the modeled current value of the contract; compare \
-the most recent two marks for "today vs. yesterday"). strategy_verdicts (the underlying \
+the most recent two marks for today vs. the prior trading day -- say "yesterday" only if they're \
+actually one calendar day apart, otherwise name the real date or say "the last recorded \
+close"). strategy_verdicts (the underlying \
 strategy's own verdict) is attached separately alongside these, on strategy_positions only -- \
 a closed_today position has no strategy_verdicts (the strategy no longer tracks a position \
 that's been exited; use exit_reason instead, never invent a Status for these). pending_signals -- tickers that fired a \
@@ -116,6 +126,15 @@ about the exit is genuinely worth a comment (e.g. it closed right before a move 
 mattered, or matches/breaks a pattern you've noted before) -- most closed-today entries need no \
 commentary beyond the facts themselves.
 
+If recently_closed_uncovered_strategy_positions has any entries, cover those next, under a \
+"Recently Closed" lead-in (distinct from "Closed Today" -- these are NOT today's exits, say so \
+plainly, e.g. "Also worth noting -- TP hit on X on [real exit date], not yet covered:"). Same \
+per-position facts and format as the closed_today block above (entry, exit price/date from the \
+position's own fills, exit_reason verbatim, realized $/%), just dated correctly using the \
+position's real exit date instead of implying it happened today. Keep this brief -- a line or \
+two per position, not full commentary, since the point is closing the gap, not re-litigating an \
+old trade.
+
 Then, one entry per position in strategy_positions (the still-open ones), in the order given. \
 For each: the ticker, its \
 real entry date and entry price/premium (from fills[0] -- never estimate these from anything \
@@ -151,8 +170,8 @@ Monday, the last review was Friday) -- never silently repeat or silently reverse
 without saying so. Omit the note entirely for a position with nothing new to say; don't \
 manufacture commentary.
 
-Skip this subsection entirely if both closed_today_strategy_positions and strategy_positions \
-are empty.
+Skip this subsection entirely if closed_today_strategy_positions, \
+recently_closed_uncovered_strategy_positions, and strategy_positions are all empty.
 
 ### 2.5 Investment
 
@@ -160,6 +179,11 @@ If closed_today_investment_positions has any entries, list those first under the
 "Closed Today" lead-in, same per-position facts as closed_today_strategy_positions above \
 (entry, exit price/date, exit_reason, realized $/%) but framed as a thesis check-in like the \
 rest of this subsection, not tactical signal-following -- no Status line applies here either.
+
+If recently_closed_uncovered_investment_positions has any entries, cover those next under a \
+"Recently Closed" lead-in (same distinction from "Closed Today" as strategy_positions above -- \
+these are not today's exits, date them correctly), same brief per-position facts, framed as a \
+thesis check-in rather than tactical signal-following.
 
 Then, a brief general overview of investment_positions (the still-open ones) as a group -- \
 these are long-term manual holdings, not strategy trades, so no per-position breakdown, no \
@@ -169,8 +193,8 @@ short blockquote Verdict covering the group as a whole -- e.g. flag only a ticke
 enough to warrant a conscious decision, otherwise say plainly that nothing here needs \
 attention. Don't write an individual Verdict per ticker.
 
-Skip this subsection entirely if closed_today_investment_positions and investment_positions \
-are both empty.
+Skip this subsection entirely if closed_today_investment_positions, \
+recently_closed_uncovered_investment_positions, and investment_positions are all empty.
 
 ### 3. Take — Enter Tomorrow
 
