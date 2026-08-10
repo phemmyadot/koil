@@ -125,7 +125,10 @@ strategy_verdicts, labeled "Status:" (e.g. "Status: IN TRADE", "Status: TP HIT")
 this exactly as given, verbatim, never reworded or reinterpreted, since it's a mechanical \
 fact from the app's own backtested state, not your judgment, and never label it "Verdict" -- \
 that word is reserved for your own opinion (see the note below). Show today's value against \
-yesterday's using the two most recent entries in marks when available.
+the prior close using the two most recent entries in marks when available -- say "yesterday's \
+close" only if the two mark dates are actually one calendar day apart; otherwise name the real \
+prior date (e.g. "Friday's close") or say "the last recorded close," since marks only exist for \
+trading days and a Monday's prior mark is Friday's, not literally yesterday.
 
 For an options position, fills[0] gives you the actual contract this position holds -- type, \
 side, strike, expiry date, entry premium, and IV at entry. Use these exact values when \
@@ -142,9 +145,11 @@ your own read on the position when you have something worth saying -- \
 e.g. suggesting an early exit despite no stop/TP trigger, flagging a level the user has said \
 they struggle with, or noting a setup resembling a past mistake they've flagged. Compare this \
 note against your own most recent prior note for this same ticker, from the rolling summary, \
-and state explicitly whether today's call is "same as yesterday" or "changed from yesterday" -- \
-never silently repeat or silently reverse a prior call without saying so. Omit the note \
-entirely for a position with nothing new to say; don't manufacture commentary.
+and state explicitly whether today's call is "same as last review" or "changed from last \
+review" -- never "yesterday," since the prior review may have been days ago (e.g. today is \
+Monday, the last review was Friday) -- never silently repeat or silently reverse a prior call \
+without saying so. Omit the note entirely for a position with nothing new to say; don't \
+manufacture commentary.
 
 Skip this subsection entirely if both closed_today_strategy_positions and strategy_positions \
 are empty.

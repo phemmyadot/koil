@@ -80,11 +80,11 @@ Status: **{{strategy_verdict}}** *(mechanical, from the strategy's own signal �
 "Verdict"; that word is reserved for Claude's own opinion below)*
 
 {{#if verdict}}
-> **Verdict:** {{verdict}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
+> **Verdict:** {{verdict}} {{#if decision_changed}}*(changed from last review)*{{else}}*(same as last review)*{{/if}}
 <!-- Claude's own judgment, e.g. "consider exiting early — momentum stalling despite
      still being under TP." Always shown separately from the Status above, never
      replacing it. Omitted when Claude has nothing notable to add.
-     "same/changed from yesterday" is Claude comparing against its own prior Verdict for
+     "same/changed from last review" is Claude comparing against its own prior Verdict for
      this ticker, read from review_memory_summary (see below) — not a new field, a
      prompting requirement on the existing rolling memory. -->
 {{/if}}
@@ -124,10 +124,10 @@ Realized: **{{realized_pnl}}** ({{realized_pnl_pct}}%)
 | Unrealized | {{unrealized_pct}}% | {{prior_day.unrealized_pct}}% |
 
 {{#if verdict}}
-> **Verdict:** {{verdict}} {{#if decision_changed}}*(changed from yesterday)*{{else}}*(same as yesterday)*{{/if}}
+> **Verdict:** {{verdict}} {{#if decision_changed}}*(changed from last review)*{{else}}*(same as last review)*{{/if}}
 <!-- Reads as a long-term thesis check-in, not tactical signal-following -- no Status
      line above it since none applies to a manual holding. Same same/changed-from-
-     yesterday continuity as Strategy Trades. -->
+     last-review continuity as Strategy Trades. -->
 {{/if}}
 
 ---
@@ -204,7 +204,9 @@ above. No stats, no multi-sentence justification — this section is a scan, not
   `strategy_positions` and `investment_positions` by each position's entry fill's `strategy_key`
   (`"manual"` → Investment, anything else → Strategy Trades — read directly off the fills
   already fetched per position, no new query). Both carry the same `prior_day` field (from
-  `db.get_trade_daily_marks(position_id)`, yesterday's `close_price` diffed against today's).
+  `db.get_trade_daily_marks(position_id)`, the prior trading day's `close_price` diffed against
+  today's -- not literally "yesterday": marks only exist for trading days, so on a Monday the
+  prior mark is Friday's).
   `strategy_verdict` only applies to Strategy Trades, shown as "Status" (mechanical, unchanged);
   Claude's own opinion, shown as "Verdict," is generated text either way, not stored input.
 - **Closed Today (Strategy / Investment)**: `build_daily_snapshot()` separately loops
