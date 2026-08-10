@@ -1,6 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { buildTradesExportMarkdown } from "./tradesExport";
-import type { Position, PositionsSummary } from "../api/types";
+import type { Fill, Position, PositionsSummary } from "../api/types";
+
+function makeFill(overrides: Partial<Fill> = {}): Fill {
+  return {
+    id: 1,
+    position_id: 1,
+    strategy_key: "manual",
+    signal_date: "2026-01-01",
+    kind: "entry",
+    fill_date: "2026-01-01",
+    price: 10,
+    units: 5,
+    instrument: "spot",
+    exit_reason: null,
+    opt_side: null,
+    opt_type: null,
+    strike: null,
+    premium: null,
+    expiry_date: null,
+    iv_at_entry: null,
+    notes: null,
+    created_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
 
 function makePosition(overrides: Partial<Position> = {}): Position {
   return {
@@ -64,14 +88,34 @@ describe("buildTradesExportMarkdown", () => {
     expect(md).not.toContain("units —");
   });
 
-  it("shows full realized $/% for a closed position (not partial-labeled)", () => {
+  it("falls back to one aggregated row when a closed position's fills aren't loaded", () => {
     const md = buildTradesExportMarkdown(
-      [makePosition({ ticker: "PWP", status: "closed", units_remaining: 0, units_sold: 4, avg_cost: 17.965, realized_pnl: 16.14, realized_pnl_pct: 22.46 })],
+      [makePosition({ id: 8, ticker: "PWP", status: "closed", units_remaining: 0, units_sold: 4, avg_cost: 17.965, realized_pnl: 16.14, realized_pnl_pct: 22.46 })],
       [],
       makeSummary({ closed_count: 1 }),
       makeSummary(),
+      // no fills passed for position id 8 -- closedTable's defensive fallback path
     );
-    expect(md).toContain("| PWP | 4 | $17.96 | $16.14 | +22.5% |");
+    expect(md).toContain("| PWP | — | 4 | — | $16.14 | +22.5% |");
+  });
+
+  it("shows one row per exit fill (TP1, TP2, final close) for a closed position", () => {
+    const fills = [
+      makeFill({ id: 1, position_id: 8, kind: "entry", fill_date: "2026-01-01", price: 10, units: 5 }),
+      makeFill({ id: 2, position_id: 8, kind: "exit", fill_date: "2026-01-05", price: 12, units: 2, exit_reason: "tp" }),
+      makeFill({ id: 3, position_id: 8, kind: "exit", fill_date: "2026-01-10", price: 14, units: 2, exit_reason: "tp" }),
+      makeFill({ id: 4, position_id: 8, kind: "exit", fill_date: "2026-01-15", price: 13, units: 1, exit_reason: "manual" }),
+    ];
+    const md = buildTradesExportMarkdown(
+      [makePosition({ id: 8, ticker: "PWP", status: "closed", units_remaining: 0, units_sold: 5 })],
+      [],
+      makeSummary({ closed_count: 1 }),
+      makeSummary(),
+      { 8: fills },
+    );
+    expect(md).toContain("| PWP | TP 1 | 2 | $12.00 | $4.00 | +20.0% |");
+    expect(md).toContain("| PWP | TP 2 | 2 | $14.00 | $8.00 | +40.0% |");
+    expect(md).toContain("| PWP | Manual | 1 | $13.00 | $3.00 | +30.0% |");
   });
 
   it("scales an option position's current/unrealized totals by the 100x contract multiplier", () => {

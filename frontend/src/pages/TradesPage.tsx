@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePositions, usePositionsSummary, usePnlSeries } from "../hooks/usePositions";
-import { addFill, cancelPosition } from "../api/positions";
+import { addFill, cancelPosition, listFills } from "../api/positions";
 import type { ExitReason, Fill, PositionsSummary } from "../api/types";
 import { StatBox } from "../components/atoms/StatBox";
 import { SpotPositionsTable } from "../components/organisms/SpotPositionsTable";
@@ -52,6 +52,21 @@ export function TradesPage() {
   const [typeFilter, setTypeFilter] = useState<"spot" | "options">("spot");
   const [statusFilter, setStatusFilter] = useState<"" | "open" | "closed">("open");
   const [showExport, setShowExport] = useState(false);
+
+  // Only fetched once the export modal is actually opened -- the export's per-exit breakdown
+  // needs each closed position's fills, which the tables/summary above don't otherwise load.
+  const closedPositionIds = [...(spotPositions ?? []), ...(optionsPositions ?? [])]
+    .filter((p) => p.status === "closed")
+    .map((p) => p.id);
+  const { data: closedFillsByPositionId, isLoading: closedFillsLoading } = useQuery({
+    queryKey: ["trades-export-fills", closedPositionIds],
+    queryFn: async () => {
+      const entries = await Promise.all(closedPositionIds.map(async (id) => [id, await listFills(id)] as const));
+      return Object.fromEntries(entries) as Record<number, Fill[]>;
+    },
+    enabled: showExport && closedPositionIds.length > 0,
+  });
+  const exportReady = !showExport || closedPositionIds.length === 0 || !closedFillsLoading;
 
   const positions = typeFilter === "spot" ? spotPositions : optionsPositions;
   const summary = typeFilter === "spot" ? spotSummary : optionsSummary;
@@ -109,12 +124,20 @@ export function TradesPage() {
         </button>
       </div>
 
-      {showExport && (
+      {showExport && (exportReady ? (
         <TradesExportModal
-          markdown={buildTradesExportMarkdown(spotPositions, optionsPositions, spotSummary, optionsSummary)}
+          markdown={buildTradesExportMarkdown(
+            spotPositions,
+            optionsPositions,
+            spotSummary,
+            optionsSummary,
+            closedFillsByPositionId ?? {},
+          )}
           onClose={() => setShowExport(false)}
         />
-      )}
+      ) : (
+        <p className="empty">Preparing export…</p>
+      ))}
 
       <div className="trades-tabs">
         <button

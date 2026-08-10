@@ -1,8 +1,17 @@
 // Builds the copiable Markdown trades export -- see TradesPage's Export modal. Pure function
-// over already-fetched data (no new requests), so it can run entirely client-side.
-import type { Position, PositionsSummary } from "../api/types";
+// over already-fetched data (closedFillsByPositionId is fetched once, lazily, when the export
+// modal opens -- see TradesPage.tsx), no requests made from inside this file.
+import type { Fill, Position, PositionsSummary } from "../api/types";
 import { stratLabel } from "../constants/strategy";
+import { exitBreakdown } from "./pnlSeries";
 import { fmtMoney, fmtPct, fmtUnits } from "./format";
+
+const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Manual", expired: "Expired" };
+
+function exitLabel(reason: string | null, tpIndex: number | null): string {
+  if (reason === "tp") return `TP ${tpIndex}`;
+  return reason ? (EXIT_LABELS[reason] ?? reason) : "Close";
+}
 
 function summaryLine(label: string, summary: PositionsSummary | undefined): string {
   if (!summary) return `**${label}** — no data`;
@@ -63,19 +72,31 @@ function openTable(positions: Position[], instrument: "spot" | "option"): string
   return [header, ...lines].join("\n");
 }
 
-function closedTable(positions: Position[], instrument: "spot" | "option"): string {
-  const rows = positions.filter((p) => p.status === "closed" && p.instrument === instrument);
-  const multiplier = instrument === "option" ? 100 : 1;
-  if (!rows.length) return "*No closed positions.*";
+// One row per exit fill (TP1, TP2, ..., the final close), matching the live tables' own
+// ClosedPositionRows -- a position without fills loaded yet (shouldn't happen once
+// closedFillsByPositionId has settled, but stay defensive) falls back to one aggregated row
+// using the position's own totals, same shape the export used before this per-exit breakdown.
+function closedTable(positions: Position[], instrument: "spot" | "option", fillsByPositionId: Record<number, Fill[]>): string {
+  const positionsForInstrument = positions.filter((p) => p.status === "closed" && p.instrument === instrument);
+  if (!positionsForInstrument.length) return "*No closed positions.*";
   const header =
-    `| Ticker | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Realized $ | Realized % |\n` + `|---|---|---|---|---|`;
-  const lines = rows.map((p) => {
-    const perShareCost = instrument === "option" && p.avg_cost != null ? p.avg_cost / multiplier : p.avg_cost;
-    return (
-      `| ${p.ticker} | ${fmtUnits(p.units_sold)} | ${perShareCost != null ? fmtMoney(perShareCost) : "—"} | ` +
-      `${fmtMoney(p.realized_pnl)} | ${p.realized_pnl_pct != null ? fmtPct(p.realized_pnl_pct) : "—"} |`
-    );
-  });
+    `| Ticker | Exit | Units | ${instrument === "spot" ? "Avg Cost" : "Premium"} | Realized $ | Realized % |\n` + `|---|---|---|---|---|---|`;
+  const lines: string[] = [];
+  for (const p of positionsForInstrument) {
+    const fills = fillsByPositionId[p.id];
+    if (!fills) {
+      lines.push(
+        `| ${p.ticker} | — | ${fmtUnits(p.units_sold)} | — | ${fmtMoney(p.realized_pnl)} | ${p.realized_pnl_pct != null ? fmtPct(p.realized_pnl_pct) : "—"} |`,
+      );
+      continue;
+    }
+    for (const row of exitBreakdown(fills)) {
+      lines.push(
+        `| ${p.ticker} | ${exitLabel(row.exitReason, row.tpIndex)} | ${fmtUnits(row.units)} | ${fmtMoney(row.exitValue)} | ` +
+          `${fmtMoney(row.realizedDollar)} | ${row.realizedPct != null ? fmtPct(row.realizedPct) : "—"} |`,
+      );
+    }
+  }
   return [header, ...lines].join("\n");
 }
 
@@ -84,6 +105,7 @@ export function buildTradesExportMarkdown(
   optionsPositions: Position[] | undefined,
   spotSummary: PositionsSummary | undefined,
   optionsSummary: PositionsSummary | undefined,
+  closedFillsByPositionId: Record<number, Fill[]> = {},
 ): string {
   const spot = spotPositions ?? [];
   const options = optionsPositions ?? [];
@@ -104,7 +126,7 @@ export function buildTradesExportMarkdown(
     "",
     "## Spot — Closed",
     "",
-    closedTable(spot, "spot"),
+    closedTable(spot, "spot", closedFillsByPositionId),
     "",
     "## Options — Open",
     "",
@@ -112,7 +134,7 @@ export function buildTradesExportMarkdown(
     "",
     "## Options — Closed",
     "",
-    closedTable(options, "option"),
+    closedTable(options, "option", closedFillsByPositionId),
     "",
   ].join("\n");
 }

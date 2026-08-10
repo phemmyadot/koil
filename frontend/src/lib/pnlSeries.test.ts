@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePnlSeries, positionDollarUnrealized, replayAsOf } from "./pnlSeries";
+import { computePnlSeries, exitBreakdown, positionDollarUnrealized, replayAsOf } from "./pnlSeries";
 import type { DailyMark, Fill, Position } from "../api/types";
 
 function makeFill(overrides: Partial<Fill> = {}): Fill {
@@ -92,6 +92,56 @@ describe("replayAsOf", () => {
     // avgCost is cost/units where cost already includes the 100x multiplier -- $5 premium,
     // 2 contracts -> $1000 total cost / 2 units = $500 "avg cost" in this internal unit.
     expect(state.avgCost).toBe(500);
+  });
+
+  it("scales an option exit's realized P&L by the 100x contract multiplier", () => {
+    // 2 contracts entered @ $2.80 premium, 1 exited @ $4.20 -- real P&L is
+    // (4.20 - 2.80) * 100 = $140, not $1.40 (the bug this test guards against: comparing a
+    // raw per-share exit premium against the already-scaled avgCost with no rescale).
+    const fills = [
+      makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", premium: 2.8, units: 2, instrument: "option" }),
+      makeFill({ id: 2, kind: "exit", fill_date: "2026-01-05", premium: 4.2, units: 1, instrument: "option" }),
+    ];
+    const state = replayAsOf(fills, "2026-01-10");
+    expect(state.realized).toBeCloseTo(140, 5);
+    expect(state.avgCost).toBe(280); // unchanged -- weighted-average cost doesn't move on a partial exit
+    expect(state.units).toBe(1);
+  });
+});
+
+describe("exitBreakdown", () => {
+  it("returns one row per exit fill, oldest first, with TP exits numbered in order", () => {
+    // 5 units entered @ $10; TP1 sells 2 @ $12, TP2 sells 2 @ $14, final Close sells the last 1 @ $13.
+    const fills = [
+      makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", price: 10, units: 5 }),
+      makeFill({ id: 2, kind: "exit", fill_date: "2026-01-05", price: 12, units: 2, exit_reason: "tp" }),
+      makeFill({ id: 3, kind: "exit", fill_date: "2026-01-10", price: 14, units: 2, exit_reason: "tp" }),
+      makeFill({ id: 4, kind: "exit", fill_date: "2026-01-15", price: 13, units: 1, exit_reason: "manual" }),
+    ];
+    const rows = exitBreakdown(fills);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ fillId: 2, units: 2, exitValue: 12, tpIndex: 1, exitReason: "tp" });
+    expect(rows[0].realizedDollar).toBeCloseTo((12 - 10) * 2, 5);
+    expect(rows[1]).toMatchObject({ fillId: 3, units: 2, exitValue: 14, tpIndex: 2, exitReason: "tp" });
+    expect(rows[1].realizedDollar).toBeCloseTo((14 - 10) * 2, 5);
+    expect(rows[2]).toMatchObject({ fillId: 4, units: 1, exitValue: 13, tpIndex: null, exitReason: "manual" });
+    expect(rows[2].realizedDollar).toBeCloseTo((13 - 10) * 1, 5);
+  });
+
+  it("scales an option exit's realized $ by the 100x contract multiplier", () => {
+    const fills = [
+      makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", premium: 2.8, units: 2, instrument: "option" }),
+      makeFill({ id: 2, kind: "exit", fill_date: "2026-01-05", premium: 4.2, units: 1, instrument: "option", exit_reason: "tp" }),
+    ];
+    const rows = exitBreakdown(fills);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].realizedDollar).toBeCloseTo(140, 5);
+    expect(rows[0].realizedPct).toBeCloseTo(50, 5); // (140 / (280*1)) * 100
+  });
+
+  it("returns no rows for a still-open position with only an entry fill", () => {
+    const fills = [makeFill({ id: 1, kind: "entry", fill_date: "2026-01-01", price: 10, units: 5 })];
+    expect(exitBreakdown(fills)).toEqual([]);
   });
 });
 

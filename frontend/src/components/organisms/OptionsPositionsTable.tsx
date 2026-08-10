@@ -4,13 +4,81 @@ import { Link } from "react-router-dom";
 import { listFills } from "../../api/positions";
 import type { ExitReason, Fill, Position } from "../../api/types";
 import { fmtMoney, fmtPct, fmtUnits, plClass } from "../../lib/format";
+import { exitBreakdown } from "../../lib/pnlSeries";
 import { StrategyCellLink } from "../molecules/StrategyCellLink";
 import "./PositionsTable.css";
+
+const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "Manual", expired: "Expired" };
+
+function exitLabel(reason: string | null, tpIndex: number | null): string {
+  if (reason === "tp") return `TP ${tpIndex}`;
+  return reason ? (EXIT_LABELS[reason] ?? reason) : "Close";
+}
 
 export interface OptionsPositionsTableProps {
   positions: Position[];
   onExit: (positionId: number, lastFill: Fill, premium: number, units: number, exitReason: ExitReason) => Promise<void>;
   onCancel: (positionId: number) => Promise<void>;
+}
+
+// One row per exit fill (TP1, TP2, ..., the final close) instead of one aggregated row -- see
+// SpotPositionsTable's own ClosedPositionRows for the same pattern.
+function ClosedPositionRows({ p }: { p: Position }) {
+  const { data: fills, isLoading } = useQuery({
+    queryKey: ["position", p.id, "fills"],
+    queryFn: () => listFills(p.id),
+  });
+
+  if (isLoading || !fills) {
+    return (
+      <tr>
+        <td>
+          <Link className="tk-link" to={`/trades/${p.id}`}>
+            {p.ticker}
+          </Link>
+        </td>
+        <td colSpan={9}>Loading…</td>
+      </tr>
+    );
+  }
+
+  const premium = p.avg_cost != null ? p.avg_cost / 100 : null;
+  const rows = exitBreakdown(fills);
+  return (
+    <>
+      {rows.map((row) => (
+        <tr key={row.fillId}>
+          <td>
+            <Link className="tk-link" to={`/trades/${p.id}`}>
+              {p.ticker}
+            </Link>
+          </td>
+          <td>
+            <span className="status-tag closed">{exitLabel(row.exitReason, row.tpIndex)}</span>
+          </td>
+          <td></td>
+          <td>{fmtUnits(row.units)}</td>
+          <td>{premium != null ? fmtMoney(premium) : "—"}</td>
+          <td>{p.avg_cost != null ? fmtMoney(p.avg_cost * row.units) : "—"}</td>
+          <td>{fmtMoney(row.exitValue)}</td>
+          <td>{fmtMoney(row.exitValue * row.units * 100)}</td>
+          <td>—</td>
+          <td>
+            <b className={plClass(row.realizedDollar)}>
+              {fmtMoney(row.realizedDollar)}
+              {row.realizedPct != null && (
+                <>
+                  <br />
+                  {fmtPct(row.realizedPct)}
+                </>
+              )}
+            </b>
+          </td>
+          <td></td>
+        </tr>
+      ))}
+    </>
+  );
 }
 
 function PositionRow({
@@ -195,9 +263,9 @@ export function OptionsPositionsTable({ positions, onExit, onCancel }: OptionsPo
           </tr>
         </thead>
         <tbody>
-          {positions.map((p) => (
-            <PositionRow key={p.id} p={p} onExit={onExit} onCancel={onCancel} />
-          ))}
+          {positions.map((p) =>
+            p.status === "closed" ? <ClosedPositionRows key={p.id} p={p} /> : <PositionRow key={p.id} p={p} onExit={onExit} onCancel={onCancel} />,
+          )}
         </tbody>
       </table>
     </div>
