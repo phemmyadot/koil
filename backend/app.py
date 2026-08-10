@@ -206,43 +206,23 @@ def _fire_score_alert(ticker: str, strat_key: str, prior_payload: dict | None, n
     verdict. prior_payload/new_payload are the TICKER-level payloads (setup_score is a per-ticker
     dict keyed by strategy, not part of the per-strategy payload) -- fires once per ticker+strategy
     on the crossing, not every cycle it stays >=9, no separate dedup column needed since
-    prior_payload's own setup_score already carries last cycle's value for the comparison."""
-    if new_payload is None:
+    prior_payload's own setup_score already carries last cycle's value for the comparison.
+
+    prior_payload is None the first time a ticker is EVER computed (cold start, first deploy,
+    cache miss) -- requires a REAL prior score to compare against, or every ticker already
+    scoring >=9 on its first compute would fire a false "just crossed the threshold" alert."""
+    if new_payload is None or prior_payload is None:
         return
     new_score = new_payload.get("setup_score", {}).get(strat_key)
     if new_score is None or new_score < SCORE_ALERT_THRESHOLD:
         return
-    prior_score = (prior_payload or {}).get("setup_score", {}).get(strat_key)
-    if prior_score is not None and prior_score >= SCORE_ALERT_THRESHOLD:
+    prior_score = prior_payload.get("setup_score", {}).get(strat_key)
+    if prior_score is None or prior_score >= SCORE_ALERT_THRESHOLD:
         return
     label = _STRATEGY_LABELS.get(strat_key, strat_key)
     message = f"{ticker} — {label} setup score reached {new_score}/10 — top setup in universe"
     db.insert_notification(None, "score_high", float(new_score), message, now_iso)
     push_payload = json.dumps({"title": f"🟡 {ticker} — {label} score {new_score}", "body": message, "ticker": ticker})
-    push.send_push_to_all(push_payload, now_iso)
-
-
-PHASE_ALERT_STATES = {"PRE-BREAKOUT": "🟡", "BREAKOUT": "🔴"}
-
-
-def _fire_phase_alert(ticker: str, prior_prebreak: dict | None, new_prebreak: dict | None, now_iso: str) -> None:
-    """Phase upgrades to PRE-BREAKOUT (🟡, "setup loading") or BREAKOUT (🔴, "confirmed, entry
-    tomorrow") -- prior-vs-new state diff, same shape as _fire_strategy_state_alert. Ticker-level
-    (prebreak overlays all strategies, not one), no quality-bar gate (unlike strategy-state
-    alerts) since this isn't tied to any one strategy's own backtest track record."""
-    if new_prebreak is None:
-        return
-    prior_state = (prior_prebreak or {}).get("state")
-    new_state = new_prebreak.get("state")
-    if new_state not in PHASE_ALERT_STATES or new_state == prior_state:
-        return
-    emoji = PHASE_ALERT_STATES[new_state]
-    if new_state == "BREAKOUT":
-        message = f"{ticker} — BREAKOUT confirmed, entry tomorrow"
-    else:
-        message = f"{ticker} — setup loading (PRE-BREAKOUT), alert set"
-    db.insert_notification(None, "phase_upgrade", None, message, now_iso)
-    push_payload = json.dumps({"title": f"{emoji} {ticker} — {new_state}", "body": message, "ticker": ticker})
     push.send_push_to_all(push_payload, now_iso)
 
 
@@ -445,10 +425,6 @@ def compute_all(force: bool = False) -> None:
                                 _fire_score_alert(tk, strat_key, prior_payload, payload, _computed_asof)
                             except Exception as e:  # noqa: BLE001
                                 print(f"app: score alert failed for {tk}/{strat_key} ({e}).")
-                        try:
-                            _fire_phase_alert(tk, (prior_payload or {}).get("prebreak"), payload.get("prebreak"), _computed_asof)
-                        except Exception as e:  # noqa: BLE001
-                            print(f"app: phase alert failed for {tk} ({e}).")
         finally:
             with _compute_lock:
                 _compute_progress = None
