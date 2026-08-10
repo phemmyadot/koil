@@ -72,7 +72,6 @@ import backend.pdf_export as pdf_export
 import backend.push as push
 import backend.quality_filter as quality_filter
 import backend.review_claude as review_claude
-import backend.review_gating as review_gating
 import backend.review_ingest as review_ingest
 import backend.review_stream as review_stream
 import backend.support_resistance as support_resistance
@@ -2277,9 +2276,7 @@ def review_status():
             "chat_open": True,
         }
     return {
-        # No longer gated on "only one active review at a time" -- the user can start a new
-        # review any time today's data is ready, even with an older one still open below.
-        "can_start": review_gating.review_available_to_start(now),
+        "can_start": True,
         "active_review": active_out,
     }
 
@@ -2288,8 +2285,6 @@ def review_status():
 def review_trigger_daily():
     _require_daily_review_enabled()
     now = datetime.now(timezone.utc)
-    if not review_gating.review_available_to_start(now):
-        raise HTTPException(status_code=400, detail="review is not available to start right now")
 
     review_date = market_hours.most_recent_close_boundary(now).date().isoformat()
     existing = db.get_daily_review(DEFAULT_USER_ID, review_date)

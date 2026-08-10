@@ -181,18 +181,11 @@ function TriggerCard({
   pending: boolean;
   error: unknown;
 }) {
-  const canStart = !!status?.can_start;
   const activeReviewDate = status?.active_review?.review_date ?? null;
   return (
     <div className="analyzer-trigger-card">
-      <p>
-        {canStart
-          ? "Today's closing data is in. Start your review."
-          : activeReviewDate
-            ? `Viewing ${activeReviewDate}'s review below. Today's review becomes available once the market has closed and today's data is final.`
-            : "The review button is available once the market has closed and today's data is final (weekdays, after close)."}
-      </p>
-      <button type="button" className="small-btn analyzer-trigger-btn" disabled={!canStart || pending} onClick={onTrigger}>
+      <p>{activeReviewDate ? `Viewing ${activeReviewDate}'s review below. Start a new one whenever you'd like.` : "Start your review."}</p>
+      <button type="button" className="small-btn analyzer-trigger-btn" disabled={pending} onClick={onTrigger}>
         {pending ? "Generating review…" : "Start today's review"}
       </button>
       {pending && (
