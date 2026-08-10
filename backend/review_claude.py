@@ -48,28 +48,44 @@ close and change %, already fetched by the app -- not something you need to look
 closed_today_strategy_positions and closed_today_investment_positions -- positions the user \
 fully or partially exited TODAY (a real TP hit, stop, or manual exit that already happened, \
 not a still-open position), same split (real strategy signal vs. manual long-term holding) and \
-same object shape as strategy_positions/investment_positions below, plus exit_reason (the \
-actual reason logged for the exit: "tp", "stop", "manual", or "expired" for an option -- state \
-this verbatim, it's a mechanical fact from what the user actually recorded, not your \
-judgment). realized_pnl on a closed_today position is what was actually locked in by that \
-exit -- always real, never an estimate. recently_closed_uncovered_strategy_positions and \
-recently_closed_uncovered_investment_positions -- same object shape as closed_today, but for \
-positions closed in the last few days that no review has covered yet (most often because a \
-review wasn't generated on the day they closed). These are NOT today's closes -- don't call \
-them "today," reference their real exit_reason and the position's fills[-1].fill_date (the \
-actual exit date) instead. Only these two lists are ever empty by default; when either has \
-entries, mention each one briefly in Strategy Trades/Investment respectively (same facts as a \
-closed_today position: entry, exit price/date, exit_reason, realized $/%) so nothing a user \
-exited slips by without ever being acknowledged. strategy_positions -- real open positions entered off \
+same object shape as strategy_positions/investment_positions below. These carry EVERY fill on \
+the position (entry plus every exit, oldest first), not just the entry and one exit -- a \
+position can have MULTIPLE exit fills (e.g. two separate TPs, then a final smaller manual \
+cleanup), each with its own fill_date, price/premium, units, and exit_reason. Walk through each \
+exit fill in order when describing what happened -- do NOT assume there's only one exit or that \
+the top-level exit_reason field describes the whole position; that field is only the LAST exit's \
+reason, kept for convenience on a single-exit position, but a multi-exit position's real story \
+is in fills, not that one field. State each exit's units, price/premium, and exit_reason \
+verbatim ("TP", "Stop", "Manual", or "Expired" -- capitalize for readability but don't \
+reinterpret which one it was) -- these are mechanical facts from what the user actually \
+recorded, not your judgment. Every date you state for an exit MUST come from that specific \
+exit fill's own fill_date in fills, never from closed_at (also present on the position object) \
+-- closed_at is when the position's status flipped in the database, which can lag the real last \
+exit's fill_date, and is never the right date for an EARLIER partial exit either. realized_pnl \
+on a closed_today position is the position's TOTAL realized P&L across all its exits combined \
+-- always real, never an estimate. \
+recently_closed_uncovered_strategy_positions and recently_closed_uncovered_investment_positions \
+-- same object shape as closed_today (same all-fills rule applies), but for positions closed in \
+the last few days that no review has covered yet (most often because a review wasn't generated \
+on the day they closed). These are NOT today's closes -- don't call them "today," reference \
+each exit's own real fill_date instead (the position's LAST exit's fill_date is when it fully \
+closed, but earlier partial exits happened on their own earlier dates -- state each correctly, \
+never collapse multiple exits into one date). Only these two lists are ever empty by default; \
+when either has entries, walk through each position's exits briefly in Strategy \
+Trades/Investment respectively so nothing a user exited slips by without ever being \
+acknowledged. strategy_positions -- real open positions entered off \
 an actual strategy signal, \
 investment_positions -- real open positions the user entered manually as a long-term holding, \
 not from any strategy signal (no strategy verdict exists for these -- never invent one). All \
 four lists share the same object shape the app's own Trades page uses: ticker, tp_price, \
-stop_price, avg_cost, units_remaining, instrument (spot/option), realized_pnl, plus fills (every \
-fill on this position, oldest first -- fills[0] is the real entry: its fill_date and \
-price/premium are the actual entry date and entry price, more reliable than anything else for \
-"how long has this been held" or "what was it entered at" -- and for options, fills[0] also \
-carries opt_type, opt_side, strike, expiry_date, and iv_at_entry, the real contract terms) and \
+stop_price, avg_cost, units_remaining, instrument (spot/option), realized_pnl, plus fills and \
+marks. fills is oldest first; for strategy_positions/investment_positions (still open) it's \
+TRIMMED to just fills[0] (the real entry) plus the most recent fill if different -- for the two \
+closed_today_*/recently_closed_uncovered_* lists above, fills is instead the COMPLETE list, see \
+the multi-exit instructions above. Either way, fills[0] is always the real entry: its fill_date \
+and price/premium are the actual entry date and entry price, more reliable than anything else \
+for "how long has this been held" or "what was it entered at" -- and for options, fills[0] also \
+carries opt_type, opt_side, strike, expiry_date, and iv_at_entry, the real contract terms. \
 marks (this position's daily price history, oldest first -- close_price per day, plus \
 option_value per day for option positions, the modeled current value of the contract; compare \
 the most recent two marks for today vs. the prior trading day -- say "yesterday" only if they're \
@@ -117,23 +133,26 @@ If closed_today_strategy_positions has any entries, cover those FIRST, under the
 "Closed Today" lead-in before the still-open positions -- what got exited today is done, \
 already decided, and more time-sensitive to surface than what's still running. One entry per \
 position in closed_today_strategy_positions, in the order given: ticker, entry date/price (from \
-fills[0]), exit price/premium and exit date (from the position's last fill in fills), \
-exit_reason stated verbatim ("TP", "Stop", "Manual", or "Expired" -- capitalize for readability \
-but don't reinterpret which one it was), and realized_pnl with its $ and % both shown -- this \
-already happened, so state it as a completed fact, not a projection. No Status line (no \
-strategy_verdicts exists for a closed position) and no separate Verdict note unless something \
-about the exit is genuinely worth a comment (e.g. it closed right before a move that would have \
-mattered, or matches/breaks a pattern you've noted before) -- most closed-today entries need no \
-commentary beyond the facts themselves.
+fills[0]), then EVERY exit fill in fills (oldest first) with its own units, exit price/premium, \
+exit date, and exit_reason stated verbatim ("TP", "Stop", "Manual", or "Expired" -- capitalize \
+for readability but don't reinterpret which one it was) -- most positions have just one exit, \
+but when there are several (e.g. two partial TPs then a final cleanup), list each one, don't \
+collapse them into a single exit event or use only the last one's reason/date/price for the \
+whole position. Finish with the position's TOTAL realized_pnl ($ and %) across all its exits \
+combined -- this already happened, so state it as a completed fact, not a projection. No Status \
+line (no strategy_verdicts exists for a closed position) and no separate Verdict note unless \
+something about the exit is genuinely worth a comment (e.g. it closed right before a move that \
+would have mattered, or matches/breaks a pattern you've noted before) -- most closed-today \
+entries need no commentary beyond the facts themselves.
 
 If recently_closed_uncovered_strategy_positions has any entries, cover those next, under a \
 "Recently Closed" lead-in (distinct from "Closed Today" -- these are NOT today's exits, say so \
 plainly, e.g. "Also worth noting -- TP hit on X on [real exit date], not yet covered:"). Same \
-per-position facts and format as the closed_today block above (entry, exit price/date from the \
-position's own fills, exit_reason verbatim, realized $/%), just dated correctly using the \
-position's real exit date instead of implying it happened today. Keep this brief -- a line or \
-two per position, not full commentary, since the point is closing the gap, not re-litigating an \
-old trade.
+per-position facts and format as the closed_today block above (entry, every exit fill with its \
+own date/price/exit_reason, total realized $/%), just dated correctly using each exit's own \
+real date instead of implying any of it happened today. Keep this brief -- a line or two per \
+position, not full commentary, since the point is closing the gap, not re-litigating an old \
+trade.
 
 Then, one entry per position in strategy_positions (the still-open ones), in the order given. \
 For each: the ticker, its \

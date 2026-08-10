@@ -1537,14 +1537,26 @@ _FILL_REVIEW_FIELDS = (
 )
 
 
-def _summarize_fills_for_review(fills: list[dict]) -> list[dict]:
-    """fills[0] (the real entry) plus the most recent fill if different -- see
-    build_daily_snapshot's call site for why. Each trimmed to only the fields SYSTEM_PROMPT
-    actually reads; drops id/position_id/strategy_key/signal_date/kind/created_at/notes and any
-    always-null option field on a spot fill, all dead weight in the snapshot otherwise."""
+def _summarize_fills_for_review(fills: list[dict], include_all: bool = False) -> list[dict]:
+    """For an OPEN position (include_all=False, the default): fills[0] (the real entry) plus the
+    most recent fill if different -- see build_daily_snapshot's open-positions call site for why
+    that's sufficient there (only "entry vs. now" matters for a still-open position).
+
+    For a CLOSED position (include_all=True): every fill, not just entry+last-exit. A position
+    can have multiple partial exits (e.g. two TPs then a final manual cleanup) -- trimming to
+    only the last exit silently dropped the earlier ones, so the chatbot only ever saw the LAST
+    exit's date/price/exit_reason and reported it as if it were the whole story (e.g. calling a
+    mostly-TP'd position "Manual" because that's what its final small cleanup fill said).
+
+    Either way, each fill is trimmed to only the fields SYSTEM_PROMPT actually reads; drops
+    id/position_id/strategy_key/signal_date/kind/created_at/notes and any always-null option
+    field on a spot fill, all dead weight in the snapshot otherwise."""
     if not fills:
         return []
-    picked = [fills[0]] if len(fills) == 1 or fills[-1] is fills[0] else [fills[0], fills[-1]]
+    if include_all:
+        picked = fills
+    else:
+        picked = [fills[0]] if len(fills) == 1 or fills[-1] is fills[0] else [fills[0], fills[-1]]
     return [{k: f[k] for k in _FILL_REVIEW_FIELDS if f.get(k) is not None} for f in picked]
 
 
@@ -1724,14 +1736,22 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
 
     def _closed_position_snapshot(position: dict) -> dict:
         """Same per-position shape closed_today_*_positions has always used -- factored out so
-        recently_closed_uncovered_* below can build identical objects for older closes."""
+        recently_closed_uncovered_* below can build identical objects for older closes.
+
+        fills carries EVERY fill (include_all=True), not just entry+last-exit -- a position can
+        have multiple partial exits with different exit_reasons (e.g. two TPs then a final
+        manual cleanup), and each one's own real exit_reason is in fills itself. The top-level
+        exit_reason field below is kept as a quick "how did this position finally close" label
+        (the LAST fill's reason) for a single-exit position, but SYSTEM_PROMPT is told to read
+        every exit fill's own exit_reason from `fills` rather than treat this one field as the
+        complete story for a multi-exit position."""
         state = _position_with_state(position)
         fills = db.list_fills(position["id"])
         exit_fill = fills[-1] if fills and fills[-1]["kind"] == "exit" else None
         state = {k: v for k, v in state.items() if k not in ("last_alert_tp_pct", "last_alert_stop_pct")}
         return {
             **state,
-            "fills": _summarize_fills_for_review(fills),
+            "fills": _summarize_fills_for_review(fills, include_all=True),
             "exit_reason": exit_fill["exit_reason"] if exit_fill else None,
             "entry_strategy_key": fills[0]["strategy_key"] if fills else "manual",
         }
