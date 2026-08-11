@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDaysIso, daysBetween, todayIsoDate } from "./dates";
+import { addDaysIso, daysBetween, isClosedToday, todayIsoDate } from "./dates";
 
 describe("todayIsoDate", () => {
   it("returns a well-formed YYYY-MM-DD string", () => {
@@ -36,5 +36,21 @@ describe("addDaysIso", () => {
     const start = "2026-07-15";
     const end = addDaysIso(start, 30);
     expect(daysBetween(start, end)).toBe(30);
+  });
+});
+
+describe("isClosedToday", () => {
+  it("is true for a timestamp from right now", () => {
+    expect(isClosedToday(new Date().toISOString())).toBe(true);
+  });
+  it("is false for a timestamp from yesterday", () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    expect(isClosedToday(yesterday.toISOString())).toBe(false);
+  });
+  it("is false for a timestamp from a year ago", () => {
+    const lastYear = new Date();
+    lastYear.setFullYear(lastYear.getFullYear() - 1);
+    expect(isClosedToday(lastYear.toISOString())).toBe(false);
   });
 });

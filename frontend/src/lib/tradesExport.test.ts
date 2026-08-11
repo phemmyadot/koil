@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { buildTradesExportMarkdown } from "./tradesExport";
-import type { Fill, Position, PositionsSummary } from "../api/types";
+import type { Fill, Position, PositionsSummary, PrebreakResult } from "../api/types";
+
+function makePrebreak(overrides: Partial<PrebreakResult> = {}): PrebreakResult {
+  return {
+    state: "PRE-BREAKOUT",
+    score: 4,
+    bb_squeeze: true,
+    vol_dry_up: true,
+    near_resistance: true,
+    is_bullish_trend: true,
+    squeeze_counter: 42,
+    projected_target: null,
+    projected_duration: null,
+    ...overrides,
+  };
+}
 
 function makeFill(overrides: Partial<Fill> = {}): Fill {
   return {
@@ -165,5 +180,35 @@ describe("buildTradesExportMarkdown", () => {
     const md = buildTradesExportMarkdown([], [], makeSummary(), makeSummary());
     expect(md).toContain("*No open positions.*");
     expect(md).toContain("*No closed exits yet.*");
+  });
+
+  describe("Pre-Breakout Summary section", () => {
+    it("lists each ticker's pre-breakout line, alphabetically", () => {
+      const md = buildTradesExportMarkdown(
+        [],
+        [],
+        makeSummary(),
+        makeSummary(),
+        {},
+        ["ZETA", "AAA"],
+        { ZETA: makePrebreak({ state: "BULLISH", score: 1 }), AAA: makePrebreak() },
+      );
+      const aaaIndex = md.indexOf("| AAA |");
+      const zetaIndex = md.indexOf("| ZETA |");
+      expect(aaaIndex).toBeGreaterThan(-1);
+      expect(zetaIndex).toBeGreaterThan(aaaIndex);
+      expect(md).toContain("| AAA | Pre-Breakout: PRE-BREAKOUT (4), COMPRESSED, DRY, COILING, BULLISH, 42 Bars |");
+      expect(md).toContain("| ZETA | Pre-Breakout: BULLISH (1), COMPRESSED, DRY, COILING, BULLISH, 42 Bars |");
+    });
+
+    it("shows a dash for a ticker with no prebreak data instead of dropping it", () => {
+      const md = buildTradesExportMarkdown([], [], makeSummary(), makeSummary(), {}, ["AAPL"], { AAPL: null });
+      expect(md).toContain("| AAPL | — |");
+    });
+
+    it("shows the empty-state note when there are no active or closed-today tickers", () => {
+      const md = buildTradesExportMarkdown([], [], makeSummary(), makeSummary(), {}, [], {});
+      expect(md).toContain("*No active or today-closed tickers.*");
+    });
   });
 });

@@ -35,7 +35,13 @@ export function StrategyCellLink({ ticker, strategyKey, variant = "link" }: Stra
         {variant === "button" ? `${label} Strategy` : label}
       </button>
       {open && s && (
-        <StrategyDetailModal ticker={ticker} stratKey={strategyKey as StrategyKey} s={s} onClose={() => setOpen(false)} />
+        <StrategyDetailModal
+          ticker={ticker}
+          stratKey={strategyKey as StrategyKey}
+          s={s}
+          prebreak={row?.prebreak ?? null}
+          onClose={() => setOpen(false)}
+        />
       )}
     </>
   );

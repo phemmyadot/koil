@@ -1,12 +1,13 @@
 import { Modal, ModalRow } from "../atoms/Modal";
-import type { StrategyKey, StrategyResult } from "../../api/types";
+import type { PrebreakResult, StrategyKey, StrategyResult } from "../../api/types";
 import { stratLabel } from "../../constants/strategy";
-import { fmtPct } from "../../lib/format";
+import { fmtPct, prebreakSummaryLine } from "../../lib/format";
 
 export interface StrategyDetailModalProps {
   ticker: string;
   stratKey: StrategyKey;
   s: StrategyResult;
+  prebreak: PrebreakResult | null;
   onClose: () => void;
   onTrade?: () => void;
 }
@@ -24,10 +25,16 @@ function last5(trades: StrategyResult["last5_trades"]) {
 
 // Replaces strategyModal() (index.html) -- one modal per strategy badge click, not a
 // 3-column comparison.
-export function StrategyDetailModal({ ticker, stratKey, s, onClose, onTrade }: StrategyDetailModalProps) {
+export function StrategyDetailModal({ ticker, stratKey, s, prebreak, onClose, onTrade }: StrategyDetailModalProps) {
   const op = s.open_position;
   return (
     <Modal title={`${stratLabel(stratKey)} — ${ticker}`} onClose={onClose}>
+      {prebreak && (
+        <>
+          <div className="modal-note">{prebreakSummaryLine(prebreak)}</div>
+          <div className="modal-sep" />
+        </>
+      )}
       <ModalRow label="Trades" value={s.n_trades} />
       <ModalRow label="Profit factor" value={s.profit_factor} />
       <ModalRow label="Win rate" value={`${s.win_rate}%`} />

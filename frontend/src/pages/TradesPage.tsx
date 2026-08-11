@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePositions, usePositionsSummary, usePnlSeries } from "../hooks/usePositions";
+import { useTickers } from "../hooks/useTickers";
 import { addFill, cancelPosition, listFills } from "../api/positions";
 import type { ExitReason, Fill, PositionsSummary } from "../api/types";
 import { StatBox } from "../components/atoms/StatBox";
@@ -9,7 +10,7 @@ import { OptionsPositionsTable } from "../components/organisms/OptionsPositionsT
 import { PnlChart } from "../components/organisms/PnlChart";
 import { TradesExportModal } from "../components/organisms/TradesExportModal";
 import { fmtMoney, fmtPct } from "../lib/format";
-import { todayIsoDate } from "../lib/dates";
+import { isClosedToday, todayIsoDate } from "../lib/dates";
 import { buildTradesExportMarkdown } from "../lib/tradesExport";
 import "./TradesPage.css";
 
@@ -72,6 +73,22 @@ export function TradesPage() {
     enabled: showExport && exitedPositionIds.length > 0,
   });
   const exportReady = !showExport || exitedPositionIds.length === 0 || !exitedFillsLoading;
+
+  // Pre-Breakout Summary section of the export: every ticker currently held (any instrument,
+  // units_remaining > 0) UNION every ticker closed today (local time) -- deduplicated. prebreak
+  // itself comes from the ticker universe payload (useTickers), same source PrebreakChips/
+  // StrategyDetailModal already read it from elsewhere in the app.
+  const { data: tickersData } = useTickers();
+  const allPositions = [...(spotPositions ?? []), ...(optionsPositions ?? [])];
+  const prebreakTickerSet = new Set<string>();
+  for (const p of allPositions) {
+    if (p.units_remaining > 0) prebreakTickerSet.add(p.ticker);
+    if (p.status === "closed" && p.closed_at && isClosedToday(p.closed_at)) prebreakTickerSet.add(p.ticker);
+  }
+  const prebreakTickers = [...prebreakTickerSet];
+  const prebreakByTicker = Object.fromEntries(
+    prebreakTickers.map((ticker) => [ticker, tickersData?.tickers.find((t) => t.ticker === ticker)?.prebreak ?? null]),
+  );
 
   const positions = typeFilter === "spot" ? spotPositions : optionsPositions;
   const summary = typeFilter === "spot" ? spotSummary : optionsSummary;
@@ -136,6 +153,8 @@ export function TradesPage() {
             spotSummary,
             optionsSummary,
             exitedFillsByPositionId ?? {},
+            prebreakTickers,
+            prebreakByTicker,
           )}
           onClose={() => setShowExport(false)}
         />

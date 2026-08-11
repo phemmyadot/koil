@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { fmtMoney, fmtPct, fmtUnits, plClass } from "./format";
+import { fmtMoney, fmtPct, fmtUnits, plClass, prebreakSummaryLine } from "./format";
+import type { PrebreakResult } from "../api/types";
+
+function makePrebreak(overrides: Partial<PrebreakResult> = {}): PrebreakResult {
+  return {
+    state: "PRE-BREAKOUT",
+    score: 4,
+    bb_squeeze: true,
+    vol_dry_up: true,
+    near_resistance: true,
+    is_bullish_trend: true,
+    squeeze_counter: 42,
+    projected_target: null,
+    projected_duration: null,
+    ...overrides,
+  };
+}
 
 describe("fmtMoney", () => {
   it("formats positive values with a dollar sign", () => {
@@ -55,5 +71,23 @@ describe("plClass", () => {
   });
   it("returns empty string (neutral) for exactly zero -- the resolved cross-page inconsistency", () => {
     expect(plClass(0)).toBe("");
+  });
+});
+
+describe("prebreakSummaryLine", () => {
+  it("matches the confirmed example format exactly", () => {
+    expect(prebreakSummaryLine(makePrebreak())).toBe("Pre-Breakout: PRE-BREAKOUT (4), COMPRESSED, DRY, COILING, BULLISH, 42 Bars");
+  });
+  it("always uses the fixed \"Pre-Breakout: \" prefix regardless of state", () => {
+    expect(prebreakSummaryLine(makePrebreak({ state: "BULLISH", score: 1 }))).toMatch(/^Pre-Breakout: /);
+  });
+  it("renders the false branch of every boolean field", () => {
+    const line = prebreakSummaryLine(
+      makePrebreak({ bb_squeeze: false, vol_dry_up: false, near_resistance: false, is_bullish_trend: false }),
+    );
+    expect(line).toBe("Pre-Breakout: PRE-BREAKOUT (4), EXPANDED, NORMAL/HIGH, CLEAR, BEARISH, 42 Bars");
+  });
+  it("includes squeeze_counter as \"N Bars\"", () => {
+    expect(prebreakSummaryLine(makePrebreak({ squeeze_counter: 0 }))).toContain("0 Bars");
   });
 });

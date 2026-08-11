@@ -21,3 +21,16 @@ export function addDaysIso(iso: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
+// closedAt is a UTC timestamp -- comparing raw date substrings would compare UTC calendar
+// dates, not the user's actual local day, so both sides are parsed into Date and compared via
+// local getFullYear/getMonth/getDate instead.
+export function isClosedToday(closedAt: string): boolean {
+  const closedLocal = new Date(closedAt);
+  const now = new Date();
+  return (
+    closedLocal.getFullYear() === now.getFullYear() &&
+    closedLocal.getMonth() === now.getMonth() &&
+    closedLocal.getDate() === now.getDate()
+  );
+}

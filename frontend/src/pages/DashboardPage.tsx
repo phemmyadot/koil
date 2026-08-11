@@ -258,6 +258,7 @@ export function DashboardPage() {
               ticker={modal.ticker}
               stratKey={modal.stratKey}
               s={s}
+              prebreak={row?.prebreak ?? null}
               onClose={() => setModal(null)}
               onTrade={() => openTradeFlow(modal.ticker, modal.stratKey)}
             />

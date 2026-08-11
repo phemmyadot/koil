@@ -1,6 +1,8 @@
 // Money/percent formatting and P&L tone. Ported from the 3 near-identical copies in
 // index.html/trades.html/position.html, unified into one implementation.
 
+import type { PrebreakResult } from "../api/types";
+
 export function fmtMoney(v: number): string {
   return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
 }
@@ -33,4 +35,21 @@ const EXIT_LABELS: Record<string, string> = { tp: "TP", stop: "Stop", manual: "C
 export function exitLabel(reason: string | null, tpIndex: number | null = null): string {
   if (reason === "tp") return tpIndex != null ? `TP ${tpIndex}` : "TP";
   return reason ? (EXIT_LABELS[reason] ?? reason) : "Close";
+}
+
+// Comma-separated text rendering of the same 6 fields PrebreakChips already shows as colored
+// chips -- used in the strategy modal and the Markdown trades export, where a chip UI doesn't
+// apply. "Pre-Breakout: " is a fixed label prefix, not derived from state.
+export function prebreakSummaryLine(pb: PrebreakResult): string {
+  return (
+    "Pre-Breakout: " +
+    [
+      `${pb.state} (${pb.score})`,
+      pb.bb_squeeze ? "COMPRESSED" : "EXPANDED",
+      pb.vol_dry_up ? "DRY" : "NORMAL/HIGH",
+      pb.near_resistance ? "COILING" : "CLEAR",
+      pb.is_bullish_trend ? "BULLISH" : "BEARISH",
+      `${pb.squeeze_counter} Bars`,
+    ].join(", ")
+  );
 }

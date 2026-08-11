@@ -1,10 +1,10 @@
 // Builds the copiable Markdown trades export -- see TradesPage's Export modal. Pure function
 // over already-fetched data (closedFillsByPositionId is fetched once, lazily, when the export
 // modal opens -- see TradesPage.tsx), no requests made from inside this file.
-import type { Fill, Position, PositionsSummary } from "../api/types";
+import type { Fill, Position, PositionsSummary, PrebreakResult } from "../api/types";
 import { stratLabel } from "../constants/strategy";
 import { exitBreakdown } from "./pnlSeries";
-import { exitLabel, fmtMoney, fmtPct, fmtUnits } from "./format";
+import { exitLabel, fmtMoney, fmtPct, fmtUnits, prebreakSummaryLine } from "./format";
 
 function summaryLine(label: string, summary: PositionsSummary | undefined): string {
   if (!summary) return `**${label}** — no data`;
@@ -89,6 +89,18 @@ function closedTable(positions: Position[], instrument: "spot" | "option", fills
   return [header, ...lines].join("\n");
 }
 
+// One row per unique ticker, alphabetical -- callers pass exactly the ticker set this section
+// should cover (active + closed-today, already deduplicated -- see TradesPage.tsx).
+function prebreakSummaryTable(tickers: string[], prebreakByTicker: Record<string, PrebreakResult | null>): string {
+  if (!tickers.length) return "*No active or today-closed tickers.*";
+  const header = `| Ticker | Pre-Breakout |\n|---|---|`;
+  const lines = [...tickers].sort().map((ticker) => {
+    const pb = prebreakByTicker[ticker];
+    return `| ${ticker} | ${pb ? prebreakSummaryLine(pb) : "—"} |`;
+  });
+  return [header, ...lines].join("\n");
+}
+
 export function buildTradesExportMarkdown(
   spotPositions: Position[] | undefined,
   optionsPositions: Position[] | undefined,
@@ -97,6 +109,10 @@ export function buildTradesExportMarkdown(
   // Fills for every closed position, plus every open position with a partial exit -- see
   // TradesPage.tsx's exitedPositionIds/exitedFillsByPositionId.
   fillsByPositionId: Record<number, Fill[]> = {},
+  // Every ticker with units_remaining > 0 UNION every ticker closed today (local time) --
+  // already deduplicated by the caller, see TradesPage.tsx.
+  prebreakTickers: string[] = [],
+  prebreakByTicker: Record<string, PrebreakResult | null> = {},
 ): string {
   const spot = spotPositions ?? [];
   const options = optionsPositions ?? [];
@@ -126,6 +142,10 @@ export function buildTradesExportMarkdown(
     "## Options — Closed Exits",
     "",
     closedTable(options, "option", fillsByPositionId),
+    "",
+    "## Pre-Breakout Summary",
+    "",
+    prebreakSummaryTable(prebreakTickers, prebreakByTicker),
     "",
   ].join("\n");
 }
