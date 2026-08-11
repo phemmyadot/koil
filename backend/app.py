@@ -226,12 +226,14 @@ def _fire_score_alert(ticker: str, strat_key: str, prior_payload: dict | None, n
     push.send_push_to_all(push_payload, now_iso)
 
 
-def _eval_strategy(module, ticker: str, bars, ind: dict | None) -> dict | None:
-    """Independently error-isolated -- one strategy failing on a ticker shouldn't drop the others."""
+def _eval_strategy(module, ticker: str, bars, ind: dict | None) -> tuple[dict | None, Exception | None]:
+    """Independently error-isolated -- one strategy failing on a ticker shouldn't drop the
+    others. Returns the exception alongside None so the caller can report what actually broke
+    (e.g. a DB IntegrityError) instead of every failure reading as "insufficient history"."""
     try:
-        return module.evaluate(ticker, bars, ind=ind)
-    except Exception:  # noqa: BLE001
-        return None
+        return module.evaluate(ticker, bars, ind=ind), None
+    except Exception as e:  # noqa: BLE001
+        return None, e
 
 
 def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]:
@@ -256,9 +258,24 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
             "price": round(float(bars.Close.iloc[-1]), 4),
             "date": str(bars.index[-1].date()),
         }
+        # Ticker-level, not strategy-specific -- same as a Pine indicator overlaying any
+        # strategy's chart. Computed BEFORE the strategies below and never discarded by their
+        # failure: prebreak has no dependency on _STRATEGY_MODULES or the earnings-date cache,
+        # so a ticker whose strategies fail (e.g. the earnings_dates race below, now fixed, but
+        # any other per-strategy failure too) still keeps its correctly-computed prebreak state
+        # instead of the whole payload being thrown away. This matters most for an open
+        # position's or watchlisted ticker's prebreak (see _active_tickers/always_include),
+        # since those must always compute -- a strategy-only failure shouldn't blank them.
+        try:
+            payload["prebreak"] = prebreak.evaluate(ticker, bars)
+        except Exception:  # noqa: BLE001
+            payload["prebreak"] = None
+        strategy_errors: dict[str, Exception] = {}
         for key, module in _STRATEGY_MODULES.items():
             ind = shared_ind if key != "vexh" else None
-            payload[key] = _eval_strategy(module, ticker, bars, ind)
+            payload[key], err = _eval_strategy(module, ticker, bars, ind)
+            if err is not None:
+                strategy_errors[key] = err
         # earnings_risk mirrors any one strategy's own earnings-flagged bars -- flagging is
         # identical across strategies (strategy_common.with_earnings_flags()), so VEXH's
         # result (if it succeeded) is as good a source as any other.
@@ -272,13 +289,14 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
         else:
             payload["earnings_risk"] = None
             payload["days_to_earnings"] = None
-        if all(payload[key] is None for key in _STRATEGY_MODULES):
+        # Only bail entirely when there's truly nothing usable (no strategy AND no prebreak) --
+        # a ticker with prebreak but no strategy data still gets a real payload instead of being
+        # discarded. If any strategy raised a real exception, report that instead of the generic
+        # "insufficient history" -- the two failure modes look identical from here otherwise.
+        if all(payload[key] is None for key in _STRATEGY_MODULES) and payload["prebreak"] is None:
+            if strategy_errors:
+                raise next(iter(strategy_errors.values()))
             raise ValueError("insufficient history")
-        # Ticker-level, not strategy-specific -- same as a Pine indicator overlaying any strategy's chart.
-        try:
-            payload["prebreak"] = prebreak.evaluate(ticker, bars)
-        except Exception:  # noqa: BLE001
-            payload["prebreak"] = None
         # "score" is VEXH's legacy 6-gate count; setup_score is the 0-10 composite, keyed per strategy.
         payload["setup_score"] = {}
         for strat_key in _STRATEGY_MODULES:

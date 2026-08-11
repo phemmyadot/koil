@@ -853,11 +853,19 @@ def get_earnings_dates(ticker: str) -> pd.DatetimeIndex | None:
 
 
 def upsert_earnings_dates(ticker: str, dates: pd.DatetimeIndex, fetched_at: float) -> None:
+    """cached_earnings_dates() can call this for the same ticker from two overlapping compute
+    passes (e.g. the background loop and a manual per-ticker fetch both seeing a cache miss at
+    once) -- DELETE-then-INSERT let one thread's DELETE run between the other's DELETE and
+    INSERT, so both would try to insert the same (ticker, earnings_date) row and one would hit
+    the UNIQUE constraint (seen in production: NTNX's whole strategy compute failing on this
+    IntegrityError, silently discarding its correctly-computed prebreak result along with it --
+    see _compute_one()'s own fix for that separate failure mode). INSERT OR REPLACE is atomic
+    per row, so two racing upserts just each apply cleanly instead of conflicting."""
     with _lock, _conn:
         _conn.execute("DELETE FROM earnings_dates WHERE ticker = ?", (ticker,))
         if len(dates):
             _conn.executemany(
-                "INSERT INTO earnings_dates (ticker, earnings_date, fetched_at) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO earnings_dates (ticker, earnings_date, fetched_at) VALUES (?, ?, ?)",
                 [(ticker, d.strftime("%Y-%m-%d"), fetched_at) for d in dates]
             )
         else:
@@ -866,7 +874,7 @@ def upsert_earnings_dates(ticker: str, dates: pd.DatetimeIndex, fetched_at: floa
             # has something to key off even when a ticker genuinely has no
             # upcoming/recent earnings dates at all.
             _conn.execute(
-                "INSERT INTO earnings_dates (ticker, earnings_date, fetched_at) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO earnings_dates (ticker, earnings_date, fetched_at) VALUES (?, ?, ?)",
                 (ticker, "__none__", fetched_at)
             )
 
