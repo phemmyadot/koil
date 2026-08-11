@@ -3,7 +3,7 @@ also used by strategy-state notifications and the daily review chatbot."""
 
 DEFAULT_FILTER = {
     "strategies": ["vcpo"],
-    "min_win_rate": 70,
+    "min_win_rate": 75,
     "min_profit_factor": 2.5,
     "min_trades": 15,
     "min_phase_score": 2,

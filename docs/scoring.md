@@ -256,7 +256,7 @@ The existing `x/5` bar display should be replaced with a numeric `X/10` badge to
 | Gate | Purpose | Where applied |
 |---|---|---|
 | Score (0–10) | Setup quality — is the technical and statistical context favourable? | Card display, sort order |
-| Advance Filter | Execution quality — does this asset have a reliable strategy edge? | PF ≥ 2.5, WR ≥ 70%, trades ≥ 20 |
+| Advance Filter | Execution quality — does this asset have a reliable strategy edge? | PF ≥ 2.5, WR ≥ 75%, trades ≥ 20 |
 | Pre-Breakout filter | Setup stage — is the compression at the right phase? | Phase ≥ COILING, coil ≥ 5 bars |
 | Earnings flag | Binary event risk — is there gap risk within the trade window? | `earnings_risk` boolean |
 

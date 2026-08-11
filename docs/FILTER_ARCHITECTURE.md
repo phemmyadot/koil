@@ -36,8 +36,8 @@ app-wide, so this only ever reads a strategy's baseline stats.
 - **Strategy** radio: VEXH / VCP / VCPO (ADX/VCPF included too when
   `SHOW_ADX_VCPF` is on, same gating as elsewhere). Picks which strategy's
   stats the two sliders below read.
-- **Win Rate** steps: `0%` (default) / `50%` / `75%`.
-- **Profit** steps: `1` (default) / `1.5` / `2`.
+- **Win Rate** steps: `0%` / `50%` / `70%` / `75%` (default).
+- **Profit** steps: `0` / `1` / `1.5` / `2` / `2.5` (default) / `3.5` / `5.0`.
 - Win Rate AND Profit combine; both at default = no filtering.
 
 ## Trade On panel

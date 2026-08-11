@@ -5,10 +5,10 @@
 export const WR_STEPS = [0, 50, 70, 75] as const;
 export const PF_STEPS = [0, 1, 1.5, 2, 2.5, 3.5, 5.0] as const;
 
-// VCPO/WR>=70/PF>=2.5 had the strongest backtested results in practice -- not a true no-op
+// VCPO/WR>=75/PF>=2.5 had the strongest backtested results in practice -- not a true no-op
 // "off" default.
 export const ADV_STRATEGY_DEFAULT = "vcpo" as const;
-export const ADV_WR_DEFAULT_INDEX = WR_STEPS.indexOf(70);
+export const ADV_WR_DEFAULT_INDEX = WR_STEPS.indexOf(75);
 export const ADV_PF_DEFAULT_INDEX = PF_STEPS.indexOf(2.5);
 
 // Phase's default is a real floor, not a true no-op: BULLISH/NEUTRAL/BEARISH tickers are
