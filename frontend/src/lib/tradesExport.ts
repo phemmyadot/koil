@@ -93,10 +93,11 @@ function closedTable(positions: Position[], instrument: "spot" | "option", fills
 // should cover (active + closed-today, already deduplicated -- see TradesPage.tsx).
 function prebreakSummaryTable(tickers: string[], prebreakByTicker: Record<string, PrebreakResult | null>): string {
   if (!tickers.length) return "*No active or today-closed tickers.*";
-  const header = `| Ticker | Pre-Breakout |\n|---|---|`;
+  const header = `| Ticker | Pre-Breakout | Last 7 Close |\n|---|---|---|`;
   const lines = [...tickers].sort().map((ticker) => {
     const pb = prebreakByTicker[ticker];
-    return `| ${ticker} | ${pb ? prebreakSummaryLine(pb) : "—"} |`;
+    const closes = pb?.last_7_close?.length ? pb.last_7_close.map((c) => `$${c.toFixed(2)}`).join(", ") : "—";
+    return `| ${ticker} | ${pb ? prebreakSummaryLine(pb) : "—"} | ${closes} |`;
   });
   return [header, ...lines].join("\n");
 }

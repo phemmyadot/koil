@@ -265,6 +265,7 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
         # since those must always compute -- a strategy-only failure shouldn't blank them.
         try:
             payload["prebreak"] = prebreak.evaluate(ticker, bars)
+            payload["prebreak"]["last_7_close"] = [round(float(c), 4) for c in bars.Close.tail(7)]
         except Exception:  # noqa: BLE001
             payload["prebreak"] = None
         strategy_errors: dict[str, Exception] = {}
@@ -1297,6 +1298,9 @@ def _signals_markdown_table(signals: list[dict], columns: list[tuple[str, str]])
                 cells.append(_prebreak_volume_cell(sig.get("prebreak")))
             elif field == "coil":
                 cells.append(_prebreak_coil_cell(sig.get("prebreak")))
+            elif field == "last_7_close":
+                closes = sig.get("last_7_close") or []
+                cells.append(", ".join(f"${c:.2f}" for c in closes) if closes else "—")
             elif field == "strategy":
                 cells.append(_STRATEGY_LABELS.get(sig.get("strategy"), sig.get("strategy") or "—"))
             elif field == "win_rate":
@@ -1338,6 +1342,7 @@ def export_dashboard_markdown():
         ("Ticker", "ticker"), ("Score", "score"), ("Trades", "n_trades"), ("WR", "win_rate"),
         ("PF", "profit_factor"), ("Price", "current_price"), ("Phase", "phase"),
         ("Squeeze", "squeeze"), ("Volume", "volume"), ("Coil", "coil"), ("Entry Plan", "entry_plan"),
+        ("Last 7 Close", "last_7_close"),
     ]
     pending_table = _signals_markdown_table(pending, base_columns)
     open_table = _signals_markdown_table(open_signals, base_columns + [
@@ -1646,6 +1651,15 @@ def _summarize_fills_for_review(fills: list[dict], include_all: bool = False) ->
     return [{k: f[k] for k in _FILL_REVIEW_FIELDS if f.get(k) is not None} for f in picked]
 
 
+def _last_n_close(ticker: str, n: int) -> list[float]:
+    """Last n daily Close prices, oldest first -- from the already-fetched bars cache, no new
+    Yahoo call. Fewer than n bars (thin history) just returns what's there."""
+    bars = data.get_bars(ticker)
+    if bars is None or bars.empty:
+        return []
+    return [round(float(c), 4) for c in bars.Close.tail(n)]
+
+
 def _pending_signals(computed_snapshot: list[dict]) -> list[dict]:
     """Tickers with a fresh TAKE verdict today, not yet entered -- see build_daily_snapshot's
     "Take — Enter Tomorrow" use and the dashboard's Markdown export (max_days doesn't apply
@@ -1686,6 +1700,7 @@ def _pending_signals(computed_snapshot: list[dict]) -> list[dict]:
                 "entry_plan": entry_plan,
                 "order_method": entry_estimate.order_method("spot"),
                 "prebreak": payload.get("prebreak"),
+                "last_7_close": _last_n_close(ticker, 7),
             })
     return pending_signals
 
@@ -1741,6 +1756,7 @@ def _open_signals(computed_snapshot: list[dict], open_position_tickers: set[str]
                 "unrealized_pct_if_entered": open_position.get("unrealized_pct"),
                 "entry_plan": entry_plan,
                 "prebreak": payload.get("prebreak"),
+                "last_7_close": _last_n_close(ticker, 7),
             })
     return open_signals
 

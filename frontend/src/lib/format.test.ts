@@ -13,6 +13,7 @@ function makePrebreak(overrides: Partial<PrebreakResult> = {}): PrebreakResult {
     squeeze_counter: 42,
     projected_target: null,
     projected_duration: null,
+    last_7_close: [],
     ...overrides,
   };
 }

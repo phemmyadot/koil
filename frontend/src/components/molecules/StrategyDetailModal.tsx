@@ -1,7 +1,7 @@
 import { Modal, ModalRow } from "../atoms/Modal";
 import type { PrebreakResult, StrategyKey, StrategyResult } from "../../api/types";
 import { stratLabel } from "../../constants/strategy";
-import { fmtPct, prebreakSummaryLine } from "../../lib/format";
+import { fmtPct, last7CloseLine, prebreakSummaryLine } from "../../lib/format";
 
 export interface StrategyDetailModalProps {
   ticker: string;
@@ -35,6 +35,7 @@ export function StrategyDetailModal({ ticker, stratKey, s, prebreak, onClose, on
       {prebreak && (
         <>
           <div className="modal-note">{prebreakSummaryLine(prebreak)}</div>
+          <div className="modal-note">{last7CloseLine(prebreak)}</div>
           {s && <div className="modal-sep" />}
         </>
       )}

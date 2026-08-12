@@ -53,3 +53,9 @@ export function prebreakSummaryLine(pb: PrebreakResult): string {
     ].join(", ")
   );
 }
+
+// Oldest->newest, one line, matching prebreakSummaryLine's comma-separated style.
+export function last7CloseLine(pb: PrebreakResult): string {
+  if (!pb.last_7_close || pb.last_7_close.length === 0) return "Last 7 Close: —";
+  return "Last 7 Close: " + pb.last_7_close.map((c) => `$${c.toFixed(2)}`).join(", ");
+}

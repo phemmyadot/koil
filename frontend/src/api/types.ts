@@ -61,6 +61,7 @@ export interface PrebreakResult {
   squeeze_counter: number;
   projected_target: number | null;
   projected_duration: number | null;
+  last_7_close: number[];
 }
 
 export type StrategyKey = "vexh" | "strategy_vcp" | "strategy_vcpo";

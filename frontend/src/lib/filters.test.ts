@@ -84,11 +84,11 @@ describe("matchesPrebreakFilter", () => {
     expect(matchesPrebreakFilter(ticker(), base)).toBe(true);
   });
   it("excludes below the phase/coil floors", () => {
-    const r = ticker({ prebreak: { state: "NEUTRAL", score: 0, bb_squeeze: false, vol_dry_up: false, near_resistance: false, is_bullish_trend: false, squeeze_counter: 0, projected_target: null, projected_duration: null } });
+    const r = ticker({ prebreak: { state: "NEUTRAL", score: 0, bb_squeeze: false, vol_dry_up: false, near_resistance: false, is_bullish_trend: false, squeeze_counter: 0, projected_target: null, projected_duration: null, last_7_close: [] } });
     expect(matchesPrebreakFilter(r, base)).toBe(false);
   });
   it("requires a checked switch's field to be true", () => {
-    const r = ticker({ prebreak: { state: "COILING (BULL)", score: 2, bb_squeeze: false, vol_dry_up: false, near_resistance: false, is_bullish_trend: false, squeeze_counter: 5, projected_target: null, projected_duration: null } });
+    const r = ticker({ prebreak: { state: "COILING (BULL)", score: 2, bb_squeeze: false, vol_dry_up: false, near_resistance: false, is_bullish_trend: false, squeeze_counter: 5, projected_target: null, projected_duration: null, last_7_close: [] } });
     expect(matchesPrebreakFilter(r, { ...base, switches: { squeeze: true } })).toBe(false);
     expect(matchesPrebreakFilter(r, { ...base, switches: {} })).toBe(true);
   });
