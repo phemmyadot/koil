@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useFilterDefaults, useMeta, useRefreshTickers, useTickers } from "../hooks/useTickers";
 import { useWatchlists } from "../hooks/useWatchlists";
 import { listPositions } from "../api/positions";
-import { exportCsv, exportPdf } from "../api/plCalc";
+import { getDashboardExportMarkdown } from "../api/plCalc";
 import type { Position, StrategyKey, TickerPayload } from "../api/types";
 import { FilterBar, defaultFilterBarState, filterBarStateFromDefaults, type FilterBarState } from "../components/organisms/FilterBar";
 import { Pagination, TickerCardGrid } from "../components/organisms/TickerCardGrid";
@@ -12,7 +12,7 @@ import { TradeConfirmModal } from "../components/molecules/TradeConfirmModal";
 import { AddFillModal } from "../components/molecules/AddFillModal";
 import { AddTradeTickerModal } from "../components/molecules/AddTradeTickerModal";
 import { WatchlistPickerModal } from "../components/molecules/WatchlistPickerModal";
-import { ExportPickerModal } from "../components/molecules/ExportPickerModal";
+import { TradesExportModal } from "../components/organisms/TradesExportModal";
 import { todayIsoDate } from "../lib/dates";
 import {
   activeMinTradesStrats,
@@ -22,7 +22,6 @@ import {
   matchesTradeOnFilter,
 } from "../lib/filters";
 import { sortTickers, maxDaysInTrade } from "../lib/sorting";
-import { ADV_STRAT_KEY } from "../constants/strategy";
 import "./DashboardPage.css";
 
 const PAGE_SIZE = 9;
@@ -30,7 +29,7 @@ const PAGE_SIZE = 9;
 type ModalState =
   | { kind: "strategy"; ticker: string; stratKey: StrategyKey }
   | { kind: "watchlistPicker" }
-  | { kind: "export" }
+  | { kind: "export"; markdown: string }
   | { kind: "addTradeTicker" }
   | null;
 
@@ -164,17 +163,11 @@ export function DashboardPage() {
     queryClient.invalidateQueries({ queryKey: ["tickers"] });
   }
 
-  async function runExport(format: "pdf" | "csv") {
-    setModal(null);
+  async function runExport() {
     setExporting(true);
     try {
-      const body = {
-        tickers: Array.from(selected),
-        strategy: ADV_STRAT_KEY[filterState.adv.strategy],
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      };
-      if (format === "pdf") await exportPdf(body);
-      else await exportCsv(body);
+      const markdown = await getDashboardExportMarkdown();
+      setModal({ kind: "export", markdown });
     } finally {
       setExporting(false);
     }
@@ -208,11 +201,11 @@ export function DashboardPage() {
               <button type="button" onClick={() => setModal({ kind: "watchlistPicker" })}>
                 Add
               </button>
-              <button type="button" disabled={exporting} onClick={() => setModal({ kind: "export" })}>
-                {exporting ? "Exporting…" : "Export"}
-              </button>
             </>
           )}
+          <button type="button" disabled={exporting} onClick={runExport}>
+            {exporting ? "Exporting…" : "Export"}
+          </button>
           {selected.size === 0 && (
             <button type="button" disabled={refreshing || active} onClick={handleRefresh}>
               Refresh
@@ -276,7 +269,9 @@ export function DashboardPage() {
         />
       )}
 
-      {modal?.kind === "export" && <ExportPickerModal count={selected.size} onClose={() => setModal(null)} onPick={runExport} />}
+      {modal?.kind === "export" && (
+        <TradesExportModal markdown={modal.markdown} title="Export Dashboard (Markdown)" onClose={() => setModal(null)} />
+      )}
 
       {modal?.kind === "addTradeTicker" && (
         <AddTradeTickerModal

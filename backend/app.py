@@ -32,7 +32,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # _compute_one() is CPU-bound, unlike data.py's network-bound FETCH_WORKERS -- a high worker count isn't free here.
 COMPUTE_WORKERS = os.cpu_count() or 4
@@ -56,19 +55,17 @@ PAYLOAD_SCHEMA_VERSION = 6
 # needed -- the schema, queries, and retrieval logic don't change shape.
 DEFAULT_USER_ID = 1
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from yfinance.exceptions import YFRateLimitError
 
 import backend.build_universe as build_universe
-import backend.csv_export as csv_export
 import backend.data as data
 import backend.db as db
 import backend.entry_estimate as entry_estimate
 import backend.market_hours as market_hours
 import backend.options_pricing as options_pricing
-import backend.pdf_export as pdf_export
 import backend.push as push
 import backend.quality_filter as quality_filter
 import backend.review_claude as review_claude
@@ -1194,12 +1191,6 @@ def sync_watchlist_tickers(tickers: list[str]):
 _EXPORT_STRATEGY_KEYS = {"vexh", "strategy_vcp", "strategy_vcpo"}
 
 
-def _resolve_export_payloads(tickers: list[str]) -> list[dict]:
-    with _compute_lock:
-        by_ticker = {p["ticker"]: p for p in _computed}
-    return [by_ticker[tk] for tk in tickers if tk in by_ticker]
-
-
 def _resolve_export_strategy(body: dict) -> str:
     """body.strategy must be one of the 3 real payload keys -- matches the dashboard's
     Advance Filter strategy selector (ADV_STRAT_KEY in index.html), so the export only
@@ -1245,46 +1236,83 @@ def api_estimate_entry(body: dict):
     return result
 
 
-@app.post("/api/export/pdf")
-def export_pdf(body: dict):
-    """PDF export for a user-selected subset of tickers, scoped to one strategy, built
-    entirely from already-computed payloads. body: {tickers: [...], strategy: "vexh"|
-    "strategy_vcp"|"strategy_vcpo", timezone: <IANA name, e.g. "America/New_York">} -- the
-    timezone is the browser's own (Intl.DateTimeFormat().resolvedOptions().timeZone), so the
-    "Generated ..." header and the download filename's date reflect the exporting user's local
-    date/time, not the server's. Falls back to UTC if missing or not a real IANA name."""
-    strategy = _resolve_export_strategy(body)
-    tz_name = body.get("timezone")
-    try:
-        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
-    except ZoneInfoNotFoundError:
-        tz = timezone.utc
-    generated_at_local = datetime.now(tz)
-
-    payloads = _resolve_export_payloads(body.get("tickers", []))
-    pdf_bytes = pdf_export.build_pdf(payloads, strategy, generated_at_local=generated_at_local)
-    filename = f"exhaustion-export-{strategy}-{generated_at_local.strftime('%Y-%m-%d')}.pdf"
-    return Response(content=pdf_bytes, media_type="application/pdf",
-                     headers={"Content-Disposition": f"attachment; filename={filename}"})
+def _entry_plan_line(entry_plan: dict | None, order_method: str | None) -> str:
+    """One-line rendering of entry_estimate.estimate_entry()'s return dict + order_method() --
+    same numbers the daily review's "Take — Enter Tomorrow" section already shows verbatim, see
+    SYSTEM_PROMPT in review_claude.py."""
+    if entry_plan is None:
+        return "—"
+    limit = f"Limit ${entry_plan['recommended_limit']:.2f}"
+    method = f", {order_method}" if order_method else ""
+    return f"{limit}{method}"
 
 
-@app.post("/api/export/csv")
-def export_csv(body: dict):
-    """CSV export for a user-selected subset of tickers, scoped to one strategy -- same
-    scope/body shape as /api/export/pdf (see _resolve_export_strategy), one row per ticker."""
-    strategy = _resolve_export_strategy(body)
-    tz_name = body.get("timezone")
-    try:
-        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
-    except ZoneInfoNotFoundError:
-        tz = timezone.utc
-    local_date = datetime.now(tz).strftime("%Y-%m-%d")
+def _signals_markdown_table(signals: list[dict], columns: list[tuple[str, str]]) -> str:
+    """columns: [(header, field_name), ...] -- field_name "entry_plan" is rendered via
+    _entry_plan_line, everything else is read straight off each signal dict."""
+    if not signals:
+        return ""
+    header = "| " + " | ".join(h for h, _ in columns) + " |\n"
+    header += "|" + "|".join("---" for _ in columns) + "|"
+    lines = [header]
+    for sig in signals:
+        cells = []
+        for _, field in columns:
+            if field == "entry_plan":
+                cells.append(_entry_plan_line(sig.get("entry_plan"), sig.get("order_method")))
+            elif field == "strategy":
+                cells.append(_STRATEGY_LABELS.get(sig.get("strategy"), sig.get("strategy") or "—"))
+            elif field == "win_rate":
+                wr = sig.get("win_rate")
+                cells.append(f"{wr}%" if wr is not None else "—")
+            elif field in ("unrealized_pct_if_entered",):
+                v = sig.get(field)
+                cells.append(f"{v:+.1f}%" if v is not None else "—")
+            elif field in ("current_price", "signal_entry_price"):
+                v = sig.get(field)
+                cells.append(f"${v:.2f}" if v is not None else "—")
+            else:
+                v = sig.get(field)
+                cells.append(str(v) if v is not None else "—")
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
 
-    payloads = _resolve_export_payloads(body.get("tickers", []))
-    csv_text = csv_export.build_csv(payloads, strategy)
-    filename = f"exhaustion-export-{strategy}-{local_date}.csv"
-    return Response(content=csv_text, media_type="text/csv",
-                     headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS = 5
+
+
+@app.get("/api/export/dashboard-md")
+def export_dashboard_markdown():
+    """Markdown export of the dashboard's current pending + open signals -- replaces the old
+    PDF/CSV export entirely (no ticker selection, no format choice). Same underlying
+    pending_signals/open_signals computation the daily review chatbot already uses, just with a
+    wider open_signals day cutoff (5, not 3) and rendered as Markdown instead of prose."""
+    with _compute_lock:
+        computed_snapshot = list(_computed)
+    open_position_tickers = {p["ticker"] for p in db.list_positions("open")}
+    pending = _pending_signals(computed_snapshot)
+    open_signals = _open_signals(computed_snapshot, open_position_tickers, max_days=DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS)
+
+    today = market_hours.most_recent_close_boundary(datetime.now(timezone.utc)).date().isoformat()
+    pending_table = _signals_markdown_table(pending, [
+        ("Ticker", "ticker"), ("Strategy", "strategy"), ("Score", "score"), ("Trades", "n_trades"),
+        ("Win Rate", "win_rate"), ("PF", "profit_factor"), ("Current Price", "current_price"),
+        ("Entry Plan", "entry_plan"),
+    ])
+    open_table = _signals_markdown_table(open_signals, [
+        ("Ticker", "ticker"), ("Strategy", "strategy"), ("Score", "score"),
+        ("Days Since Signal", "days_since_signal"), ("Signal Entry", "signal_entry_price"),
+        ("Unrealized % If Entered", "unrealized_pct_if_entered"), ("Entry Plan", "entry_plan"),
+    ])
+
+    markdown = (
+        f"# Dashboard Export — {today}\n\n"
+        "## Pending Signals (fresh TAKE, not yet entered)\n\n"
+        + (pending_table or "*No pending signals right now.*") + "\n\n"
+        f"## Open Signals (strategy's own simulated trade, not yet entered — within {DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS} days)\n\n"
+        + (open_table or f"*No open signals within {DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS} days.*") + "\n"
+    )
+    return {"markdown": markdown}
 
 
 def _fill_exit_value(fill: dict) -> float:
@@ -1578,6 +1606,103 @@ def _summarize_fills_for_review(fills: list[dict], include_all: bool = False) ->
     return [{k: f[k] for k in _FILL_REVIEW_FIELDS if f.get(k) is not None} for f in picked]
 
 
+def _pending_signals(computed_snapshot: list[dict]) -> list[dict]:
+    """Tickers with a fresh TAKE verdict today, not yet entered -- see build_daily_snapshot's
+    "Take — Enter Tomorrow" use and the dashboard's Markdown export (max_days doesn't apply
+    here, a pending signal is inherently today's, no accumulated age to cap)."""
+    pending_signals = []
+    for payload in computed_snapshot:
+        ticker = payload["ticker"]
+        current_price = payload.get("price")
+        for strat_key in _STRATEGY_MODULES:
+            strat_payload = payload.get(strat_key)
+            if not strat_payload or strat_payload.get("verdict") != "TAKE" or current_price is None:
+                continue
+            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
+                continue
+
+            avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
+            entry_plan = None
+            if avg_mae_wins_pct is not None:
+                atr_length = 14 if strat_key == "vexh" else support_resistance.DEFAULT_ATR_LENGTH
+                bars = data.get_bars(ticker)
+                sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
+                             if bars is not None else {"support": [], "resistance": []})
+                support_levels = [p for p, _ in sr_levels["support"][:1]]
+                entry_plan = entry_estimate.estimate_entry(
+                    current_price=current_price,
+                    avg_mae_wins_pct=avg_mae_wins_pct,
+                    support_levels=support_levels,
+                )
+
+            pending_signals.append({
+                "ticker": ticker,
+                "strategy": strat_key,
+                "current_price": current_price,
+                "score": score.compute_score(payload, strat_key),
+                "n_trades": strat_payload.get("n_trades"),
+                "win_rate": strat_payload.get("win_rate"),
+                "profit_factor": strat_payload.get("profit_factor"),
+                "entry_plan": entry_plan,
+                "order_method": entry_estimate.order_method("spot"),
+            })
+    return pending_signals
+
+
+def _open_signals(computed_snapshot: list[dict], open_position_tickers: set[str], max_days: int) -> list[dict]:
+    """Tickers where a strategy's own simulated backtest is IN TRADE (open_position exists) but
+    the user never actually entered it -- distinct from real open_positions and pending_signals
+    (fresh TAKE, not yet entered at all). Capped to signals that opened within the last max_days
+    days -- old ones are stale, not worth resurfacing as "still might be worth it." The daily
+    review calls this with max_days=3; the dashboard's Markdown export calls it with max_days=5
+    -- two independent callers, not a shared constant."""
+    open_signals = []
+    for payload in computed_snapshot:
+        ticker = payload["ticker"]
+        if ticker in open_position_tickers:
+            continue
+        current_price = payload.get("price")
+        for strat_key in _STRATEGY_MODULES:
+            strat_payload = payload.get(strat_key)
+            if not strat_payload or strat_payload.get("verdict") != "IN TRADE" or current_price is None:
+                continue
+            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
+                continue
+            open_position = strat_payload.get("open_position")
+            if not open_position or open_position.get("days_held", 999) > max_days:
+                continue
+
+            avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
+            entry_plan = None
+            if avg_mae_wins_pct is not None:
+                atr_length = 14 if strat_key == "vexh" else support_resistance.DEFAULT_ATR_LENGTH
+                bars = data.get_bars(ticker)
+                sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
+                             if bars is not None else {"support": [], "resistance": []})
+                support_levels = [p for p, _ in sr_levels["support"][:1]]
+                entry_plan = entry_estimate.estimate_entry(
+                    current_price=current_price,
+                    avg_mae_wins_pct=avg_mae_wins_pct,
+                    support_levels=support_levels,
+                )
+
+            open_signals.append({
+                "ticker": ticker,
+                "strategy": strat_key,
+                "current_price": current_price,
+                "score": score.compute_score(payload, strat_key),
+                "n_trades": strat_payload.get("n_trades"),
+                "win_rate": strat_payload.get("win_rate"),
+                "profit_factor": strat_payload.get("profit_factor"),
+                "signal_entry_date": open_position.get("entry_date"),
+                "signal_entry_price": open_position.get("entry_price"),
+                "days_since_signal": open_position.get("days_held"),
+                "unrealized_pct_if_entered": open_position.get("unrealized_pct"),
+                "entry_plan": entry_plan,
+            })
+    return open_signals
+
+
 def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     """Compact, code-computed summary of current trade state for the daily review chatbot -- NOT
     a raw DB dump. Claude receives the CONCLUSION of these queries, not the tables themselves.
@@ -1654,94 +1779,11 @@ def build_daily_snapshot(user_id: int = DEFAULT_USER_ID) -> dict:
     for p in open_positions:
         (investment_positions if p.pop("entry_strategy_key") == "manual" else strategy_positions).append(p)
 
-    pending_signals = []
     with _compute_lock:
         computed_snapshot = list(_computed)
-    for payload in computed_snapshot:
-        ticker = payload["ticker"]
-        current_price = payload.get("price")
-        for strat_key in _STRATEGY_MODULES:
-            strat_payload = payload.get(strat_key)
-            if not strat_payload or strat_payload.get("verdict") != "TAKE" or current_price is None:
-                continue
-            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
-                continue
-
-            avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
-            entry_plan = None
-            if avg_mae_wins_pct is not None:
-                atr_length = 14 if strat_key == "vexh" else support_resistance.DEFAULT_ATR_LENGTH
-                bars = data.get_bars(ticker)
-                sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
-                             if bars is not None else {"support": [], "resistance": []})
-                support_levels = [p for p, _ in sr_levels["support"][:1]]
-                entry_plan = entry_estimate.estimate_entry(
-                    current_price=current_price,
-                    avg_mae_wins_pct=avg_mae_wins_pct,
-                    support_levels=support_levels,
-                )
-
-            pending_signals.append({
-                "ticker": ticker,
-                "strategy": strat_key,
-                "current_price": current_price,
-                "score": score.compute_score(payload, strat_key),
-                "n_trades": strat_payload.get("n_trades"),
-                "win_rate": strat_payload.get("win_rate"),
-                "profit_factor": strat_payload.get("profit_factor"),
-                "entry_plan": entry_plan,
-                "order_method": entry_estimate.order_method("spot"),
-            })
-
-    # Tickers where a strategy's own simulated backtest is IN TRADE (open_position exists) but
-    # the user never actually entered it -- distinct from open_positions above (real trades) and
-    # pending_signals (fresh TAKE, not yet entered at all). Capped to signals that opened within
-    # the last 3 days -- old ones are stale, not worth resurfacing as "still might be worth it."
+    pending_signals = _pending_signals(computed_snapshot)
     open_position_tickers = {p["ticker"] for p in open_positions}
-    open_signals = []
-    for payload in computed_snapshot:
-        ticker = payload["ticker"]
-        if ticker in open_position_tickers:
-            continue
-        current_price = payload.get("price")
-        for strat_key in _STRATEGY_MODULES:
-            strat_payload = payload.get(strat_key)
-            if not strat_payload or strat_payload.get("verdict") != "IN TRADE" or current_price is None:
-                continue
-            if not _passes_alert_quality_bar(payload, strat_key, strat_payload):
-                continue
-            open_position = strat_payload.get("open_position")
-            if not open_position or open_position.get("days_held", 999) > 3:
-                continue
-
-            avg_mae_wins_pct = strat_payload.get("avg_mae_wins_pct")
-            entry_plan = None
-            if avg_mae_wins_pct is not None:
-                atr_length = 14 if strat_key == "vexh" else support_resistance.DEFAULT_ATR_LENGTH
-                bars = data.get_bars(ticker)
-                sr_levels = (support_resistance.compute_sr_levels(bars, atr_length=atr_length)
-                             if bars is not None else {"support": [], "resistance": []})
-                support_levels = [p for p, _ in sr_levels["support"][:1]]
-                entry_plan = entry_estimate.estimate_entry(
-                    current_price=current_price,
-                    avg_mae_wins_pct=avg_mae_wins_pct,
-                    support_levels=support_levels,
-                )
-
-            open_signals.append({
-                "ticker": ticker,
-                "strategy": strat_key,
-                "current_price": current_price,
-                "score": score.compute_score(payload, strat_key),
-                "n_trades": strat_payload.get("n_trades"),
-                "win_rate": strat_payload.get("win_rate"),
-                "profit_factor": strat_payload.get("profit_factor"),
-                "signal_entry_date": open_position.get("entry_date"),
-                "signal_entry_price": open_position.get("entry_price"),
-                "days_since_signal": open_position.get("days_held"),
-                "unrealized_pct_if_entered": open_position.get("unrealized_pct"),
-                "entry_plan": entry_plan,
-            })
+    open_signals = _open_signals(computed_snapshot, open_position_tickers, max_days=3)
 
     # The trading-day boundary (4pm ET close), NOT raw UTC calendar date -- review_trigger_daily()
     # resolves review_date the same way, and in the evening review window (4pm-midnight ET) UTC's
