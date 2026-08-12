@@ -46,7 +46,7 @@ _compute_executor = ThreadPoolExecutor(max_workers=COMPUTE_WORKERS)
 # Bump whenever _compute_one()'s payload SHAPE changes (new/renamed/moved fields, not just new tickers/data) -- forces
 # compute_all() to recompute every ticker once instead of reusing an old-shaped cached payload forever just because
 # that ticker's bars happened not to change since the shape changed.
-PAYLOAD_SCHEMA_VERSION = 6
+PAYLOAD_SCHEMA_VERSION = 7
 
 # No real auth/accounts yet -- every user-scoped table (daily review chatbot, see
 # docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md) is written and read
