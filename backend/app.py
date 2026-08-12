@@ -1247,9 +1247,38 @@ def _entry_plan_line(entry_plan: dict | None, order_method: str | None) -> str:
     return f"{limit}{method}"
 
 
+def _prebreak_phase_cell(pb: dict | None) -> str:
+    """State + its own phase score, e.g. "PRE-BREAKOUT (4)" -- same format as the Trades
+    export's Pre-Breakout Summary line (frontend's prebreakSummaryLine)."""
+    if pb is None:
+        return "—"
+    return f"{pb['state']} ({pb['score']})"
+
+
+# Same word mapping as PrebreakChips.tsx / frontend's prebreakSummaryLine -- kept in sync
+# manually, no shared source of truth across the Python/TypeScript boundary.
+def _prebreak_squeeze_cell(pb: dict | None) -> str:
+    if pb is None:
+        return "—"
+    return "COMPRESSED" if pb["bb_squeeze"] else "EXPANDED"
+
+
+def _prebreak_volume_cell(pb: dict | None) -> str:
+    if pb is None:
+        return "—"
+    return "DRY" if pb["vol_dry_up"] else "NORMAL/HIGH"
+
+
+def _prebreak_coil_cell(pb: dict | None) -> str:
+    if pb is None:
+        return "—"
+    return "COILING" if pb["near_resistance"] else "CLEAR"
+
+
 def _signals_markdown_table(signals: list[dict], columns: list[tuple[str, str]]) -> str:
-    """columns: [(header, field_name), ...] -- field_name "entry_plan" is rendered via
-    _entry_plan_line, everything else is read straight off each signal dict."""
+    """columns: [(header, field_name), ...]. field_name "entry_plan"/"phase"/"squeeze"/
+    "volume"/"coil" render via their own dedicated helper; everything else is read straight off
+    each signal dict."""
     if not signals:
         return ""
     header = "| " + " | ".join(h for h, _ in columns) + " |\n"
@@ -1260,6 +1289,14 @@ def _signals_markdown_table(signals: list[dict], columns: list[tuple[str, str]])
         for _, field in columns:
             if field == "entry_plan":
                 cells.append(_entry_plan_line(sig.get("entry_plan"), sig.get("order_method")))
+            elif field == "phase":
+                cells.append(_prebreak_phase_cell(sig.get("prebreak")))
+            elif field == "squeeze":
+                cells.append(_prebreak_squeeze_cell(sig.get("prebreak")))
+            elif field == "volume":
+                cells.append(_prebreak_volume_cell(sig.get("prebreak")))
+            elif field == "coil":
+                cells.append(_prebreak_coil_cell(sig.get("prebreak")))
             elif field == "strategy":
                 cells.append(_STRATEGY_LABELS.get(sig.get("strategy"), sig.get("strategy") or "—"))
             elif field == "win_rate":
@@ -1294,15 +1331,18 @@ def export_dashboard_markdown():
     open_signals = _open_signals(computed_snapshot, open_position_tickers, max_days=DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS)
 
     today = market_hours.most_recent_close_boundary(datetime.now(timezone.utc)).date().isoformat()
-    pending_table = _signals_markdown_table(pending, [
-        ("Ticker", "ticker"), ("Strategy", "strategy"), ("Score", "score"), ("Trades", "n_trades"),
-        ("Win Rate", "win_rate"), ("PF", "profit_factor"), ("Current Price", "current_price"),
-        ("Entry Plan", "entry_plan"),
-    ])
-    open_table = _signals_markdown_table(open_signals, [
-        ("Ticker", "ticker"), ("Strategy", "strategy"), ("Score", "score"),
+    # Base columns shared by both tables; Open Signals appends its own extra fields (a real
+    # open_position signal has more to say than a fresh pending one -- how long it's been
+    # running and how it would have done).
+    base_columns = [
+        ("Ticker", "ticker"), ("Score", "score"), ("Trades", "n_trades"), ("WR", "win_rate"),
+        ("PF", "profit_factor"), ("Price", "current_price"), ("Phase", "phase"),
+        ("Squeeze", "squeeze"), ("Volume", "volume"), ("Coil", "coil"), ("Entry Plan", "entry_plan"),
+    ]
+    pending_table = _signals_markdown_table(pending, base_columns)
+    open_table = _signals_markdown_table(open_signals, base_columns + [
         ("Days Since Signal", "days_since_signal"), ("Signal Entry", "signal_entry_price"),
-        ("Unrealized % If Entered", "unrealized_pct_if_entered"), ("Entry Plan", "entry_plan"),
+        ("Unrealized % If Entered", "unrealized_pct_if_entered"),
     ])
 
     markdown = (
@@ -1645,6 +1685,7 @@ def _pending_signals(computed_snapshot: list[dict]) -> list[dict]:
                 "profit_factor": strat_payload.get("profit_factor"),
                 "entry_plan": entry_plan,
                 "order_method": entry_estimate.order_method("spot"),
+                "prebreak": payload.get("prebreak"),
             })
     return pending_signals
 
@@ -1699,6 +1740,7 @@ def _open_signals(computed_snapshot: list[dict], open_position_tickers: set[str]
                 "days_since_signal": open_position.get("days_held"),
                 "unrealized_pct_if_entered": open_position.get("unrealized_pct"),
                 "entry_plan": entry_plan,
+                "prebreak": payload.get("prebreak"),
             })
     return open_signals
 
