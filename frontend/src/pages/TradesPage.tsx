@@ -155,6 +155,7 @@ export function TradesPage() {
             exitedFillsByPositionId ?? {},
             prebreakTickers,
             prebreakByTicker,
+            tickersData?.asof ?? null,
           )}
           onClose={() => setShowExport(false)}
         />

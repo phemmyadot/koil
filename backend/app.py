@@ -1330,11 +1330,18 @@ def export_dashboard_markdown():
     wider open_signals day cutoff (5, not 3) and rendered as Markdown instead of prose."""
     with _compute_lock:
         computed_snapshot = list(_computed)
+        asof = _computed_asof
     open_position_tickers = {p["ticker"] for p in db.list_positions("open")}
     pending = _pending_signals(computed_snapshot)
     open_signals = _open_signals(computed_snapshot, open_position_tickers, max_days=DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS)
 
-    today = market_hours.most_recent_close_boundary(datetime.now(timezone.utc)).date().isoformat()
+    # Timestamp of the actual data (last compute pass), not "today" -- a calendar date silently
+    # lies about freshness if the last compute happened yesterday or the cycle stalled.
+    if asof:
+        asof_dt = datetime.fromisoformat(asof).astimezone(market_hours.MARKET_TZ)
+        today = asof_dt.strftime("%Y-%m-%d %H:%M %Z")
+    else:
+        today = "unknown"
     # Base columns shared by both tables; Open Signals appends its own extra fields (a real
     # open_position signal has more to say than a fresh pending one -- how long it's been
     # running and how it would have done).

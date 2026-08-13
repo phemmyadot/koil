@@ -114,13 +114,26 @@ export function buildTradesExportMarkdown(
   // already deduplicated by the caller, see TradesPage.tsx.
   prebreakTickers: string[] = [],
   prebreakByTicker: Record<string, PrebreakResult | null> = {},
+  // ISO UTC timestamp of the last compute pass (TickersResponse.asof) -- the actual data's
+  // freshness, not "today" (a calendar date silently lies if the last compute was yesterday or
+  // the cycle stalled). Matches the Dashboard export's header.
+  dataAsOf: string | null = null,
 ): string {
   const spot = spotPositions ?? [];
   const options = optionsPositions ?? [];
-  const today = new Date().toISOString().slice(0, 10);
+  const asOfLabel = dataAsOf
+    ? new Date(dataAsOf).toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }) + " ET"
+    : "unknown";
 
   return [
-    `# Trades Export — ${today}`,
+    `# Trades Export — ${asOfLabel}`,
     "",
     "## Summary",
     "",
