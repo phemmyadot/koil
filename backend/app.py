@@ -1337,9 +1337,16 @@ def export_dashboard_markdown():
 
     # Timestamp of the actual data (last compute pass), not "today" -- a calendar date silently
     # lies about freshness if the last compute happened yesterday or the cycle stalled.
+    stale_warning = ""
     if asof:
         asof_dt = datetime.fromisoformat(asof).astimezone(market_hours.MARKET_TZ)
         today = asof_dt.strftime("%Y-%m-%d %H:%M %Z")
+        now_dt = datetime.now(market_hours.MARKET_TZ)
+        if (now_dt - asof_dt) > timedelta(minutes=5):
+            stale_warning = (
+                f"⚠️ Data as of {asof_dt.strftime('%H:%M %Z')} — may be stale. "
+                f"Current time is {now_dt.strftime('%H:%M %Z')}\n\n"
+            )
     else:
         today = "unknown"
     # Base columns shared by both tables; Open Signals appends its own extra fields (a real
@@ -1359,6 +1366,7 @@ def export_dashboard_markdown():
 
     markdown = (
         f"# Dashboard Export — {today}\n\n"
+        + stale_warning +
         "## Pending Signals (fresh TAKE, not yet entered)\n\n"
         + (pending_table or "*No pending signals right now.*") + "\n\n"
         f"## Open Signals (strategy's own simulated trade, not yet entered — within {DASHBOARD_EXPORT_OPEN_SIGNAL_MAX_DAYS} days)\n\n"

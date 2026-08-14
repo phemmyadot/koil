@@ -102,6 +102,21 @@ function prebreakSummaryTable(tickers: string[], prebreakByTicker: Record<string
   return [header, ...lines].join("\n");
 }
 
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Shown right above Pre-Breakout Summary when the underlying compute pass is older than 5
+// minutes -- that section is the one most sensitive to stale prices (entry plans, phase state),
+// so the warning sits there rather than in the header.
+function staleDataWarning(dataAsOf: string | null): string {
+  if (!dataAsOf) return "";
+  const asOfDate = new Date(dataAsOf);
+  const ageMs = Date.now() - asOfDate.getTime();
+  if (ageMs <= STALE_THRESHOLD_MS) return "";
+  const fmt = (d: Date) =>
+    d.toLocaleString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }) + " ET";
+  return `⚠️ Data as of ${fmt(asOfDate)} — may be stale. Current time is ${fmt(new Date())}\n\n`;
+}
+
 export function buildTradesExportMarkdown(
   spotPositions: Position[] | undefined,
   optionsPositions: Position[] | undefined,
@@ -159,7 +174,7 @@ export function buildTradesExportMarkdown(
     "",
     "## Pre-Breakout Summary",
     "",
-    prebreakSummaryTable(prebreakTickers, prebreakByTicker),
+    staleDataWarning(dataAsOf) + prebreakSummaryTable(prebreakTickers, prebreakByTicker),
     "",
   ].join("\n");
 }
