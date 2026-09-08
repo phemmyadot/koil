@@ -15,27 +15,6 @@
   font-size: 0.85rem;
 }
 
-.crypto-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 0.75rem;
-}
-
-.crypto-card {
-  border: 1px solid var(--color-border, #333);
-  border-radius: 8px;
-  padding: 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.crypto-card-header {
-  display: flex;
-  justify-content: space-between;
-  font-weight: 600;
-}
-
 .crypto-verdict {
   font-size: 0.75rem;
   font-weight: 700;
