@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: "\u{1F4C8}" },
   { to: "/trades", label: "Trades", icon: "\u{1F4CA}" },
   { to: "/watchlists", label: "Watchlists", icon: "⭐" },
+  { to: "/crypto", label: "Crypto", icon: "\u{1FA99}" },
 ];
 
 // Analyzer is feature-flagged (ENABLE_DAILY_REVIEW) -- see

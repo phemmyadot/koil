@@ -62,6 +62,8 @@ from yfinance.exceptions import YFRateLimitError
 
 import backend.build_universe as build_universe
 import backend.data as data
+import backend.data_crypto as data_crypto
+import backend.crypto_universe as crypto_universe
 import backend.db as db
 import backend.entry_estimate as entry_estimate
 import backend.market_hours as market_hours
@@ -75,6 +77,7 @@ import backend.support_resistance as support_resistance
 import backend.prebreak as prebreak
 import backend.score as score
 import backend.strategy_common as strategy_common
+import backend.strategy_crypto as strategy_crypto
 import backend.strategy_vcp as strategy_vcp
 import backend.strategy_vcpo as strategy_vcpo
 import backend.strategy_vexh as strategy_vexh
@@ -91,6 +94,7 @@ CLOSED_MARKET_POLL_SECONDS = 5 * 60
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _on_startup()
+    _on_crypto_startup()
     yield
     # No shutdown-side cleanup needed: the background thread is a daemon and db's connection needs no explicit close.
 
@@ -1019,6 +1023,153 @@ def refresh_and_compute(force: bool = False) -> None:
               f"fetch={fetch_seconds:.1f}s compute={compute_seconds:.1f}s total={time.time() - cycle_start:.1f}s")
     finally:
         _refresh_pass_lock.release()
+
+
+CRYPTO_BACKGROUND_INTERVAL_SECONDS = int(os.environ.get("CRYPTO_FETCH_INTERVAL_MINUTES", 30)) * 60
+
+_crypto_computed: list[dict] = []
+_crypto_computed_errors: dict[str, str] = {}
+_crypto_computed_asof: str | None = None
+_crypto_computed_source_fetch: dict[str, str] = {}
+_crypto_compute_lock = threading.Lock()
+_crypto_refresh_pass_lock = threading.Lock()
+
+
+def _load_crypto_computed_from_db() -> None:
+    global _crypto_computed, _crypto_computed_errors, _crypto_computed_source_fetch, _crypto_computed_asof
+    try:
+        _crypto_computed, _crypto_computed_errors, _crypto_computed_source_fetch = db.crypto_load_all_computed()
+        max_computed_at = db.crypto_get_max_computed_at()
+        if max_computed_at is not None:
+            _crypto_computed_asof = datetime.fromtimestamp(max_computed_at, timezone.utc).isoformat(timespec="seconds")
+    except Exception as e:  # noqa: BLE001 - corrupted DB, not a crash
+        print(f"app: loading crypto computed results from db failed ({e}); starting cold.")
+        _crypto_computed, _crypto_computed_errors, _crypto_computed_source_fetch = [], {}, {}
+
+
+_load_crypto_computed_from_db()
+
+
+def _crypto_compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]:
+    bars = data_crypto.get_bars(ticker)
+    if bars is None:
+        return ticker, None, data_crypto.get_error(ticker) or "no data", None
+    try:
+        if bars.empty:
+            raise ValueError("no data")
+        checksum = db.crypto_get_bars_checksum(ticker)
+        result = strategy_crypto.evaluate(ticker, bars)
+        payload = {
+            "ticker": ticker,
+            "price": round(float(bars.Close.iloc[-1]), 4),
+            "date": str(bars.index[-1].date()),
+            "strategy_vcp": result,
+            "_schema_version": PAYLOAD_SCHEMA_VERSION,
+        }
+        return ticker, payload, None, checksum
+    except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
+        return ticker, None, str(e) or type(e).__name__, checksum
+
+
+def _crypto_fire_state_alert(ticker: str, prior_state: str, new_state: str, now_iso: str) -> None:
+    """Same transition-alert shape as _fire_strategy_state_alert, scoped to crypto's own
+    notification kind so the two never dedup/collide against each other."""
+    if new_state == "NO SIGNAL" and prior_state == "OPEN":
+        display_state = "EXIT"
+    elif new_state == "NO SIGNAL" and prior_state == "PENDING":
+        display_state = "NO SIGNAL (pending signal expired)"
+    else:
+        display_state = new_state
+    message = f"{ticker} — VCP (crypto) is now {display_state}"
+    db.insert_notification(None, "crypto_strategy_state", None, message, now_iso)
+    payload = json.dumps({"title": f"{ticker} — VCP (crypto)", "body": message, "ticker": ticker})
+    push.send_push_to_all(payload, now_iso)
+
+
+def crypto_compute_all(force: bool = False) -> None:
+    global _crypto_computed, _crypto_computed_errors, _crypto_computed_asof, _crypto_computed_source_fetch
+
+    with _crypto_compute_lock:
+        prior_by_ticker = {p["ticker"]: p for p in _crypto_computed}
+        prior_source_fetch = dict(_crypto_computed_source_fetch)
+        prior_errors = dict(_crypto_computed_errors)
+
+    to_compute = []
+    reused_payloads: dict[str, dict] = {}
+    reused_source_fetch: dict[str, str] = {}
+    reused_errors: dict[str, str] = {}
+    for tk in crypto_universe.ALL_TICKERS:
+        checksum = db.crypto_get_bars_checksum(tk)
+        prior_payload = prior_by_ticker.get(tk)
+        shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
+        if not force and checksum is not None and prior_source_fetch.get(tk) == checksum and shape_current:
+            if tk in prior_by_ticker:
+                reused_payloads[tk] = prior_payload
+                reused_source_fetch[tk] = checksum
+            elif tk in prior_errors:
+                reused_errors[tk] = prior_errors[tk]
+                reused_source_fetch[tk] = checksum
+            else:
+                to_compute.append(tk)
+        else:
+            to_compute.append(tk)
+
+    results = [_crypto_compute_one(tk) for tk in to_compute]
+
+    with _crypto_compute_lock:
+        new_source_fetch = {tk: fp for tk, payload, err, fp in results if payload is not None or err is not None}
+        _crypto_computed = list(reused_payloads.values()) + [p for _, p, _, _ in results if p is not None]
+        _crypto_computed_errors = {**reused_errors, **{t: e for t, _, e, _ in results if e is not None}}
+        _crypto_computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
+        _crypto_computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        computed_at = time.time()
+        for tk, payload, err, fp in results:
+            if payload is not None or err is not None:
+                source_bar_date = new_source_fetch.get(tk)
+                if source_bar_date is None:
+                    continue
+                try:
+                    db.crypto_upsert_computed(tk, payload, source_bar_date, computed_at, err)
+                except Exception as e:  # noqa: BLE001
+                    print(f"app: crypto db.upsert_computed failed for {tk} ({e}).")
+            if payload is not None:
+                prior_payload = prior_by_ticker.get(tk)
+                prior_state = _strategy_entry_state((prior_payload or {}).get("strategy_vcp"))
+                new_state = _strategy_entry_state(payload.get("strategy_vcp"))
+                if prior_state is not None and new_state is not None and new_state != prior_state:
+                    try:
+                        _crypto_fire_state_alert(tk, prior_state, new_state, _crypto_computed_asof)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"app: crypto state alert failed for {tk} ({e}).")
+
+
+def crypto_refresh_and_compute(force: bool = False) -> None:
+    if not _crypto_refresh_pass_lock.acquire(blocking=False):
+        print("app: crypto_refresh_and_compute() already running -- skipping this overlapping call.")
+        return
+    try:
+        data_crypto.warm_cache(crypto_universe.ALL_TICKERS, force=force)
+        crypto_compute_all(force=force)
+    finally:
+        _crypto_refresh_pass_lock.release()
+
+
+def _on_crypto_startup():
+    def loop():
+        if not db.crypto_load_all_bars():
+            print("app: crypto DB is empty -- running an eager fetch+compute.")
+            try:
+                crypto_refresh_and_compute()
+            except Exception as e:  # noqa: BLE001
+                print(f"app: eager crypto startup fetch+compute failed ({e}); will retry on cadence.")
+        while True:
+            time.sleep(CRYPTO_BACKGROUND_INTERVAL_SECONDS)
+            try:
+                crypto_refresh_and_compute()
+            except Exception as e:  # noqa: BLE001 - one bad pass must not kill the loop
+                print(f"app: crypto background refresh loop pass failed ({e}); will retry next cycle.")
+
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def _on_startup():
@@ -2567,6 +2718,43 @@ def review_chat(review_date: str, body: dict):
             print(f"app: user_enrichment write failed for fact {fact!r} ({e}).")
 
     return {"reply": assistant_text, "reply_chunks": review_stream.chunk_markdown_for_stream(assistant_text)}
+
+
+def _run_manual_crypto_refresh() -> None:
+    crypto_refresh_and_compute(force=True)
+
+
+@app.get("/api/crypto/signals")
+def crypto_signals(refresh: int = 0):
+    """Mirrors /api/tickers's shape (asof/cached/tickers/errors) for frontend consistency --
+    each entry's strategy_vcp is a strategy_common.evaluate_strategy() result, run with that
+    ticker's bucket-specific config (crypto_universe.CONFIG_BY_TICKER)."""
+    if refresh:
+        threading.Thread(target=_run_manual_crypto_refresh, daemon=True).start()
+    with _crypto_compute_lock:
+        computed_snapshot = list(_crypto_computed)
+        asof, errors = _crypto_computed_asof, dict(_crypto_computed_errors)
+    return {
+        "asof": asof,
+        "cached": not refresh,
+        "tickers": computed_snapshot,
+        "errors": errors,
+    }
+
+
+@app.post("/api/crypto/refresh")
+def crypto_refresh():
+    threading.Thread(target=_run_manual_crypto_refresh, daemon=True).start()
+    return {"started": True}
+
+
+@app.get("/api/crypto/meta")
+def crypto_meta():
+    return {
+        "total_tickers": len(crypto_universe.ALL_TICKERS),
+        "last_fetch": data_crypto.last_fetch_time(),
+        "fetch_progress": data_crypto.fetch_progress(),
+    }
 
 
 class SPAStaticFiles(StaticFiles):

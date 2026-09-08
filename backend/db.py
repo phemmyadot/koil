@@ -297,6 +297,33 @@ def _init_schema() -> None:
                 last_updated_review_id INTEGER NOT NULL REFERENCES daily_reviews(id),
                 updated_at TEXT NOT NULL
             );
+
+            -- Crypto's own bars/fetch-meta/computed-results tables, parallel to
+            -- bars/fetch_meta/computed_results above but namespaced separately so crypto tickers
+            -- (BTC-USD etc.) never mix into the equity screener/universe queries or share a
+            -- staleness clock with equity's market-hours-gated fetch loop.
+            CREATE TABLE IF NOT EXISTS crypto_bars (
+                ticker TEXT NOT NULL,
+                date   TEXT NOT NULL,
+                open REAL, high REAL, low REAL, close REAL, volume INTEGER,
+                PRIMARY KEY (ticker, date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_crypto_bars_ticker ON crypto_bars(ticker);
+
+            CREATE TABLE IF NOT EXISTS crypto_fetch_meta (
+                ticker TEXT PRIMARY KEY,
+                last_fetched_at REAL NOT NULL,
+                last_bar_date TEXT NOT NULL,
+                last_error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS crypto_computed_results (
+                ticker TEXT PRIMARY KEY,
+                payload TEXT,
+                source_bar_date TEXT NOT NULL,
+                computed_at REAL NOT NULL,
+                error TEXT
+            );
         """)
     _migrate_notifications_position_id_nullable()
 
@@ -1396,3 +1423,149 @@ def upsert_review_memory_summary(user_id: int, summary_text: str, last_updated_r
             ON CONFLICT(user_id) DO UPDATE SET summary_text=excluded.summary_text,
                 last_updated_review_id=excluded.last_updated_review_id, updated_at=excluded.updated_at
         """, (user_id, summary_text, last_updated_review_id, updated_at))
+
+
+# ─────────────────────────── crypto bars ───────────────────────────
+# Same shape/semantics as the equity bars/fetch_meta/computed_results functions above, just
+# against the crypto_* tables -- kept as separate functions (not a shared `table` param) so
+# equity call sites can never accidentally point at the crypto tables or vice versa.
+
+def crypto_upsert_bars(ticker: str, df: pd.DataFrame, fetched_at: float) -> None:
+    if df.empty:
+        with _lock, _conn:
+            existing = _conn.execute(
+                "SELECT last_bar_date FROM crypto_fetch_meta WHERE ticker = ?", (ticker,)
+            ).fetchone()
+            if existing:
+                _conn.execute("""
+                    UPDATE crypto_fetch_meta SET last_fetched_at = ?, last_error = NULL
+                    WHERE ticker = ?
+                """, (fetched_at, ticker))
+        return
+
+    rows = [
+        (ticker, idx.strftime("%Y-%m-%d"), float(row["Open"]), float(row["High"]),
+         float(row["Low"]), float(row["Close"]), int(row["Volume"]))
+        for idx, row in df.iterrows()
+    ]
+    last_bar_date = df.index.max().strftime("%Y-%m-%d")
+
+    with _lock, _conn:
+        _conn.executemany("""
+            INSERT INTO crypto_bars (ticker, date, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker, date) DO UPDATE SET
+                open=excluded.open, high=excluded.high, low=excluded.low,
+                close=excluded.close, volume=excluded.volume
+        """, rows)
+        _conn.execute("""
+            INSERT INTO crypto_fetch_meta (ticker, last_fetched_at, last_bar_date, last_error)
+            VALUES (?, ?, ?, NULL)
+            ON CONFLICT(ticker) DO UPDATE SET
+                last_fetched_at=excluded.last_fetched_at,
+                last_bar_date=excluded.last_bar_date,
+                last_error=NULL
+        """, (ticker, fetched_at, last_bar_date))
+
+
+def crypto_mark_fetch_error(ticker: str, fetched_at: float, error: str) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO crypto_fetch_meta (ticker, last_fetched_at, last_bar_date, last_error)
+            VALUES (?, ?, '', ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                last_fetched_at=excluded.last_fetched_at, last_error=excluded.last_error
+        """, (ticker, fetched_at, error))
+
+
+def crypto_get_last_bar_date(ticker: str) -> str | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT last_bar_date FROM crypto_fetch_meta WHERE ticker = ?", (ticker,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def crypto_get_bars_checksum(ticker: str) -> str | None:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT date, open, high, low, close, volume FROM crypto_bars WHERE ticker = ? ORDER BY date",
+            (ticker,)
+        ).fetchall()
+    if not rows:
+        return None
+    h = hashlib.sha256()
+    for row in rows:
+        h.update("|".join(str(v) for v in row).encode())
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def crypto_load_all_bars() -> dict[str, pd.DataFrame]:
+    with _lock:
+        df = pd.read_sql_query("SELECT * FROM crypto_bars ORDER BY ticker, date", _conn)
+    if df.empty:
+        return {}
+    df["date"] = pd.to_datetime(df["date"])
+    out: dict[str, pd.DataFrame] = {}
+    for ticker, group in df.groupby("ticker"):
+        g = group.set_index("date")[["open", "high", "low", "close", "volume"]]
+        g.columns = ["Open", "High", "Low", "Close", "Volume"]
+        g.index.name = None
+        out[ticker] = g
+    return out
+
+
+def crypto_load_all_fetch_meta() -> tuple[dict[str, float], dict[str, str]]:
+    with _lock:
+        rows = _conn.execute("SELECT ticker, last_fetched_at, last_error FROM crypto_fetch_meta").fetchall()
+    fetched_at = {tk: fa for tk, fa, _err in rows}
+    errors = {tk: err for tk, _fa, err in rows if err}
+    return fetched_at, errors
+
+
+def crypto_get_computed(ticker: str) -> tuple[dict | None, str | None, str | None]:
+    with _lock:
+        row = _conn.execute(
+            "SELECT payload, source_bar_date, error FROM crypto_computed_results WHERE ticker = ?",
+            (ticker,)
+        ).fetchone()
+    if row is None:
+        return None, None, None
+    payload_json, source_bar_date, error = row
+    payload = json.loads(payload_json) if payload_json else None
+    return payload, source_bar_date, error
+
+
+def crypto_upsert_computed(ticker: str, payload: dict | None, source_bar_date: str,
+                            computed_at: float, error: str | None) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO crypto_computed_results (ticker, payload, source_bar_date, computed_at, error)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                payload=excluded.payload, source_bar_date=excluded.source_bar_date,
+                computed_at=excluded.computed_at, error=excluded.error
+        """, (ticker, json.dumps(payload) if payload is not None else None,
+              source_bar_date, computed_at, error))
+
+
+def crypto_load_all_computed() -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT ticker, payload, source_bar_date, error FROM crypto_computed_results"
+        ).fetchall()
+    computed, errors, source_fetch = [], {}, {}
+    for ticker, payload_json, source_bar_date, error in rows:
+        source_fetch[ticker] = source_bar_date
+        if payload_json:
+            computed.append(json.loads(payload_json))
+        if error:
+            errors[ticker] = error
+    return computed, errors, source_fetch
+
+
+def crypto_get_max_computed_at() -> float | None:
+    with _lock:
+        row = _conn.execute("SELECT MAX(computed_at) FROM crypto_computed_results").fetchone()
+    return row[0] if row and row[0] is not None else None
