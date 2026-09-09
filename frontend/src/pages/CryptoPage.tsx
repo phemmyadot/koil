@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useCryptoMeta, useCryptoSignals, useRefreshCryptoSignals } from "../hooks/useCrypto";
 import type { CryptoTickerPayload } from "../api/crypto";
 import { StrategyBadgeRow } from "../components/molecules/StrategyBadgeRow";
+import { CryptoValidationModal } from "../components/molecules/CryptoValidationModal";
 import { CryptoFilterBar, defaultCryptoFilterBarState, type CryptoFilterBarState } from "../components/organisms/CryptoFilterBar";
 import { Pagination } from "../components/organisms/TickerCardGrid";
 import { sortCryptoTickers } from "../lib/sorting";
@@ -40,7 +41,7 @@ function toTradingViewUrl(yahooTicker: string, lastMarket: string | null): strin
 
 // Same tickercard shell/badge-row as the equity dashboard's TickerCard, sized down to crypto's
 // single-strategy payload (no setup_score/earnings/prebreak fields to show).
-function CryptoCard({ row }: { row: CryptoTickerPayload }) {
+function CryptoCard({ row, onValidate }: { row: CryptoTickerPayload; onValidate: () => void }) {
   const s = row.strategy_vcp;
   const verdictClass = VERDICT_CLASS[s.verdict] ?? "crypto-verdict-none";
   const daysHeld = s.open_position ? s.open_position.days_held : null;
@@ -69,7 +70,7 @@ function CryptoCard({ row }: { row: CryptoTickerPayload }) {
         nTrades={s.n_trades}
         winRate={s.win_rate}
         profitFactor={s.profit_factor}
-        onClick={() => {}}
+        onClick={onValidate}
       />
       {s.open_position && (
         <div className="crypto-open-position">
@@ -88,6 +89,7 @@ export function CryptoPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [filterState, setFilterState] = useState<CryptoFilterBarState>(defaultCryptoFilterBarState);
   const [page, setPage] = useState(1);
+  const [validateTicker, setValidateTicker] = useState<string | null>(null);
 
   const filteredRows = useMemo(() => {
     if (!data) return [];
@@ -176,7 +178,7 @@ export function CryptoPage() {
       ) : (
         <div className="cardgrid">
           {pageRows.map((row) => (
-            <CryptoCard key={row.ticker} row={row} />
+            <CryptoCard key={row.ticker} row={row} onValidate={() => setValidateTicker(row.ticker)} />
           ))}
         </div>
       )}
@@ -192,6 +194,11 @@ export function CryptoPage() {
           ))}
         </div>
       )}
+
+      {validateTicker && (() => {
+        const row = data?.tickers.find((r) => r.ticker === validateTicker);
+        return row ? <CryptoValidationModal row={row} onClose={() => setValidateTicker(null)} /> : null;
+      })()}
     </div>
   );
 }

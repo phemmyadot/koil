@@ -21,6 +21,16 @@ export interface CryptoStrategyResult {
   win_rate: number;
   profit_factor: number;
   avg_trade_days: number | null;
+  // Manual-validation aid: last 5 trades' actual entry/exit dates+prices (not just days/pnl%),
+  // plus the bars' fetched date range, so this can be cross-checked against a TradingView chart.
+  last5_trades_detailed: {
+    entry_date: string;
+    entry_price: number;
+    exit_date: string;
+    exit_price: number;
+    pnl_pct: number;
+  }[];
+  data_range: { start: string; end: string; n_bars: number };
 }
 
 export interface CryptoTickerPayload {
