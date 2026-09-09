@@ -17,6 +17,10 @@ export function CryptoValidationModal({ row, onClose }: CryptoValidationModalPro
       <ModalRow label="Data range" value={`${s.data_range.start} → ${s.data_range.end}`} />
       <ModalRow label="Bars" value={s.data_range.n_bars} />
       <ModalRow label="Source" value={row.last_market ?? "—"} />
+      <ModalRow
+        label="Bars source"
+        value={row.price_source === "yfinance" ? "yfinance (unverified)" : row.price_source ?? "—"}
+      />
       <div className="modal-sep" />
       <ModalRow label="Trades" value={s.n_trades} />
       <ModalRow label="Win rate" value={`${s.win_rate}%`} />

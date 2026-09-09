@@ -314,7 +314,8 @@ def _init_schema() -> None:
                 ticker TEXT PRIMARY KEY,
                 last_fetched_at REAL NOT NULL,
                 last_bar_date TEXT NOT NULL,
-                last_error TEXT
+                last_error TEXT,
+                price_source TEXT
             );
 
             -- Discovered crypto candidates per bucket, namespaced from equity's candidate_tickers
@@ -565,6 +566,17 @@ def _migrate_crypto_fetch_meta_add_last_market_column() -> None:
         _conn.execute("ALTER TABLE crypto_fetch_meta ADD COLUMN last_market TEXT")
 
 
+def _migrate_crypto_fetch_meta_add_price_source_column() -> None:
+    """price_source records which API actually supplied a ticker's OHLCV bars ("coinbase" or
+    "yfinance") -- set on every fetch (not just at discovery like last_market) since a ticker can
+    move between sources over time (e.g. gets listed on Coinbase later)."""
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(crypto_fetch_meta)").fetchall()]
+        if "price_source" in cols:
+            return
+        _conn.execute("ALTER TABLE crypto_fetch_meta ADD COLUMN price_source TEXT")
+
+
 def _migrate_positions_add_alert_framework_columns() -> None:
     """See docs/superpowers/specs/2026-08-07-alert-system-audit.md -- ALTER TABLE always appends
     at the physical end of the table regardless of where a column appears in CREATE TABLE's text
@@ -590,6 +602,7 @@ _init_schema()
 _migrate_positions_add_option_gain_alert_column()
 _migrate_positions_add_alert_framework_columns()
 _migrate_crypto_fetch_meta_add_last_market_column()
+_migrate_crypto_fetch_meta_add_price_source_column()
 
 
 # ─────────────────────────── price bars ───────────────────────────
@@ -1477,7 +1490,7 @@ def upsert_review_memory_summary(user_id: int, summary_text: str, last_updated_r
 # against the crypto_* tables -- kept as separate functions (not a shared `table` param) so
 # equity call sites can never accidentally point at the crypto tables or vice versa.
 
-def crypto_upsert_bars(ticker: str, df: pd.DataFrame, fetched_at: float) -> None:
+def crypto_upsert_bars(ticker: str, df: pd.DataFrame, fetched_at: float, price_source: str | None = None) -> None:
     if df.empty:
         with _lock, _conn:
             existing = _conn.execute(
@@ -1485,9 +1498,10 @@ def crypto_upsert_bars(ticker: str, df: pd.DataFrame, fetched_at: float) -> None
             ).fetchone()
             if existing:
                 _conn.execute("""
-                    UPDATE crypto_fetch_meta SET last_fetched_at = ?, last_error = NULL
+                    UPDATE crypto_fetch_meta SET last_fetched_at = ?, last_error = NULL,
+                        price_source = COALESCE(?, price_source)
                     WHERE ticker = ?
-                """, (fetched_at, ticker))
+                """, (fetched_at, price_source, ticker))
         return
 
     rows = [
@@ -1506,13 +1520,14 @@ def crypto_upsert_bars(ticker: str, df: pd.DataFrame, fetched_at: float) -> None
                 close=excluded.close, volume=excluded.volume
         """, rows)
         _conn.execute("""
-            INSERT INTO crypto_fetch_meta (ticker, last_fetched_at, last_bar_date, last_error)
-            VALUES (?, ?, ?, NULL)
+            INSERT INTO crypto_fetch_meta (ticker, last_fetched_at, last_bar_date, last_error, price_source)
+            VALUES (?, ?, ?, NULL, ?)
             ON CONFLICT(ticker) DO UPDATE SET
                 last_fetched_at=excluded.last_fetched_at,
                 last_bar_date=excluded.last_bar_date,
-                last_error=NULL
-        """, (ticker, fetched_at, last_bar_date))
+                last_error=NULL,
+                price_source=excluded.price_source
+        """, (ticker, fetched_at, last_bar_date, price_source))
 
 
 def crypto_mark_fetch_error(ticker: str, fetched_at: float, error: str) -> None:
@@ -1537,6 +1552,16 @@ def crypto_get_last_markets() -> dict[str, str]:
     with _lock:
         rows = _conn.execute(
             "SELECT ticker, last_market FROM crypto_fetch_meta WHERE last_market IS NOT NULL").fetchall()
+    return dict(rows)
+
+
+def crypto_get_price_sources() -> dict[str, str]:
+    """Which API actually supplied each ticker's stored bars ("coinbase"/"yfinance"), written on
+    every crypto_upsert_bars call -- unlike last_market this reflects live fetch state, not a
+    discovery-time snapshot."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT ticker, price_source FROM crypto_fetch_meta WHERE price_source IS NOT NULL").fetchall()
     return dict(rows)
 
 

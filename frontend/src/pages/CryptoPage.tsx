@@ -60,6 +60,9 @@ function CryptoCard({ row, onValidate }: { row: CryptoTickerPayload; onValidate:
         <span className="price num">${row.price}</span>
       </div>
       {row.last_market && <div className="crypto-source">Source: {row.last_market}</div>}
+      {row.price_source === "yfinance" && (
+        <div className="crypto-unverified-badge">yfinance (unverified)</div>
+      )}
       <div className={`crypto-verdict ${verdictClass}`}>{s.verdict}</div>
       <div className="crypto-reason">{s.verdict_reason}</div>
       <hr className="divider" />

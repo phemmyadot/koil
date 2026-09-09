@@ -2818,7 +2818,11 @@ def crypto_signals(refresh: int = 0):
     # payload from before this field existed would otherwise never pick it up until its bars
     # actually changed) and always reflects the latest discovery-time value.
     last_markets = db.crypto_get_last_markets()
-    tickers_with_market = [{**row, "last_market": last_markets.get(row["ticker"])} for row in computed_snapshot]
+    price_sources = db.crypto_get_price_sources()
+    tickers_with_market = [
+        {**row, "last_market": last_markets.get(row["ticker"]), "price_source": price_sources.get(row["ticker"])}
+        for row in computed_snapshot
+    ]
     return {
         "asof": asof,
         "cached": not refresh,

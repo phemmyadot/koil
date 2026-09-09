@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
+import yfinance as yf
 
 import backend.db as db
 
@@ -142,7 +143,17 @@ def _fetch_coinbase_history(ticker: str, start_date: str) -> pd.DataFrame:
     return df
 
 
-def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str | None]:
+def _fetch_yfinance_history(ticker: str, start: str) -> pd.DataFrame:
+    """Same fetch/post-processing yfinance path this codebase used before the Coinbase migration
+    (see git history) -- reused as-is here so the fallback isn't a slightly different reimplementation."""
+    df = yf.download(ticker, start=start, interval="1d", progress=False,
+                      auto_adjust=False, timeout=FETCH_TIMEOUT)
+    if hasattr(df.columns, "get_level_values"):
+        df.columns = df.columns.get_level_values(0)
+    return df.drop(columns=["Adj Close"], errors="ignore").dropna()
+
+
+def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str | None, str | None]:
     last_bar_date = None if force else db.crypto_get_last_bar_date(ticker)
     if last_bar_date:
         try:
@@ -160,15 +171,26 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
         df = _fetch_coinbase_history(ticker, start)
         if df.empty:
             if last_bar_date:
-                return ticker, df, None
-            return ticker, None, "insufficient history"
-        return ticker, df, None
+                return ticker, df, None, "coinbase"
+            return ticker, None, "insufficient history", None
+        return ticker, df, None, "coinbase"
     except _RateLimitedError:
-        return ticker, None, _RATE_LIMITED
+        return ticker, None, _RATE_LIMITED, None
     except _ProductNotFoundError:
-        return ticker, None, "not listed on Coinbase"
+        # Confirmed 404 (not merely empty-in-window) -- Coinbase doesn't list this product at all,
+        # so fall back to yfinance instead of dropping the ticker; this is the only failure mode
+        # that falls back, since empty-in-window and rate-limits both still mean "ask Coinbase again".
+        try:
+            df = _fetch_yfinance_history(ticker, start)
+            if df.empty:
+                if last_bar_date:
+                    return ticker, df, None, "yfinance"
+                return ticker, None, "insufficient history", None
+            return ticker, df, None, "yfinance"
+        except Exception as e:  # noqa: BLE001 - one bad ticker shouldn't kill the bulk fetch
+            return ticker, None, str(e) or type(e).__name__, None
     except Exception as e:  # noqa: BLE001 - one bad ticker shouldn't kill the bulk fetch
-        return ticker, None, str(e) or type(e).__name__
+        return ticker, None, str(e) or type(e).__name__, None
 
 
 def warm_cache(tickers: list[str], force: bool = False) -> None:
@@ -184,7 +206,7 @@ def warm_cache(tickers: list[str], force: bool = False) -> None:
     try:
         futures = {_fetch_executor.submit(_fetch_one, tk, force): tk for tk in tickers}
         for future in as_completed(futures):
-            tk, df, err = future.result()
+            tk, df, err, price_source = future.result()
             if err == _RATE_LIMITED:
                 rate_limited = True
                 for f in futures:
@@ -192,7 +214,7 @@ def warm_cache(tickers: list[str], force: bool = False) -> None:
                 break
             with _lock:
                 if df is not None:
-                    db.crypto_upsert_bars(tk, df, now)
+                    db.crypto_upsert_bars(tk, df, now, price_source)
                     if force or tk not in _raw_cache or df.empty:
                         if not df.empty:
                             _raw_cache[tk] = df

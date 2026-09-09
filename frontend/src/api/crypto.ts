@@ -42,6 +42,9 @@ export interface CryptoTickerPayload {
   // "Coinbase") -- falls back to "CoinMarketCap" itself for thinly-traded coins it can't
   // attribute to a specific exchange. null if not yet captured (e.g. brand-new candidate).
   last_market: string | null;
+  // Which API actually supplied this ticker's stored OHLCV bars -- "coinbase" or "yfinance"
+  // (fallback for tickers Coinbase doesn't list; unverified against a real exchange).
+  price_source: string | null;
 }
 
 export interface CryptoSignalsResponse {

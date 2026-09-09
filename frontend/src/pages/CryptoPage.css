@@ -7,6 +7,20 @@
   color: var(--muted);
 }
 
+/* Flags bars sourced from yfinance's Coinbase-404 fallback -- unverified against a real exchange,
+   so this needs to visually stand apart from the plain muted source line, not blend in. */
+.crypto-unverified-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  width: fit-content;
+  background: var(--gold-bg);
+  color: var(--gold);
+}
+
 .crypto-verdict {
   font-size: 0.75rem;
   font-weight: 700;
