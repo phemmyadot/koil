@@ -11,7 +11,7 @@ export interface CryptoFilterBarState {
 }
 
 export function defaultCryptoFilterBarState(): CryptoFilterBarState {
-  return { tickerSearch: "", minTrades: 0, wrMin: WR_STEPS[0], pfMin: PF_STEPS[0] };
+  return { tickerSearch: "", minTrades: 15, wrMin: 70, pfMin: 2.0 };
 }
 
 function sliderSteps(steps: readonly (string | number)[], suffix = "") {

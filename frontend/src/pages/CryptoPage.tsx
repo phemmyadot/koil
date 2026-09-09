@@ -133,6 +133,10 @@ export function CryptoPage() {
     ? `as of ${data.asof ? new Date(data.asof).toLocaleString() : "—"} · ${filteredRows.length} of ${data.tickers.length} tickers`
     : "loading…";
 
+  // A newly-listed/thinly-traded ticker not yet having enough bars for VCP's lookback window is
+  // expected, not a real failure -- equity's DashboardPage filters this same error out too.
+  const realErrors = Object.entries(data?.errors ?? {}).filter(([, err]) => err !== "insufficient history");
+
   return (
     <div className="dashboard-page">
       <div className="dashboard-header">
@@ -168,9 +172,9 @@ export function CryptoPage() {
 
       <Pagination page={clampedPage} pageCount={pageCount} onPrev={() => goToPage(clampedPage - 1)} onNext={() => goToPage(clampedPage + 1)} />
 
-      {data && Object.keys(data.errors).length > 0 && (
+      {realErrors.length > 0 && (
         <div className="crypto-errors">
-          {Object.entries(data.errors).map(([ticker, err]) => (
+          {realErrors.map(([ticker, err]) => (
             <div key={ticker}>
               {ticker}: {err}
             </div>
