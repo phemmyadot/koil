@@ -91,6 +91,17 @@ def _fetch_all_pages() -> list[dict]:
     return list(seen.values())
 
 
+# Populated as a side effect of the discovery pass in fetch_candidates() -- lastMarket (which
+# venue yfinance attributed the ticker's most recent trade to) is already present on the same
+# quote objects _fetch_all_pages() pulls, so this avoids a second per-ticker API call just to
+# capture it. app.py's discovery orchestration reads this after calling fetch_candidates().
+_last_market_by_symbol: dict[str, str] = {}
+
+
+def last_market_by_symbol() -> dict[str, str]:
+    return dict(_last_market_by_symbol)
+
+
 def fetch_candidates(large_cap_count: int = DEFAULT_LARGE_CAP_COUNT) -> dict[str, list[str]]:
     """Screens yfinance's 'all_cryptocurrencies_us' predefined screener across 12 sort-order
     combinations (see _fetch_all_pages) and dedupes by symbol, since a single call is capped at
@@ -99,7 +110,9 @@ def fetch_candidates(large_cap_count: int = DEFAULT_LARGE_CAP_COUNT) -> dict[str
     large-cap bucket. The meme bucket ranks its remainder (after a market-cap floor) by 24h
     volume-spike ratio instead of market cap -- attention/momentum is the relevant signal for meme
     relevance, not slow-moving cap rank."""
+    global _last_market_by_symbol
     quotes = [q for q in _fetch_all_pages() if not _is_excluded(q["symbol"])]
+    _last_market_by_symbol = {q["symbol"]: q["lastMarket"] for q in quotes if q.get("lastMarket")}
     quotes.sort(key=lambda q: q.get("marketCap") or 0, reverse=True)
     symbols = [q["symbol"] for q in quotes]
     large_cap = symbols[:large_cap_count]

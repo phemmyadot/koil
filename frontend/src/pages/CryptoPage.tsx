@@ -48,6 +48,7 @@ function CryptoCard({ row }: { row: CryptoTickerPayload }) {
         </a>
         <span className="price num">${row.price}</span>
       </div>
+      {row.last_market && <div className="crypto-source">Source: {row.last_market}</div>}
       <div className={`crypto-verdict ${verdictClass}`}>{s.verdict}</div>
       <div className="crypto-reason">{s.verdict_reason}</div>
       <hr className="divider" />

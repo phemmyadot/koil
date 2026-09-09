@@ -1222,6 +1222,12 @@ def crypto_refresh_and_compute(force: bool = False) -> None:
         _crypto_discover_pass_forced[0] = force
         _crypto_discover_candidates()
         data_crypto.warm_cache(crypto_universe.get_all_tickers(), force=force)
+        # lastMarket comes from discovery's screener quotes, but crypto_fetch_meta rows are only
+        # created by warm_cache() just above -- persisting here (not inside
+        # _crypto_discover_candidates) means a newly-discovered ticker's lastMarket lands this
+        # same cycle instead of waiting for the next 12h discovery pass to catch up.
+        for ticker, last_market in crypto_universe.last_market_by_symbol().items():
+            db.crypto_set_last_market(ticker, last_market)
         crypto_compute_all(force=force)
     finally:
         _crypto_refresh_pass_lock.release()
@@ -2807,10 +2813,16 @@ def crypto_signals(refresh: int = 0):
     with _crypto_compute_lock:
         computed_snapshot = list(_crypto_computed)
         asof, errors = _crypto_computed_asof, dict(_crypto_computed_errors)
+    # last_market isn't part of the strategy computation, so it's attached here instead of inside
+    # _crypto_compute_one -- that keeps it out of the checksum-based payload-reuse logic (a cached
+    # payload from before this field existed would otherwise never pick it up until its bars
+    # actually changed) and always reflects the latest discovery-time value.
+    last_markets = db.crypto_get_last_markets()
+    tickers_with_market = [{**row, "last_market": last_markets.get(row["ticker"])} for row in computed_snapshot]
     return {
         "asof": asof,
         "cached": not refresh,
-        "tickers": computed_snapshot,
+        "tickers": tickers_with_market,
         "errors": errors,
     }
 

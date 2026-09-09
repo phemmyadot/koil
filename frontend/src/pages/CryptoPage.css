@@ -2,6 +2,11 @@
    (DashboardPage.css) -- only crypto-specific bits (verdict pill, open-position line, errors) live
    here, using the same design tokens (theme.css) instead of hand-rolled fallback colors. */
 
+.crypto-source {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 .crypto-verdict {
   font-size: 0.75rem;
   font-weight: 700;

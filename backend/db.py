@@ -552,6 +552,19 @@ def _migrate_positions_add_option_gain_alert_column() -> None:
         _conn.execute("ALTER TABLE positions ADD COLUMN last_alert_option_gain_pct REAL")
 
 
+def _migrate_crypto_fetch_meta_add_last_market_column() -> None:
+    """last_market records which venue yfinance's screener attributed the ticker's most recent
+    trade to (usually a real exchange like Coinbase; falls back to "CoinMarketCap" itself for
+    thinly-traded coins it can't attribute) -- captured at discovery time (crypto_universe.py's
+    fetch_candidates() already pulls the full quote object with this field), not at price-fetch
+    time, to avoid a second per-ticker API call every 30-min refresh."""
+    with _lock, _conn:
+        cols = [row[1] for row in _conn.execute("PRAGMA table_info(crypto_fetch_meta)").fetchall()]
+        if "last_market" in cols:
+            return
+        _conn.execute("ALTER TABLE crypto_fetch_meta ADD COLUMN last_market TEXT")
+
+
 def _migrate_positions_add_alert_framework_columns() -> None:
     """See docs/superpowers/specs/2026-08-07-alert-system-audit.md -- ALTER TABLE always appends
     at the physical end of the table regardless of where a column appears in CREATE TABLE's text
@@ -576,6 +589,7 @@ def _migrate_positions_add_alert_framework_columns() -> None:
 _init_schema()
 _migrate_positions_add_option_gain_alert_column()
 _migrate_positions_add_alert_framework_columns()
+_migrate_crypto_fetch_meta_add_last_market_column()
 
 
 # ─────────────────────────── price bars ───────────────────────────
@@ -1509,6 +1523,21 @@ def crypto_mark_fetch_error(ticker: str, fetched_at: float, error: str) -> None:
             ON CONFLICT(ticker) DO UPDATE SET
                 last_fetched_at=excluded.last_fetched_at, last_error=excluded.last_error
         """, (ticker, fetched_at, error))
+
+
+def crypto_set_last_market(ticker: str, last_market: str | None) -> None:
+    """Written from discovery's screener quotes (crypto_universe.py), not price-fetch -- the row
+    must already exist (crypto_upsert_bars/crypto_mark_fetch_error creates it) since this only
+    UPDATEs, it never INSERTs a bare row with no bar/error data of its own."""
+    with _lock, _conn:
+        _conn.execute("UPDATE crypto_fetch_meta SET last_market = ? WHERE ticker = ?", (last_market, ticker))
+
+
+def crypto_get_last_markets() -> dict[str, str]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT ticker, last_market FROM crypto_fetch_meta WHERE last_market IS NOT NULL").fetchall()
+    return dict(rows)
 
 
 def crypto_get_last_bar_date(ticker: str) -> str | None:

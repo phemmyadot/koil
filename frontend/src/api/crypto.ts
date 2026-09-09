@@ -28,6 +28,10 @@ export interface CryptoTickerPayload {
   price: number;
   date: string;
   strategy_vcp: CryptoStrategyResult;
+  // Which venue yfinance's screener attributed this ticker's most recent trade to (e.g.
+  // "Coinbase") -- falls back to "CoinMarketCap" itself for thinly-traded coins it can't
+  // attribute to a specific exchange. null if not yet captured (e.g. brand-new candidate).
+  last_market: string | null;
 }
 
 export interface CryptoSignalsResponse {
