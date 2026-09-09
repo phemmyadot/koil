@@ -20,11 +20,21 @@ const VERDICT_CLASS: Record<string, string> = {
   "NO SIGNAL": "crypto-verdict-none",
 };
 
-// Crypto tickers are Yahoo-style ("BTC-USD") -- not every one is listed on Binance (e.g.
-// WOJAK-USD isn't), so a hardcoded "BINANCE:" prefix 404s for those. TradingView's /symbols/
-// page auto-resolves a bare pair to whichever exchange actually lists it instead.
-function toTradingViewUrl(yahooTicker: string): string {
+// yfinance's lastMarket (crypto_universe.py's discovery) names the real venue for most tickers --
+// only "Coinbase" shows up in practice (the other observed value, "CoinMarketCap" itself, isn't a
+// tradeable exchange, just yfinance's fallback attribution for thin coins it can't pin to one).
+// When it maps to a TradingView exchange prefix, link straight to that chart; otherwise fall back
+// to TradingView's /symbols/ page, which auto-resolves a bare pair to whichever exchange lists it.
+const TRADINGVIEW_EXCHANGE: Record<string, string> = {
+  Coinbase: "COINBASE",
+};
+
+function toTradingViewUrl(yahooTicker: string, lastMarket: string | null): string {
   const base = yahooTicker.replace(/-USD$/, "");
+  const exchange = lastMarket ? TRADINGVIEW_EXCHANGE[lastMarket] : null;
+  if (exchange) {
+    return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`${exchange}:${base}USD`)}`;
+  }
   return `https://www.tradingview.com/symbols/${encodeURIComponent(base)}USD/`;
 }
 
@@ -40,7 +50,7 @@ function CryptoCard({ row }: { row: CryptoTickerPayload }) {
       <div className="cardhead">
         <a
           className="tklink tk"
-          href={toTradingViewUrl(row.ticker)}
+          href={toTradingViewUrl(row.ticker, row.last_market)}
           target="_blank"
           rel="noopener noreferrer"
         >
