@@ -1086,6 +1086,26 @@ def _crypto_fire_state_alert(ticker: str, prior_state: str, new_state: str, now_
     push.send_push_to_all(payload, now_iso)
 
 
+def _crypto_active_tickers() -> list[str]:
+    """Candidates that pass the VCP regime match (crypto_universe.passes_technical_filters),
+    per bucket, using each bucket's own tuned config -- mirrors equity's compute_all() filter
+    step, just inlined here since crypto has no separate watchlist/positions to always-include."""
+    filtered = []
+    for bucket, tickers in (("large_cap", crypto_universe._active_tickers["large_cap"]),
+                             ("meme", crypto_universe._active_tickers["meme"])):
+        config = crypto_universe.BUCKET_CONFIGS[bucket]
+        for tk in tickers:
+            bars = data_crypto.get_bars(tk)
+            if bars is None or bars.empty:
+                continue
+            try:
+                if crypto_universe.passes_technical_filters(bars, config):
+                    filtered.append(tk)
+            except Exception:  # noqa: BLE001 - a bad filter eval must not drop the ticker's error state
+                continue
+    return filtered
+
+
 def crypto_compute_all(force: bool = False) -> None:
     global _crypto_computed, _crypto_computed_errors, _crypto_computed_asof, _crypto_computed_source_fetch
 
@@ -1098,7 +1118,7 @@ def crypto_compute_all(force: bool = False) -> None:
     reused_payloads: dict[str, dict] = {}
     reused_source_fetch: dict[str, str] = {}
     reused_errors: dict[str, str] = {}
-    for tk in crypto_universe.ALL_TICKERS:
+    for tk in _crypto_active_tickers():
         checksum = db.crypto_get_bars_checksum(tk)
         prior_payload = prior_by_ticker.get(tk)
         shape_current = prior_payload is None or prior_payload.get("_schema_version") == PAYLOAD_SCHEMA_VERSION
@@ -1143,12 +1163,46 @@ def crypto_compute_all(force: bool = False) -> None:
                         print(f"app: crypto state alert failed for {tk} ({e}).")
 
 
+def _crypto_discover_candidates() -> None:
+    """yfinance screener discovery, run on its own long cadence (DISCOVERY_INTERVAL_SECONDS) --
+    separate from the 30-min price-refresh cadence since re-screening the universe that often is
+    unnecessary churn. Falls back to the last-known-good DB rows (or the static FALLBACK_* lists
+    if the DB has none yet) on any failure (Yahoo rate-limit, or the screener call's own
+    ValueError/KeyError failure modes), so a Yahoo outage never leaves the scanner with zero
+    tickers."""
+    last = max((db.get_crypto_candidate_fetched_at(b) or 0) for b in ("large_cap", "meme"))
+    if not _crypto_discover_pass_forced[0] and time.time() - last < crypto_universe.DISCOVERY_INTERVAL_SECONDS:
+        for bucket in ("large_cap", "meme"):
+            db_tickers = db.get_crypto_candidate_tickers(bucket)
+            if db_tickers:
+                crypto_universe.set_active_tickers(bucket, db_tickers)
+        return
+    try:
+        candidates = crypto_universe.fetch_candidates()
+        now = time.time()
+        for bucket, tickers in candidates.items():
+            db.set_crypto_candidate_tickers(bucket, tickers, now)
+            crypto_universe.set_active_tickers(bucket, tickers)
+        print(f"app: crypto discovery found {len(candidates.get('large_cap', []))} large-cap, "
+              f"{len(candidates.get('meme', []))} meme candidates.")
+    except Exception as e:  # noqa: BLE001 - Yahoo down/rate-limited -- fall back, don't abort the cycle
+        print(f"app: crypto discovery failed ({e}); falling back to last-known-good candidates.")
+        for bucket in ("large_cap", "meme"):
+            db_tickers = db.get_crypto_candidate_tickers(bucket)
+            crypto_universe.set_active_tickers(bucket, db_tickers)  # empty -> FALLBACK_* inside set_active_tickers
+
+
+_crypto_discover_pass_forced = [False]  # mutable flag so a manual/force refresh always re-discovers
+
+
 def crypto_refresh_and_compute(force: bool = False) -> None:
     if not _crypto_refresh_pass_lock.acquire(blocking=False):
         print("app: crypto_refresh_and_compute() already running -- skipping this overlapping call.")
         return
     try:
-        data_crypto.warm_cache(crypto_universe.ALL_TICKERS, force=force)
+        _crypto_discover_pass_forced[0] = force
+        _crypto_discover_candidates()
+        data_crypto.warm_cache(crypto_universe.get_all_tickers(), force=force)
         crypto_compute_all(force=force)
     finally:
         _crypto_refresh_pass_lock.release()

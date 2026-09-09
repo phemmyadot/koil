@@ -317,6 +317,15 @@ def _init_schema() -> None:
                 last_error TEXT
             );
 
+            -- Discovered crypto candidates per bucket, namespaced from equity's candidate_tickers
+            -- so a CoinGecko discovery cycle never touches the Yahoo-screener table above.
+            CREATE TABLE IF NOT EXISTS crypto_candidate_tickers (
+                ticker TEXT NOT NULL,
+                bucket TEXT NOT NULL,
+                fetched_at REAL NOT NULL,
+                PRIMARY KEY (ticker, bucket)
+            );
+
             CREATE TABLE IF NOT EXISTS crypto_computed_results (
                 ticker TEXT PRIMARY KEY,
                 payload TEXT,
@@ -613,6 +622,30 @@ def get_candidate_tickers() -> list[str]:
     with _lock:
         rows = _conn.execute("SELECT ticker FROM candidate_tickers").fetchall()
     return [r[0] for r in rows]
+
+
+def set_crypto_candidate_tickers(bucket: str, tickers: list[str], fetched_at: float) -> None:
+    """Replaces one bucket's discovered candidate set -- buckets are written independently so a
+    failed/rate-limited discovery for one bucket doesn't wipe the other's last-known-good rows."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM crypto_candidate_tickers WHERE bucket = ?", (bucket,))
+        _conn.executemany(
+            "INSERT INTO crypto_candidate_tickers (ticker, bucket, fetched_at) VALUES (?, ?, ?)",
+            [(tk, bucket, fetched_at) for tk in tickers])
+
+
+def get_crypto_candidate_tickers(bucket: str) -> list[str]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT ticker FROM crypto_candidate_tickers WHERE bucket = ?", (bucket,)).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_crypto_candidate_fetched_at(bucket: str) -> float | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT MAX(fetched_at) FROM crypto_candidate_tickers WHERE bucket = ?", (bucket,)).fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 def has_any_computed() -> bool:
