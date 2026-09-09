@@ -2,6 +2,7 @@
 // first, then open trades by days-in-trade ascending (freshest first), then everything else.
 
 import type { TickerPayload } from "../api/types";
+import type { CryptoTickerPayload } from "../api/crypto";
 
 const STRATEGY_FIELDS = ["vexh", "strategy_vcp", "strategy_vcpo"] as const;
 
@@ -33,6 +34,21 @@ export function sortTickers(rows: TickerPayload[]): TickerPayload[] {
     if (pa !== pb) return pa ? -1 : 1;
     const da = maxDaysInTrade(a);
     const db = maxDaysInTrade(b);
+    if (da === null && db === null) return 0;
+    if (da === null) return 1;
+    if (db === null) return -1;
+    return da - db;
+  });
+}
+
+// Same 3-tier priority as sortTickers, scoped to crypto's single strategy_vcp field.
+export function sortCryptoTickers(rows: CryptoTickerPayload[]): CryptoTickerPayload[] {
+  return rows.slice().sort((a, b) => {
+    const pa = a.strategy_vcp.signal_today && !a.strategy_vcp.open_position;
+    const pb = b.strategy_vcp.signal_today && !b.strategy_vcp.open_position;
+    if (pa !== pb) return pa ? -1 : 1;
+    const da = a.strategy_vcp.open_position?.days_held ?? null;
+    const db = b.strategy_vcp.open_position?.days_held ?? null;
     if (da === null && db === null) return 0;
     if (da === null) return 1;
     if (db === null) return -1;

@@ -11,6 +11,7 @@ strategy_vcp.py's run() -- they're kept as a fallback only, used when the yfinan
 fails, not as the primary path.
 """
 import os
+import time
 
 import pandas as pd
 import yfinance as yf
@@ -67,18 +68,38 @@ def _is_excluded(symbol: str) -> bool:
     return base in _EXCLUDED_SYMBOLS or base.startswith("W") and base[1:] in _EXCLUDED_SYMBOLS
 
 
+# The 250-per-call cap has no working offset-pagination for this screener (not in yfinance's
+# PREDEFINED_SCREENER_QUERIES, so offset= raises KeyError; custom EquityQuery is hardcoded to
+# quoteType=EQUITY internally, so it can't target crypto either). Varying sortField/sortAsc
+# instead gives 12 different top-250 slices to dedupe across -- these 6 fields are the only
+# ones confirmed valid for this screener (others return HTTP 400).
+_SORT_FIELDS = ["intradaymarketcap", "dayvolume", "percentchange", "circulatingsupply", "ticker", "fromcurrency"]
+
+
+def _fetch_all_pages() -> list[dict]:
+    seen: dict[str, dict] = {}
+    for sort_field in _SORT_FIELDS:
+        for sort_asc in (False, True):
+            try:
+                res = yf.screen("all_cryptocurrencies_us", count=250, sortField=sort_field, sortAsc=sort_asc)
+            except Exception as exc:
+                print(f"crypto_universe: screen call failed (sortField={sort_field}, sortAsc={sort_asc}): {exc}")
+                continue
+            for q in res.get("quotes", []):
+                seen.setdefault(q["symbol"], q)
+            time.sleep(0.3)  # mirrors build_universe.py's pagination pacing
+    return list(seen.values())
+
+
 def fetch_candidates(large_cap_count: int = DEFAULT_LARGE_CAP_COUNT) -> dict[str, list[str]]:
-    """Screens yfinance's 'all_cryptocurrencies_us' predefined screener (up to Yahoo's 250-result
-    cap per call -- there's no working pagination for this screener name in this yfinance
-    version, and passing offset= raises KeyError since it's not in yfinance's local
-    PREDEFINED_SCREENER_QUERIES dict, only proxied straight through to Yahoo). sortField is
-    required -- without it results aren't reliably market-cap-ordered. Returns yfinance-native
-    tickers per bucket (no cross-platform mapping needed): top `large_cap_count` by market cap
-    (after exclusions) is the large-cap bucket. The meme bucket ranks its remainder (after a
-    market-cap floor) by 24h volume-spike ratio instead of market cap -- attention/momentum is
-    the relevant signal for meme relevance, not slow-moving cap rank."""
-    res = yf.screen("all_cryptocurrencies_us", count=250, sortField="intradaymarketcap", sortAsc=False)
-    quotes = [q for q in res.get("quotes", []) if not _is_excluded(q["symbol"])]
+    """Screens yfinance's 'all_cryptocurrencies_us' predefined screener across 12 sort-order
+    combinations (see _fetch_all_pages) and dedupes by symbol, since a single call is capped at
+    Yahoo's 250-result limit for this screener. Returns yfinance-native tickers per bucket (no
+    cross-platform mapping needed): top `large_cap_count` by market cap (after exclusions) is the
+    large-cap bucket. The meme bucket ranks its remainder (after a market-cap floor) by 24h
+    volume-spike ratio instead of market cap -- attention/momentum is the relevant signal for meme
+    relevance, not slow-moving cap rank."""
+    quotes = [q for q in _fetch_all_pages() if not _is_excluded(q["symbol"])]
     quotes.sort(key=lambda q: q.get("marketCap") or 0, reverse=True)
     symbols = [q["symbol"] for q in quotes]
     large_cap = symbols[:large_cap_count]

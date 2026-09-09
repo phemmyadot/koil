@@ -1,11 +1,16 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useCryptoMeta, useCryptoSignals, useRefreshCryptoSignals } from "../hooks/useCrypto";
 import type { CryptoTickerPayload } from "../api/crypto";
 import { StrategyBadgeRow } from "../components/molecules/StrategyBadgeRow";
+import { CryptoFilterBar, defaultCryptoFilterBarState, type CryptoFilterBarState } from "../components/organisms/CryptoFilterBar";
+import { Pagination } from "../components/organisms/TickerCardGrid";
+import { sortCryptoTickers } from "../lib/sorting";
 import "../components/organisms/TickerCard.css";
 import "../components/organisms/TickerCardGrid.css";
 import "../pages/DashboardPage.css";
 import "./CryptoPage.css";
+
+const PAGE_SIZE = 9;
 
 const VERDICT_CLASS: Record<string, string> = {
   TAKE: "crypto-verdict-take",
@@ -70,6 +75,34 @@ export function CryptoPage() {
   const { data: meta } = useCryptoMeta();
   const refresh = useRefreshCryptoSignals();
   const [refreshing, setRefreshing] = useState(false);
+  const [filterState, setFilterState] = useState<CryptoFilterBarState>(defaultCryptoFilterBarState);
+  const [page, setPage] = useState(1);
+
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    const query = filterState.tickerSearch.trim().toUpperCase();
+    const rows = data.tickers
+      .filter((r) => !query || r.ticker.toUpperCase().includes(query))
+      .filter((r) => filterState.minTrades <= 0 || r.strategy_vcp.n_trades >= filterState.minTrades)
+      .filter((r) => filterState.wrMin <= 0 && filterState.pfMin <= 0
+        ? true
+        : r.strategy_vcp.win_rate >= filterState.wrMin && r.strategy_vcp.profit_factor >= filterState.pfMin);
+    return sortCryptoTickers(rows);
+  }, [data, filterState]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const clampedPage = Math.min(Math.max(1, page), pageCount);
+  const pageRows = filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+
+  function updateFilters(next: CryptoFilterBarState) {
+    setFilterState(next);
+    setPage(1);
+  }
+
+  function goToPage(next: number) {
+    setPage(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   const active = !!(meta?.fetch_progress || meta?.compute_progress);
   const progressPct = (() => {
@@ -105,7 +138,9 @@ export function CryptoPage() {
         </button>
       </div>
       <div className="crypto-meta">
-        {data ? `as of ${data.asof ? new Date(data.asof).toLocaleString() : "—"} · ${data.tickers.length} tickers` : "loading…"}
+        {data
+          ? `as of ${data.asof ? new Date(data.asof).toLocaleString() : "—"} · ${filteredRows.length} of ${data.tickers.length} tickers`
+          : "loading…"}
       </div>
       {active && (
         <div className="dashboard-progress">
@@ -115,12 +150,18 @@ export function CryptoPage() {
           <span className="dashboard-progress-label">{progressLabel}</span>
         </div>
       )}
+
+      <CryptoFilterBar state={filterState} onChange={updateFilters} />
+
       {isLoading && <div className="crypto-loading">Loading…</div>}
       <div className="cardgrid">
-        {data?.tickers.map((row) => (
+        {pageRows.map((row) => (
           <CryptoCard key={row.ticker} row={row} />
         ))}
       </div>
+
+      <Pagination page={clampedPage} pageCount={pageCount} onPrev={() => goToPage(clampedPage - 1)} onNext={() => goToPage(clampedPage + 1)} />
+
       {data && Object.keys(data.errors).length > 0 && (
         <div className="crypto-errors">
           {Object.entries(data.errors).map(([ticker, err]) => (
