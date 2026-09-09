@@ -129,19 +129,22 @@ export function CryptoPage() {
     }
   }
 
+  const metaText = data
+    ? `as of ${data.asof ? new Date(data.asof).toLocaleString() : "—"} · ${filteredRows.length} of ${data.tickers.length} tickers`
+    : "loading…";
+
   return (
-    <div className="crypto-page">
-      <div className="crypto-header">
+    <div className="dashboard-page">
+      <div className="dashboard-header">
         <h1>Crypto Signals</h1>
-        <button onClick={handleRefresh} disabled={refreshing || active}>
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
+        <span className="dashboard-meta">{metaText}</span>
+        <div className="dashboard-header-actions">
+          <button type="button" onClick={handleRefresh} disabled={refreshing || active}>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
-      <div className="crypto-meta">
-        {data
-          ? `as of ${data.asof ? new Date(data.asof).toLocaleString() : "—"} · ${filteredRows.length} of ${data.tickers.length} tickers`
-          : "loading…"}
-      </div>
+
       {active && (
         <div className="dashboard-progress">
           <div className="dashboard-progress-bar">
@@ -153,12 +156,15 @@ export function CryptoPage() {
 
       <CryptoFilterBar state={filterState} onChange={updateFilters} />
 
-      {isLoading && <div className="crypto-loading">Loading…</div>}
-      <div className="cardgrid">
-        {pageRows.map((row) => (
-          <CryptoCard key={row.ticker} row={row} />
-        ))}
-      </div>
+      {isLoading ? (
+        <p style={{ color: "var(--muted)" }}>Fetching crypto signals&hellip;</p>
+      ) : (
+        <div className="cardgrid">
+          {pageRows.map((row) => (
+            <CryptoCard key={row.ticker} row={row} />
+          ))}
+        </div>
+      )}
 
       <Pagination page={clampedPage} pageCount={pageCount} onPrev={() => goToPage(clampedPage - 1)} onNext={() => goToPage(clampedPage + 1)} />
 
