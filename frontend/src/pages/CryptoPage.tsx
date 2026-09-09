@@ -77,8 +77,14 @@ function CryptoCard({ row, onValidate }: { row: CryptoTickerPayload; onValidate:
       />
       {s.open_position && (
         <div className="crypto-open-position">
-          Open since {s.open_position.entry_date} · {s.open_position.unrealized_pct >= 0 ? "+" : ""}
-          {s.open_position.unrealized_pct}% · {s.open_position.days_held}d held
+          <div>
+            Open since {s.open_position.entry_date} · {s.open_position.unrealized_pct >= 0 ? "+" : ""}
+            {s.open_position.unrealized_pct}% · {s.open_position.days_held}d held
+          </div>
+          <div>
+            Entry ${s.open_position.entry_price} · Target ${s.open_position.target}
+            {s.open_position.stop != null && <> · Stop ${s.open_position.stop}</>}
+          </div>
         </div>
       )}
     </div>

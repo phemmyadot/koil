@@ -56,6 +56,9 @@
 .crypto-open-position {
   font-size: 0.78rem;
   color: var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .crypto-errors {
