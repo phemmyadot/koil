@@ -64,6 +64,37 @@
   margin-left: auto;
 }
 
+/* ---------------- Secondary nav (sub-pages of the active section) ---------------- */
+.app-subnav {
+  display: flex;
+  gap: 16px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex: 0 0 auto;
+}
+.app-subnav a {
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 3px 2px;
+  border-bottom: 2px solid transparent;
+}
+.app-subnav a.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.app-subnav a:hover {
+  color: var(--text);
+}
+@media (max-width: 719px) {
+  .app-subnav {
+    padding: 8px 12px;
+    gap: 14px;
+  }
+}
+
 .app-content {
   flex: 1 1 auto;
   min-height: 0;

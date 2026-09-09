@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useCryptoSignals, useRefreshCryptoSignals } from "../hooks/useCrypto";
+import { useCryptoMeta, useCryptoSignals, useRefreshCryptoSignals } from "../hooks/useCrypto";
 import type { CryptoTickerPayload } from "../api/crypto";
 import { StrategyBadgeRow } from "../components/molecules/StrategyBadgeRow";
 import "../components/organisms/TickerCard.css";
 import "../components/organisms/TickerCardGrid.css";
+import "../pages/DashboardPage.css";
 import "./CryptoPage.css";
 
 const VERDICT_CLASS: Record<string, string> = {
@@ -66,8 +67,25 @@ function CryptoCard({ row }: { row: CryptoTickerPayload }) {
 
 export function CryptoPage() {
   const { data, isLoading } = useCryptoSignals();
+  const { data: meta } = useCryptoMeta();
   const refresh = useRefreshCryptoSignals();
   const [refreshing, setRefreshing] = useState(false);
+
+  const active = !!(meta?.fetch_progress || meta?.compute_progress);
+  const progressPct = (() => {
+    if (meta?.compute_progress && meta.compute_progress.total > 0) {
+      return 50 + Math.min(50 - 0.1, (meta.compute_progress.done / meta.compute_progress.total) * 50);
+    }
+    if (meta?.fetch_progress && meta.fetch_progress.total > 0) {
+      return Math.min(50, (meta.fetch_progress.done / meta.fetch_progress.total) * 50);
+    }
+    return 0;
+  })();
+  const progressLabel = meta?.compute_progress
+    ? `Now computing… ${meta.compute_progress.done} of ${meta.compute_progress.total} tickers`
+    : meta?.fetch_progress
+      ? `Now fetching tickers… ${meta.fetch_progress.done} of ${meta.fetch_progress.total}`
+      : "";
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -82,13 +100,21 @@ export function CryptoPage() {
     <div className="crypto-page">
       <div className="crypto-header">
         <h1>Crypto Signals</h1>
-        <button onClick={handleRefresh} disabled={refreshing}>
+        <button onClick={handleRefresh} disabled={refreshing || active}>
           {refreshing ? "Refreshing…" : "Refresh"}
         </button>
       </div>
       <div className="crypto-meta">
         {data ? `as of ${data.asof ? new Date(data.asof).toLocaleString() : "—"} · ${data.tickers.length} tickers` : "loading…"}
       </div>
+      {active && (
+        <div className="dashboard-progress">
+          <div className="dashboard-progress-bar">
+            <div className="dashboard-progress-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <span className="dashboard-progress-label">{progressLabel}</span>
+        </div>
+      )}
       {isLoading && <div className="crypto-loading">Loading…</div>}
       <div className="cardgrid">
         {data?.tickers.map((row) => (

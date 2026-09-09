@@ -44,3 +44,15 @@ export function getCryptoSignals(refresh = false): Promise<CryptoSignalsResponse
 export function refreshCryptoSignals(): Promise<{ started: true }> {
   return apiPost<{ started: true }>("/api/crypto/refresh");
 }
+
+// Mirrors equity's MetaResponse fetch_progress/compute_progress shape (api/tickers.ts).
+export interface CryptoMetaResponse {
+  total_tickers: number;
+  last_fetch: string | null;
+  fetch_progress: { done: number; total: number } | null;
+  compute_progress: { done: number; total: number } | null;
+}
+
+export function getCryptoMeta(): Promise<CryptoMetaResponse> {
+  return apiGet<CryptoMetaResponse>("/api/crypto/meta");
+}

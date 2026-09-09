@@ -6,27 +6,48 @@ import { PLCalcFab } from "./PLCalcFab";
 import { useMeta } from "../../hooks/useTickers";
 import "./AppShell.css";
 
-// Responsive nav shell per docs/superpowers/specs/2026-07-31-react-spa-rewrite-design.md:
-// top bar >= 1080px (matches the old app's existing breakpoint), bottom tab bar on mobile.
-// Both render the same nav links; CSS media queries switch which one is visible rather than
-// branching in JS, so there's exactly one source of truth for "what are the nav destinations."
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: "\u{1F4C8}" },
-  { to: "/trades", label: "Trades", icon: "\u{1F4CA}" },
-  { to: "/watchlists", label: "Watchlists", icon: "⭐" },
-  { to: "/crypto", label: "Crypto", icon: "\u{1FA99}" },
+// Two-tier nav: a top-level section switcher (Equity / Crypto) plus a persistent secondary row
+// of that section's sub-pages. Still one source of truth per tier -- SECTIONS.map() produces
+// both the top-level links and the section picker, and each section's own `items` produces both
+// the desktop secondary row and (via the section-aware bottom nav below) the mobile tab bar. CSS
+// media queries switch which rendering is visible, matching the original single-tier approach.
+const SECTIONS = [
+  {
+    key: "equity",
+    label: "Equity",
+    to: "/",
+    icon: "\u{1F4C8}",
+    isActive: (pathname: string) => !pathname.startsWith("/crypto"),
+    items: [
+      { to: "/", label: "Dashboard", icon: "\u{1F4C8}" },
+      { to: "/trades", label: "Trades", icon: "\u{1F4CA}" },
+      { to: "/watchlists", label: "Watchlists", icon: "⭐" },
+    ],
+  },
+  {
+    key: "crypto",
+    label: "Crypto",
+    to: "/crypto",
+    icon: "\u{1FA99}",
+    isActive: (pathname: string) => pathname.startsWith("/crypto"),
+    items: [{ to: "/crypto", label: "Dashboard", icon: "\u{1FA99}" }],
+  },
 ];
 
 // Analyzer is feature-flagged (ENABLE_DAILY_REVIEW) -- see
-// docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md. Appended, not merged
-// into NAV_ITEMS, since it's conditional on /api/meta's daily_review_enabled rather than always
-// present.
+// docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md. Appended to Equity's
+// sub-items, not merged into SECTIONS, since it's conditional on /api/meta's
+// daily_review_enabled rather than always present.
 const ANALYZER_NAV_ITEM = { to: "/analyzer", label: "Analyzer", icon: "\u{1F9E0}" };
 
 export function AppShell() {
   const { data: meta } = useMeta();
   const location = useLocation();
-  const navItems = meta?.daily_review_enabled ? [...NAV_ITEMS, ANALYZER_NAV_ITEM] : NAV_ITEMS;
+  const activeSection = SECTIONS.find((s) => s.isActive(location.pathname)) ?? SECTIONS[0];
+  const subItems =
+    activeSection.key === "equity" && meta?.daily_review_enabled
+      ? [...activeSection.items, ANALYZER_NAV_ITEM]
+      : activeSection.items;
   const isHome = location.pathname === "/";
   return (
     <div className="app-shell">
@@ -35,15 +56,27 @@ export function AppShell() {
           <WordMark height={28} />
           <KMark size={28} />
         </NavLink>
-        <nav className="app-toplinks">
-          {navItems.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === "/"}>
-              {item.label}
+        <nav className="app-toplinks app-sections">
+          {SECTIONS.map((section) => (
+            <NavLink
+              key={section.key}
+              to={section.to}
+              className={() => (activeSection.key === section.key ? "active" : "")}
+            >
+              {section.label}
             </NavLink>
           ))}
         </nav>
         <NotificationBell />
       </header>
+
+      <nav className="app-subnav">
+        {subItems.map((item) => (
+          <NavLink key={item.to} to={item.to} end={item.to === "/" || item.to === "/crypto"}>
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
 
       <main className="app-content">
         <div className="app-content-inner">
@@ -54,12 +87,17 @@ export function AppShell() {
       {isHome && <PLCalcFab />}
 
       <nav className="app-bottomnav">
-        {navItems.map((item) => (
-          <NavLink key={item.to} to={item.to} end={item.to === "/"} className="app-bottomnav-item">
+        {SECTIONS.map((section) => (
+          <NavLink
+            key={section.key}
+            to={section.to}
+            end={section.to === "/"}
+            className={() => `app-bottomnav-item${activeSection.key === section.key ? " active" : ""}`}
+          >
             <span className="app-bottomnav-icon" aria-hidden="true">
-              {item.icon}
+              {section.icon}
             </span>
-            <span>{item.label}</span>
+            <span>{section.label}</span>
           </NavLink>
         ))}
       </nav>

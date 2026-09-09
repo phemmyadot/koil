@@ -1034,6 +1034,15 @@ _crypto_computed_source_fetch: dict[str, str] = {}
 _crypto_compute_lock = threading.Lock()
 _crypto_refresh_pass_lock = threading.Lock()
 
+# Live progress for the current crypto_compute_all() call, if one is in flight -- mirrors
+# equity's _compute_progress/compute_progress() above.
+_crypto_compute_progress: dict[str, int] | None = None
+
+
+def crypto_compute_progress() -> dict[str, int] | None:
+    with _crypto_compute_lock:
+        return dict(_crypto_compute_progress) if _crypto_compute_progress is not None else None
+
 
 def _load_crypto_computed_from_db() -> None:
     global _crypto_computed, _crypto_computed_errors, _crypto_computed_source_fetch, _crypto_computed_asof
@@ -1107,7 +1116,7 @@ def _crypto_active_tickers() -> list[str]:
 
 
 def crypto_compute_all(force: bool = False) -> None:
-    global _crypto_computed, _crypto_computed_errors, _crypto_computed_asof, _crypto_computed_source_fetch
+    global _crypto_computed, _crypto_computed_errors, _crypto_computed_asof, _crypto_computed_source_fetch, _crypto_compute_progress
 
     with _crypto_compute_lock:
         prior_by_ticker = {p["ticker"]: p for p in _crypto_computed}
@@ -1134,7 +1143,17 @@ def crypto_compute_all(force: bool = False) -> None:
         else:
             to_compute.append(tk)
 
-    results = [_crypto_compute_one(tk) for tk in to_compute]
+    with _crypto_compute_lock:
+        _crypto_compute_progress = {"done": 0, "total": len(to_compute)}
+    try:
+        results = []
+        for tk in to_compute:
+            results.append(_crypto_compute_one(tk))
+            with _crypto_compute_lock:
+                _crypto_compute_progress["done"] += 1
+    finally:
+        with _crypto_compute_lock:
+            _crypto_compute_progress = None
 
     with _crypto_compute_lock:
         new_source_fetch = {tk: fp for tk, payload, err, fp in results if payload is not None or err is not None}
@@ -2808,6 +2827,7 @@ def crypto_meta():
         "total_tickers": len(crypto_universe.ALL_TICKERS),
         "last_fetch": data_crypto.last_fetch_time(),
         "fetch_progress": data_crypto.fetch_progress(),
+        "compute_progress": crypto_compute_progress(),
     }
 
 
