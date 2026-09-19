@@ -54,8 +54,11 @@ DEFAULT_LARGE_CAP_COUNT = int(os.environ.get("CRYPTO_UNIVERSE_LARGE_CAP_COUNT", 
 # than removing it outright -- still screens out true dust/dead tokens, while admitting several
 # hundred more real (if more illiquid) candidates. Chosen over $0/no-floor: those thinnest tokens
 # are the ones where yfinance/Coinbase candle data quality and actual tradability (spread,
-# slippage) get shakiest, and the backtest can't see either.
-MEME_MARKET_CAP_FLOOR = 5_000_000
+# slippage) get shakiest, and the backtest can't see either. Overridable via env var (same
+# pattern as DEFAULT_LARGE_CAP_COUNT above) so this risk/breadth tradeoff can be tuned without a
+# code change -- also read directly by crypto_v2/universe.py's discover(), which applies the same
+# floor to its own (larger, 4-tier) candidate pool.
+MEME_MARKET_CAP_FLOOR = int(os.environ.get("CRYPTO_MEME_MARKET_CAP_FLOOR", 5_000_000))
 
 # Re-discovering the universe every CRYPTO_CHECK_INTERVAL (30 min, data_crypto.py) is unnecessary
 # churn even without CoinGecko's old rate limit in the picture -- the top of the market-cap

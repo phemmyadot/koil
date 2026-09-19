@@ -1414,6 +1414,12 @@ def crypto_v2_refresh_and_compute() -> None:
         return
     try:
         _crypto_v2_discover_candidates()
+        # v2's own discovery (4-tier, ~568 tickers) is a different, larger set than v1's
+        # (~230) -- data_crypto's bar cache is shared, but a ticker only in v2's set was never
+        # fetched by v1's own warm_cache() call, so v2 needs its own (real bug, caught live:
+        # ~340 of 568 tickers were showing "no data" purely because nothing had ever fetched
+        # them, not because the data genuinely doesn't exist).
+        data_crypto.warm_cache(list(_crypto_v2_categories.keys()))
         crypto_v2_compute_all()
     finally:
         _crypto_v2_refresh_pass_lock.release()
