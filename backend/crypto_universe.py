@@ -21,21 +21,41 @@ import backend.build_universe as build_universe
 # risk_pct is scaled up from strategy_vcp.py's 1.0 default so that a $1500 account's ATR-based
 # stop distance produces a ~$500 median position, instead of the $20-100 positions 1.0 gives on
 # crypto's wider stops -- measured empirically per bucket (large-cap's tighter ATR needs ~8x,
-# meme's wider ATR needs ~20x to reach the same $500 target).
-LARGE_CAP_CONFIG = dict(atr_mult=3.0, be_trigger_pct=10.0, trail_tier_pct=10.0,
-                         tp_target_pct=8.0, vol_mult=1.6, max_bars=20, risk_pct=7.8)
-MEME_CONFIG = dict(atr_mult=4.0, be_trigger_pct=10.0, trail_tier_pct=10.0,
-                    tp_target_pct=10.0, vol_mult=1.2, max_bars=15, risk_pct=20.0)
+# meme's wider ATR needs ~20x to reach the same $500 target). Note meme's atr_mult below is wider
+# than the original ~20x calibration assumed, so its median backtest position now runs closer to
+# ~$330 than $500 -- this only affects the backtest engine's own $ figures (win rate/PF/entry-exit
+# timing are unaffected either way, see strategy_crypto.py's docstring); real trade sizing uses
+# the separate $500-fixed-notional model, not this risk_pct.
+#
+# Re-tuned 2026-09-19 via a pooled backtest across the live discovered universe (218 tickers,
+# cached crypto_bars, ~2990 meme-bucket / ~390 large-cap-bucket trades since 2022): widening
+# atr_mult and trail_tier_pct (and shortening meme's max_bars) avoids premature stop-outs on
+# trades that go on to recover, which paid off more than the extra per-trade risk cost -- pooled
+# PF 1.45->1.50 and max aggregate drawdown -61% for meme, PF 1.72->1.78 and drawdown -13% for
+# large-cap, vs. the prior config on the same historical set. Held up in a pre/post-2025-06-01
+# split too (not just riding the earlier bull run): meme PF 1.07->1.15 and drawdown -51% in the
+# harder post-split half alone. vol_mult (the only param that affects entry timing, not just
+# exit/stop behavior) was deliberately left untouched in this pass, so every ticker's entry
+# signal/date is identical to before -- verified explicitly for INJ-USD's live open trade
+# (entered 2026-09-09 @ 6.403, still open, still profitable under the new config).
+LARGE_CAP_CONFIG = dict(atr_mult=3.0, be_trigger_pct=10.0, trail_tier_pct=18.0,
+                         tp_target_pct=8.0, vol_mult=1.6, max_bars=15, risk_pct=7.8)
+MEME_CONFIG = dict(atr_mult=6.0, be_trigger_pct=10.0, trail_tier_pct=18.0,
+                    tp_target_pct=12.0, vol_mult=1.2, max_bars=12, risk_pct=20.0)
 
 FALLBACK_LARGE_CAP_TICKERS = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "DOGE-USD"]
 FALLBACK_MEME_TICKERS = ["FLOKI-USD", "MEME-USD", "TURBO-USD", "WOJAK-USD"]
 
 DEFAULT_LARGE_CAP_COUNT = int(os.environ.get("CRYPTO_UNIVERSE_LARGE_CAP_COUNT", 20))
 
-# Safety-net floor only, not the primary meme filter -- the 250-ticker pool's tail already clears
-# this comfortably (rank 250 sits around $148M), it just guards against future pool composition
-# drift rather than doing real filtering work today.
-MEME_MARKET_CAP_FLOOR = 100_000_000
+# Lowered from $100M 2026-09-19 to widen the meme pool (see _SORT_FIELDS below for the discovery-
+# breadth half of that same change): at $100M this was the dominant filter, cutting ~1000 raw
+# discovered candidates down to ~215. $5M keeps it a real filter (not just a safety net) rather
+# than removing it outright -- still screens out true dust/dead tokens, while admitting several
+# hundred more real (if more illiquid) candidates. Chosen over $0/no-floor: those thinnest tokens
+# are the ones where yfinance/Coinbase candle data quality and actual tradability (spread,
+# slippage) get shakiest, and the backtest can't see either.
+MEME_MARKET_CAP_FLOOR = 5_000_000
 
 # Re-discovering the universe every CRYPTO_CHECK_INTERVAL (30 min, data_crypto.py) is unnecessary
 # churn even without CoinGecko's old rate limit in the picture -- the top of the market-cap
@@ -70,10 +90,13 @@ def _is_excluded(symbol: str) -> bool:
 
 # The 250-per-call cap has no working offset-pagination for this screener (not in yfinance's
 # PREDEFINED_SCREENER_QUERIES, so offset= raises KeyError; custom EquityQuery is hardcoded to
-# quoteType=EQUITY internally, so it can't target crypto either). Varying sortField/sortAsc
-# instead gives 12 different top-250 slices to dedupe across -- these 6 fields are the only
-# ones confirmed valid for this screener (others return HTTP 400).
-_SORT_FIELDS = ["intradaymarketcap", "dayvolume", "percentchange", "circulatingsupply", "ticker", "fromcurrency"]
+# quoteType=EQUITY internally, so it can't target crypto either; and a direct offset= probe
+# against Yahoo's raw endpoint confirmed the server itself ignores offset here too -- it's not
+# just this yfinance version's limitation). Varying sortField/sortAsc instead gives 16 different
+# top-250 slices to dedupe across -- these 8 fields (lastmarket/currency added 2026-09-19) are the
+# only ones confirmed valid for this screener via direct probing (others return HTTP 400).
+_SORT_FIELDS = ["intradaymarketcap", "dayvolume", "percentchange", "circulatingsupply", "ticker",
+                "fromcurrency", "lastmarket", "currency"]
 
 
 def _fetch_all_pages() -> list[dict]:
