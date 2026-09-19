@@ -1,0 +1,285 @@
+//@version=6
+strategy("Crypto v2 Multi-Setup", overlay=true, initial_capital=1500, default_qty_type=strategy.percent_of_equity, default_qty_value=66.66, calc_on_every_tick=false)
+
+// Mirrors backend/crypto_v2/ (engine.py + config.py + features.py + structure.py + liquidity.py
+// + setups.py + scoring.py) -- daily-bar, single-exchange, no order-book data, same scope as the
+// Python side. Every constant below that must match backend/crypto_v2/config.py's CONFIG dict
+// carries a "// PARITY: <dotted.path>" tag directly above its assignment -- check_pine_parity.py
+// (repo root) greps these and asserts them against the live Python config, so a retune there
+// (like crypto_universe.py's meme-bucket retune, which silently desynced pines/vcp_crypto.pine
+// for weeks before it was caught) can't happen silently here.
+//
+// SCOPE, not an oversight: features.py also computes an EMA20/50/200 trend block and an RSI
+// feature, and config.py declares relative_strength.minimum_percentile and
+// liquidity.equal_level_tolerance_pct and filters.minimum_setup_score/minimum_execution_score --
+// none of these are actually referenced by any of the 4 setup detectors (setups.py), the
+// backtester (engine.backtest), or even the API's feature_snapshot output beyond RSI's own
+// display field. They're computed/declared on the Python side but don't affect real behavior
+// today, so they're intentionally NOT ported here -- this file matches what the strategy
+// actually DOES, not everything the Python module happens to compute. Same reasoning for
+// rs_percentile (cross-sectional rank against the whole tracked universe): it's display-only in
+// the API, never a setup condition, and has no Pine equivalent anyway (a chart only ever sees
+// itself, never the other 500+ tracked tickers at once) -- so nothing is lost by omitting it.
+//
+// Fill timing: strategy.entry() here fires on the signal bar's close and fills at the next bar's
+// open by Pine's own default order-queue behavior -- this already matches doc's "close
+// confirmation" entry model and engine.py's own fill-at-next-open replay, with no extra handling
+// needed. Stop-basis indicator values (ATR, swing low) are read on the FILL bar itself, matching
+// pines/vcp_crypto.pine's own established convention (see its stop_price := ... inside
+// `if na(entry_price)`) -- not the signal bar one index earlier, which is Python's own replay
+// convention (needed there only because it's a hand-rolled backtest loop, not a real order
+// engine like Pine's).
+
+// ==========================================
+// INPUTS
+// ==========================================
+var string G_DATE = "Backtest Date Range"
+var string G_BTC  = "Relative Strength Feed"
+
+bool use_date_filter = input.bool(true, title="Restrict Backtest to Date Range", group=G_DATE)
+int start_date        = input.time(timestamp("1 Jan 2021 00:00 +0000"), title="Start Date", group=G_DATE)
+int end_date           = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="End Date", group=G_DATE)
+bool in_date_range     = not use_date_filter or (time >= start_date and time <= end_date)
+
+// Default matches Coinbase-sourced tickers (crypto_universe.py's discovery -- "Coinbase" is the
+// only real venue yfinance actually attributes most tickers to, see CryptoPage.tsx's own
+// TRADINGVIEW_EXCHANGE map); override if charting a symbol from a different exchange.
+string btc_symbol = input.symbol("COINBASE:BTCUSD", title="BTC feed (for relative strength)", group=G_BTC)
+
+// ==========================================
+// PARITY-TAGGED CONFIG (backend/crypto_v2/config.py's CONFIG)
+// ==========================================
+// PARITY: volatility.atr_period
+int atr_period = 14
+// PARITY: volatility.percentile_lookback
+int percentile_lookback = 100
+// PARITY: volatility.expansion_percentile
+float expansion_percentile = 75
+// PARITY: volatility.compression_percentile
+float compression_percentile = 25
+// PARITY: volume.rvol_period
+int rvol_period = 20
+// PARITY: volume.minimum_rvol
+float minimum_rvol = 2.0
+// PARITY: momentum.roc_period
+int roc_period = 10
+// PARITY: relative_strength.lookback_days
+int rs_lookback_days = 10
+// PARITY: structure.swing_left
+int swing_left = 3
+// PARITY: structure.swing_right
+int swing_right = 3
+// PARITY: structure.breakout_lookback
+int breakout_lookback = 20
+// PARITY: liquidity.prior_week_days
+int prior_week_days = 5
+// PARITY: risk.stop_atr_buffer_mult
+float stop_atr_buffer_mult = 0.25
+// PARITY: risk.tp1_r
+float tp1_r = 1.0
+// PARITY: risk.tp2_r
+float tp2_r = 2.0
+// PARITY: risk.max_bars
+int max_bars = 20
+// PARITY: risk.risk_pct
+float risk_pct = 1.0
+
+// scoring.* weights (config.py's CONFIG["scoring"])
+// PARITY: scoring.range_break
+float w_range_break = 2
+// PARITY: scoring.breaks_range
+float w_breaks_range = 2
+// PARITY: scoring.structure_bos
+float w_structure_bos = 2
+// PARITY: scoring.liquidity_sweep
+float w_liquidity_sweep = 2
+// PARITY: scoring.volume_expansion
+float w_volume_expansion = 2
+// PARITY: scoring.relative_strength
+float w_relative_strength = 2
+// PARITY: scoring.volatility_expansion
+float w_volatility_expansion = 1
+// PARITY: scoring.impulse
+float w_impulse = 1
+// PARITY: scoring.range_compression
+float w_range_compression = 1
+
+// ==========================================
+// FEATURE ENGINE (backend/crypto_v2/features.py)
+// ==========================================
+float atr_value = ta.atr(atr_period)
+float atr_pct = atr_value / close
+// ta.percentrank(source, length): percentile rank of the current value within its own trailing
+// window -- exactly features._rolling_percentile's definition, built in.
+float atr_percentile = ta.percentrank(atr_pct, percentile_lookback)
+bool atr_expansion = atr_percentile >= expansion_percentile
+bool atr_compression = atr_percentile <= compression_percentile
+
+float vol_avg = ta.sma(volume, rvol_period)
+// Pine's float division by exactly 0 returns na natively (no separate zero-guard needed the way
+// features.compute_volume's pandas version needed vol_avg.replace(0, nan) to avoid +inf).
+float rvol = volume / vol_avg
+bool volume_expansion = rvol >= minimum_rvol
+
+float roc = close / close[roc_period] - 1
+
+float btc_close = request.security(btc_symbol, timeframe.period, close)
+float asset_return = close / close[rs_lookback_days] - 1
+float btc_return = btc_close / btc_close[rs_lookback_days] - 1
+float rs_btc = asset_return - btc_return
+
+// ==========================================
+// STRUCTURE ENGINE (backend/crypto_v2/structure.py)
+// ==========================================
+// ta.pivothigh/pivotlow already only return non-na on a pivot's confirmation bar (swing_right
+// bars after it occurred) -- the exact availability-time discipline structure.swing_points had
+// to hand-roll in pandas via shift(right)+ffill. var-carrying the last confirmed value forward
+// reproduces that ffill.
+var float last_swing_high = na
+var float last_swing_low = na
+float ph = ta.pivothigh(swing_left, swing_right)
+float pl = ta.pivotlow(swing_left, swing_right)
+if not na(ph)
+    last_swing_high := ph
+if not na(pl)
+    last_swing_low := pl
+
+// Compares against the level known as of the PRIOR bar, matching pines/vcp_crypto.pine's own
+// local_resistance = ta.highest(high, 20)[1] convention (and structure.break_of_structure's
+// swing_high.shift(1)) -- a breakout clears a level already established before today.
+bool bullish_bos = close > last_swing_high[1]
+
+// ==========================================
+// LIQUIDITY ENGINE (backend/crypto_v2/liquidity.py)
+// ==========================================
+float prior_day_low = low[1]
+float prior_week_low = ta.lowest(low[1], prior_week_days)
+bool bullish_sweep = (low < prior_day_low and close > prior_day_low) or (low < prior_week_low and close > prior_week_low)
+
+// ==========================================
+// SETUP 1: BREAKOUT (setups.breakout)
+// ==========================================
+bool sc1_range_break = close > last_swing_high[1]
+bool sc1_volume_expansion = volume_expansion
+bool sc1_relative_strength = rs_btc > 0
+bool breakout_detected = sc1_range_break and sc1_volume_expansion and sc1_relative_strength
+float breakout_score = (sc1_range_break ? w_range_break : 0.0) + (sc1_volume_expansion ? w_volume_expansion : 0.0) +
+     (sc1_relative_strength ? w_relative_strength : 0.0) + (atr_expansion ? w_volatility_expansion : 0.0)
+
+// ==========================================
+// SETUP 2: MOMENTUM CONTINUATION (setups.momentum_continuation)
+// ==========================================
+bool sc2_impulse = roc > 0
+bool sc2_volume_expansion = volume_expansion
+bool sc2_structure_bos = bullish_bos
+bool sc2_relative_strength = rs_btc > 0
+bool momentum_detected = sc2_impulse and sc2_volume_expansion and sc2_structure_bos and sc2_relative_strength
+float momentum_score = (sc2_impulse ? w_impulse : 0.0) + (sc2_volume_expansion ? w_volume_expansion : 0.0) +
+     (sc2_structure_bos ? w_structure_bos : 0.0) + (sc2_relative_strength ? w_relative_strength : 0.0)
+
+// ==========================================
+// SETUP 3: LIQUIDITY SWEEP REVERSAL (setups.liquidity_sweep_reversal)
+// ==========================================
+bool sc3_liquidity_sweep = bullish_sweep
+bool sc3_structure_bos = bullish_bos
+bool sweep_detected = sc3_liquidity_sweep and sc3_structure_bos
+float sweep_score = (sc3_liquidity_sweep ? w_liquidity_sweep : 0.0) + (sc3_structure_bos ? w_structure_bos : 0.0)
+
+// ==========================================
+// SETUP 4: RANGE BREAKOUT (setups.range_breakout)
+// ==========================================
+bool was_compressed = ta.highest(atr_compression[1] ? 1 : 0, breakout_lookback) > 0
+bool sc4_breaks_range = close > last_swing_high[1]
+bool sc4_volume_expansion = volume_expansion
+bool range_detected = was_compressed and sc4_breaks_range and sc4_volume_expansion
+float range_score = (was_compressed ? w_range_compression : 0.0) + (sc4_breaks_range ? w_breaks_range : 0.0) +
+     (sc4_volume_expansion ? w_volume_expansion : 0.0)
+
+// ==========================================
+// ENTRY SELECTION -- same fixed priority as engine.py's _SETUP_PRIORITY when more than one
+// setup fires the same bar: breakout > momentum_continuation > liquidity_sweep_reversal >
+// range_breakout. Disclosed, not hidden -- see setups.py's ALL_SETUPS order.
+// ==========================================
+bool any_setup = breakout_detected or momentum_detected or sweep_detected or range_detected
+string triggered_setup = breakout_detected ? "Breakout" : momentum_detected ? "Momentum Continuation" :
+     sweep_detected ? "Liquidity Sweep Reversal" : range_detected ? "Range Breakout" : na
+
+// ==========================================
+// POSITION STATE + RISK-BASED SIZING (mirrors pines/vcp_crypto.pine's own pattern)
+// ==========================================
+var float entry_price = na
+var float stop_price = na
+var string open_setup_type = na
+var bool be_activated = false
+var bool tp_half_hit = false
+var int bars_in_trade = 0
+var float stop_distance = na
+
+if strategy.position_size > 0
+    bars_in_trade := bars_in_trade + 1
+    if na(entry_price)
+        entry_price := strategy.opentrades.entry_price(0)
+        // Structural stop (doc §28's "thesis invalidation"), not entry_price - ATR*mult like
+        // v1 -- last_swing_low and atr_value here are both read on the fill bar itself, matching
+        // vcp_crypto.pine's own established stop-basis timing (see file header).
+        float raw_stop = last_swing_low - atr_value * stop_atr_buffer_mult
+        stop_distance := math.max(entry_price - raw_stop, atr_value * 0.5)
+        stop_price := entry_price - stop_distance
+else
+    entry_price := na
+    stop_price := na
+    open_setup_type := na
+    be_activated := false
+    tp_half_hit := false
+    bars_in_trade := 0
+    stop_distance := na
+
+float risk_qty = (not na(stop_distance) and stop_distance > 0) ? (strategy.equity * risk_pct / 100) / stop_distance : na
+bool entry_signal = any_setup and strategy.position_size == 0 and in_date_range and not na(risk_qty)
+if entry_signal
+    strategy.entry("Long", strategy.long, qty=risk_qty, comment="Long")
+    open_setup_type := triggered_setup
+
+// ==========================================
+// MULTI-TIER TRADE MANAGEMENT -- TP1/TP2 at R-multiples of the stop distance (doc §29), 50% off
+// at TP1 with a breakeven stop move, ATR trailing the remainder (doc §30). Same mechanics as
+// engine.backtest()'s tp1_r/be_activated/tp_half_hit handling.
+// ==========================================
+var float high_since_entry = na
+if strategy.position_size > 0
+    high_since_entry := na(high_since_entry) ? high : math.max(high_since_entry, high)
+    float max_gain_r = stop_distance > 0 ? (high_since_entry - entry_price) / stop_distance : 0.0
+
+    if max_gain_r >= tp1_r and not be_activated
+        stop_price := entry_price
+        be_activated := true
+
+    if tp_half_hit
+        stop_price := math.max(stop_price, close - atr_value * 2.5)
+    else if be_activated
+        stop_price := math.max(stop_price, entry_price)
+
+    if max_gain_r >= tp1_r and not tp_half_hit
+        strategy.order("TP1", strategy.short, qty=strategy.position_size * 0.5, comment="TP1 (1R)")
+        tp_half_hit := true
+
+    if close < stop_price or low < stop_price
+        strategy.close("Long", comment="Stop")
+else
+    high_since_entry := na
+
+// Time stop: flat/underwater after max_bars with no macro edge left to wait on -- same rule
+// vcp_crypto.pine uses (bars_in_trade >= max_bars and close <= entry_price), no separate macro
+// trend filter here since v2's setups don't compute one (see file header's scope note).
+if strategy.position_size > 0 and bars_in_trade >= max_bars and close <= entry_price
+    strategy.close("Long", comment="Time Stop")
+
+// ==========================================
+// PLOTS
+// ==========================================
+plot(strategy.position_size > 0 ? entry_price : na, color=color.orange, style=plot.style_linebr, linestyle=plot.linestyle_dashed, linewidth=1, title="Entry")
+plot(strategy.position_size > 0 ? stop_price : na, color=color.red, style=plot.style_linebr, linewidth=1, title="Stop")
+plot(strategy.position_size > 0 ? entry_price + tp1_r * stop_distance : na, color=color.green, style=plot.style_linebr, linestyle=plot.linestyle_dotted, linewidth=1, title="TP1 (1R)")
+plot(strategy.position_size > 0 ? entry_price + tp2_r * stop_distance : na, color=color.teal, style=plot.style_linebr, linestyle=plot.linestyle_dotted, linewidth=1, title="TP2 (2R)")
+plotshape(entry_signal, title="Setup", style=shape.triangleup, location=location.belowbar, color=color.blue, size=size.tiny)
+label.new(bar_index, low, text=entry_signal ? triggered_setup : "", style=label.style_label_up, color=color.new(color.blue, 80), textcolor=color.white, size=size.tiny) if entry_signal
