@@ -334,6 +334,66 @@ def _init_schema() -> None:
                 computed_at REAL NOT NULL,
                 error TEXT
             );
+
+            -- Crypto v2's own tables (backend/crypto_v2/), namespaced separately from the
+            -- crypto_* tables above so v1 (unchanged, still flag-switchable via
+            -- ENABLE_CRYPTO_V2) and v2 never share a row -- see the crypto v2 plan. Reuses
+            -- crypto_bars directly for OHLCV (same data source, no reason to duplicate); these
+            -- four are new because v2's computed/signal shape genuinely differs from v1's.
+            CREATE TABLE IF NOT EXISTS crypto_v2_candidate_tickers (
+                ticker TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                market_cap REAL,
+                quote_volume REAL,
+                fetched_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS crypto_v2_computed_results (
+                ticker TEXT PRIMARY KEY,
+                payload TEXT,
+                source_bar_date TEXT NOT NULL,
+                computed_at REAL NOT NULL,
+                error TEXT
+            );
+
+            -- Append-only signal/audit log (doc §33/§35) -- every setup detected on its own
+            -- detection day gets a permanent row, never mutated or overwritten, unlike the
+            -- "latest state" cache above. feature_snapshot is the full feature_snapshot dict
+            -- evaluate() returned at detection time, so a signal's exact inputs stay
+            -- reconstructable even after later config/strategy-version changes.
+            CREATE TABLE IF NOT EXISTS crypto_v2_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                setup_type TEXT NOT NULL,
+                side TEXT NOT NULL,
+                detected_date TEXT NOT NULL,
+                entry_price REAL,
+                stop_price REAL,
+                setup_score REAL,
+                execution_score REAL,
+                score_breakdown TEXT,
+                feature_snapshot TEXT,
+                strategy_version TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_crypto_v2_signals_ticker ON crypto_v2_signals(ticker, detected_date);
+            -- One row per (ticker, setup_type, detected_date) -- a re-computed pass re-detecting
+            -- the same already-logged signal (e.g. the background loop running again before the
+            -- setup resolves) must not duplicate it.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_crypto_v2_signals_dedup
+                ON crypto_v2_signals(ticker, setup_type, detected_date);
+
+            -- Immutable config history (doc §35) -- a row per distinct config_hash ever
+            -- computed with, so a signal's strategy_version/config_hash can always be resolved
+            -- back to the exact parameters that produced it.
+            CREATE TABLE IF NOT EXISTS crypto_v2_strategy_versions (
+                version TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                config_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (version, config_hash)
+            );
         """)
     _migrate_notifications_position_id_nullable()
 
@@ -1655,4 +1715,125 @@ def crypto_load_all_computed() -> tuple[list[dict], dict[str, str], dict[str, st
 def crypto_get_max_computed_at() -> float | None:
     with _lock:
         row = _conn.execute("SELECT MAX(computed_at) FROM crypto_computed_results").fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+# ---- Crypto v2 (backend/crypto_v2/) -- same shapes as the crypto_* functions above, against
+# the crypto_v2_* tables instead. Reuses crypto_bars/crypto_get_bars* for OHLCV (unchanged).
+
+def crypto_v2_set_candidate_tickers(categories: dict[str, list[str]], market_caps: dict[str, float],
+                                     quote_volumes: dict[str, float], fetched_at: float) -> None:
+    """Replaces the whole candidate set in one pass -- unlike v1's per-bucket
+    set_crypto_candidate_tickers, v2's categories are mutually exclusive by construction
+    (universe.discover()'s percentile bands), so there's no independent-bucket-failure case to
+    preserve partial writes for."""
+    rows = [(ticker, category, market_caps.get(ticker), quote_volumes.get(ticker), fetched_at)
+            for category, tickers in categories.items() for ticker in tickers]
+    with _lock, _conn:
+        _conn.execute("DELETE FROM crypto_v2_candidate_tickers")
+        _conn.executemany(
+            "INSERT INTO crypto_v2_candidate_tickers (ticker, category, market_cap, quote_volume, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?)", rows)
+
+
+def crypto_v2_get_candidate_tickers() -> dict[str, str]:
+    """ticker -> category, for every currently discovered v2 candidate."""
+    with _lock:
+        rows = _conn.execute("SELECT ticker, category FROM crypto_v2_candidate_tickers").fetchall()
+    return {ticker: category for ticker, category in rows}
+
+
+def crypto_v2_get_candidate_market_data() -> dict[str, tuple[float | None, float | None]]:
+    """ticker -> (market_cap, quote_volume), for scoring.execution_score's turnover ratio."""
+    with _lock:
+        rows = _conn.execute("SELECT ticker, market_cap, quote_volume FROM crypto_v2_candidate_tickers").fetchall()
+    return {ticker: (market_cap, quote_volume) for ticker, market_cap, quote_volume in rows}
+
+
+def crypto_v2_get_candidate_fetched_at() -> float | None:
+    with _lock:
+        row = _conn.execute("SELECT MAX(fetched_at) FROM crypto_v2_candidate_tickers").fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def crypto_v2_upsert_computed(ticker: str, payload: dict | None, source_bar_date: str,
+                               computed_at: float, error: str | None) -> None:
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT INTO crypto_v2_computed_results (ticker, payload, source_bar_date, computed_at, error)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                payload=excluded.payload, source_bar_date=excluded.source_bar_date,
+                computed_at=excluded.computed_at, error=excluded.error
+        """, (ticker, json.dumps(payload) if payload is not None else None,
+              source_bar_date, computed_at, error))
+
+
+def crypto_v2_load_all_computed() -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT ticker, payload, source_bar_date, error FROM crypto_v2_computed_results"
+        ).fetchall()
+    computed, errors, source_fetch = [], {}, {}
+    for ticker, payload_json, source_bar_date, error in rows:
+        source_fetch[ticker] = source_bar_date
+        if payload_json:
+            computed.append(json.loads(payload_json))
+        if error:
+            errors[ticker] = error
+    return computed, errors, source_fetch
+
+
+def crypto_v2_insert_signal(ticker: str, setup_type: str, side: str, detected_date: str,
+                             entry_price: float | None, stop_price: float | None,
+                             setup_score: float, execution_score: float, score_breakdown: dict,
+                             feature_snapshot: dict, strategy_version: str, config_hash: str,
+                             created_at: float) -> None:
+    """INSERT OR IGNORE against the (ticker, setup_type, detected_date) unique index -- a
+    re-detected signal from a later compute pass on the same day is a no-op, not a duplicate
+    row (see the table's own comment in the schema block)."""
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT OR IGNORE INTO crypto_v2_signals
+                (ticker, setup_type, side, detected_date, entry_price, stop_price, setup_score,
+                 execution_score, score_breakdown, feature_snapshot, strategy_version, config_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ticker, setup_type, side, detected_date, entry_price, stop_price, setup_score,
+              execution_score, json.dumps(score_breakdown), json.dumps(feature_snapshot),
+              strategy_version, config_hash, created_at))
+
+
+def crypto_v2_list_signals(ticker: str | None = None, limit: int = 200) -> list[dict]:
+    query = "SELECT * FROM crypto_v2_signals"
+    params: tuple = ()
+    if ticker:
+        query += " WHERE ticker = ?"
+        params = (ticker,)
+    query += " ORDER BY detected_date DESC, id DESC LIMIT ?"
+    with _lock:
+        cur = _conn.execute(query, (*params, limit))
+        names = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+    out = []
+    for row in rows:
+        rec = dict(zip(names, row))
+        rec["score_breakdown"] = json.loads(rec["score_breakdown"]) if rec.get("score_breakdown") else None
+        rec["feature_snapshot"] = json.loads(rec["feature_snapshot"]) if rec.get("feature_snapshot") else None
+        out.append(rec)
+    return out
+
+
+def crypto_v2_record_strategy_version(version: str, config_hash: str, config_json: str, created_at: float) -> None:
+    """INSERT OR IGNORE against the (version, config_hash) primary key -- immutable history,
+    never updated once a version/hash pair has been recorded."""
+    with _lock, _conn:
+        _conn.execute("""
+            INSERT OR IGNORE INTO crypto_v2_strategy_versions (version, config_hash, config_json, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (version, config_hash, config_json, created_at))
+
+
+def crypto_v2_get_max_computed_at() -> float | None:
+    with _lock:
+        row = _conn.execute("SELECT MAX(computed_at) FROM crypto_v2_computed_results").fetchone()
     return row[0] if row and row[0] is not None else None

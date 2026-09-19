@@ -64,6 +64,9 @@ import backend.build_universe as build_universe
 import backend.data as data
 import backend.data_crypto as data_crypto
 import backend.crypto_universe as crypto_universe
+import backend.crypto_v2.config as crypto_v2_config
+import backend.crypto_v2.engine as crypto_v2_engine
+import backend.crypto_v2.universe as crypto_v2_universe
 import backend.db as db
 import backend.entry_estimate as entry_estimate
 import backend.market_hours as market_hours
@@ -95,6 +98,7 @@ CLOSED_MARKET_POLL_SECONDS = 5 * 60
 async def _lifespan(app: FastAPI):
     _on_startup()
     _on_crypto_startup()
+    _on_crypto_v2_startup()
     yield
     # No shutdown-side cleanup needed: the background thread is a daemon and db's connection needs no explicit close.
 
@@ -1255,6 +1259,181 @@ def _on_crypto_startup():
                 crypto_refresh_and_compute()
             except Exception as e:  # noqa: BLE001 - one bad pass must not kill the loop
                 print(f"app: crypto background refresh loop pass failed ({e}); will retry next cycle.")
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
+# ============================================================================================
+# Crypto v2 (backend/crypto_v2/) -- feature-flagged via ENABLE_CRYPTO_V2 (see /api/flags).
+# Unlike _on_crypto_startup above (which always runs -- turning that flag off just hides a UI,
+# not a backend process), v2's background loop only starts when the flag is on: there's real
+# compute to skip when nobody can see the output. Reuses crypto_universe.DISCOVERY_INTERVAL_SECONDS
+# and data_crypto.get_bars (same OHLCV cache, no separate fetch) -- only the discovery
+# classification and the strategy computation itself are v2-specific. No checksum-based
+# reuse-if-unchanged optimization yet (unlike crypto_compute_all above) -- a deliberate,
+# disclosed scope cut for this first pass; recomputes every discovered ticker every cycle.
+# ============================================================================================
+CRYPTO_V2_BACKGROUND_INTERVAL_SECONDS = int(os.environ.get("CRYPTO_V2_FETCH_INTERVAL_MINUTES", 30)) * 60
+
+_crypto_v2_computed: list[dict] = []
+_crypto_v2_computed_errors: dict[str, str] = {}
+_crypto_v2_computed_asof: str | None = None
+_crypto_v2_compute_lock = threading.Lock()
+_crypto_v2_refresh_pass_lock = threading.Lock()
+_crypto_v2_compute_progress: dict[str, int] | None = None
+_crypto_v2_categories: dict[str, str] = {}  # ticker -> category, from the last discovery pass
+
+
+def crypto_v2_compute_progress() -> dict[str, int] | None:
+    with _crypto_v2_compute_lock:
+        return dict(_crypto_v2_compute_progress) if _crypto_v2_compute_progress is not None else None
+
+
+def _load_crypto_v2_computed_from_db() -> None:
+    global _crypto_v2_computed, _crypto_v2_computed_errors, _crypto_v2_computed_asof, _crypto_v2_categories
+    try:
+        _crypto_v2_computed, _crypto_v2_computed_errors, _ = db.crypto_v2_load_all_computed()
+        max_computed_at = db.crypto_v2_get_max_computed_at()
+        if max_computed_at is not None:
+            _crypto_v2_computed_asof = datetime.fromtimestamp(max_computed_at, timezone.utc).isoformat(timespec="seconds")
+        _crypto_v2_categories = db.crypto_v2_get_candidate_tickers()
+    except Exception as e:  # noqa: BLE001 - corrupted DB, not a crash
+        print(f"app: loading crypto v2 computed results from db failed ({e}); starting cold.")
+        _crypto_v2_computed, _crypto_v2_computed_errors = [], {}
+
+
+_load_crypto_v2_computed_from_db()
+
+
+def _crypto_v2_discover_candidates() -> None:
+    """Mirrors _crypto_discover_candidates -- same discovery cadence and same underlying
+    screener call (crypto_v2.universe.discover() wraps crypto_universe.py's own internals),
+    falls back to the last-known-good DB rows on failure."""
+    global _crypto_v2_categories
+    last = db.crypto_v2_get_candidate_fetched_at() or 0
+    if time.time() - last < crypto_universe.DISCOVERY_INTERVAL_SECONDS:
+        db_categories = db.crypto_v2_get_candidate_tickers()
+        if db_categories:
+            _crypto_v2_categories = db_categories
+        return
+    try:
+        discovery = crypto_v2_universe.discover()
+        now = time.time()
+        db.crypto_v2_set_candidate_tickers(discovery["categories"], discovery["market_caps"],
+                                            discovery["quote_volumes"], now)
+        _crypto_v2_categories = {tk: cat for cat, tks in discovery["categories"].items() for tk in tks}
+        counts = ", ".join(f"{len(tks)} {cat}" for cat, tks in discovery["categories"].items())
+        print(f"app: crypto v2 discovery found {counts}.")
+    except Exception as e:  # noqa: BLE001 -- fall back, don't abort the cycle
+        print(f"app: crypto v2 discovery failed ({e}); falling back to last-known-good candidates.")
+        db_categories = db.crypto_v2_get_candidate_tickers()
+        if db_categories:
+            _crypto_v2_categories = db_categories
+
+
+def crypto_v2_compute_all() -> None:
+    global _crypto_v2_computed, _crypto_v2_computed_errors, _crypto_v2_computed_asof, _crypto_v2_compute_progress
+    tickers = list(_crypto_v2_categories.keys())
+    if not tickers:
+        return
+
+    bars_by_ticker = {tk: data_crypto.get_bars(tk) for tk in tickers}
+    btc_df = bars_by_ticker.get("BTC-USD")
+    if btc_df is None:
+        btc_df = data_crypto.get_bars("BTC-USD")
+    eth_df = bars_by_ticker.get("ETH-USD")
+    if eth_df is None:
+        eth_df = data_crypto.get_bars("ETH-USD")
+
+    lookback = crypto_v2_config.CONFIG["relative_strength"]["lookback_days"]
+    universe_returns = list(crypto_v2_engine.universe_returns_by_ticker(bars_by_ticker, lookback).values())
+    market_data = db.crypto_v2_get_candidate_market_data()
+
+    with _crypto_v2_compute_lock:
+        _crypto_v2_compute_progress = {"done": 0, "total": len(tickers)}
+
+    results = []
+    try:
+        for tk in tickers:
+            df = bars_by_ticker.get(tk)
+            market_cap, quote_volume = market_data.get(tk, (None, None))
+            try:
+                if df is None or df.empty:
+                    raise ValueError(data_crypto.get_error(tk) or "no data")
+                result = crypto_v2_engine.evaluate(
+                    tk, df, btc_df, eth_df, universe_returns,
+                    market_cap=market_cap, quote_volume_24h=quote_volume, config=crypto_v2_config.CONFIG)
+                results.append((tk, result, None))
+            except Exception as e:  # noqa: BLE001 - per-ticker failures must not break the page
+                results.append((tk, None, str(e) or type(e).__name__))
+            with _crypto_v2_compute_lock:
+                _crypto_v2_compute_progress["done"] += 1
+    finally:
+        with _crypto_v2_compute_lock:
+            _crypto_v2_compute_progress = None
+
+    with _crypto_v2_compute_lock:
+        _crypto_v2_computed = [r for _, r, _ in results if r is not None]
+        _crypto_v2_computed_errors = {tk: e for tk, _, e in results if e is not None}
+        _crypto_v2_computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    now = time.time()
+    for tk, result, err in results:
+        df = bars_by_ticker.get(tk)
+        source_bar_date = result["date"] if result else (str(df.index[-1].date()) if df is not None and not df.empty else None)
+        if source_bar_date is None:
+            continue
+        try:
+            db.crypto_v2_upsert_computed(tk, result, source_bar_date, now, err)
+        except Exception as e:  # noqa: BLE001
+            print(f"app: crypto v2 db.upsert_computed failed for {tk} ({e}).")
+        if result is None:
+            continue
+        for sig in result["signals_today"]:
+            try:
+                entry_price = result["open_position"]["entry_price"] if result["open_position"] else result["price"]
+                stop_price = result["open_position"]["stop"] if result["open_position"] else None
+                db.crypto_v2_insert_signal(
+                    tk, sig["setup_type"], sig["side"], result["date"], entry_price, stop_price,
+                    sig["setup_score"], result["execution_score"], sig["score_breakdown"],
+                    result["feature_snapshot"], result["strategy_version"], result["config_hash"], now)
+            except Exception as e:  # noqa: BLE001
+                print(f"app: crypto v2 signal insert failed for {tk}/{sig['setup_type']} ({e}).")
+
+    try:
+        db.crypto_v2_record_strategy_version(
+            crypto_v2_config.STRATEGY_VERSION, crypto_v2_config.config_hash(),
+            json.dumps(crypto_v2_config.CONFIG), now)
+    except Exception as e:  # noqa: BLE001
+        print(f"app: crypto v2 strategy version record failed ({e}).")
+
+
+def crypto_v2_refresh_and_compute() -> None:
+    if not _crypto_v2_refresh_pass_lock.acquire(blocking=False):
+        print("app: crypto_v2_refresh_and_compute() already running -- skipping this overlapping call.")
+        return
+    try:
+        _crypto_v2_discover_candidates()
+        crypto_v2_compute_all()
+    finally:
+        _crypto_v2_refresh_pass_lock.release()
+
+
+def _on_crypto_v2_startup():
+    if os.environ.get("ENABLE_CRYPTO_V2", "false").lower() != "true":
+        return
+
+    def loop():
+        try:
+            crypto_v2_refresh_and_compute()
+        except Exception as e:  # noqa: BLE001
+            print(f"app: eager crypto v2 startup fetch+compute failed ({e}); will retry on cadence.")
+        while True:
+            time.sleep(CRYPTO_V2_BACKGROUND_INTERVAL_SECONDS)
+            try:
+                crypto_v2_refresh_and_compute()
+            except Exception as e:  # noqa: BLE001 - one bad pass must not kill the loop
+                print(f"app: crypto v2 background refresh loop pass failed ({e}); will retry next cycle.")
 
     threading.Thread(target=loop, daemon=True).start()
 
@@ -2911,6 +3090,43 @@ def crypto_meta():
         "last_fetch": data_crypto.last_fetch_time(),
         "fetch_progress": data_crypto.fetch_progress(),
         "compute_progress": crypto_compute_progress(),
+    }
+
+
+def _run_manual_crypto_v2_refresh() -> None:
+    crypto_v2_refresh_and_compute()
+
+
+@app.get("/api/crypto-v2/signals")
+def crypto_v2_signals(refresh: int = 0):
+    """Same asof/cached/tickers/errors shape as /api/crypto/signals -- each entry is a
+    crypto_v2.engine.evaluate() payload (multiple possible setups per ticker, component-scored,
+    not a single WR/PF-gated verdict like v1). category comes from the last discovery pass, same
+    "attach outside the cached payload" pattern v1 uses for last_market/price_source."""
+    if refresh:
+        threading.Thread(target=_run_manual_crypto_v2_refresh, daemon=True).start()
+    with _crypto_v2_compute_lock:
+        computed_snapshot = list(_crypto_v2_computed)
+        asof, errors = _crypto_v2_computed_asof, dict(_crypto_v2_computed_errors)
+    tickers_with_category = [
+        {**row, "category": _crypto_v2_categories.get(row["ticker"])} for row in computed_snapshot
+    ]
+    return {"asof": asof, "cached": not refresh, "tickers": tickers_with_category, "errors": errors}
+
+
+@app.post("/api/crypto-v2/refresh")
+def crypto_v2_refresh():
+    threading.Thread(target=_run_manual_crypto_v2_refresh, daemon=True).start()
+    return {"started": True}
+
+
+@app.get("/api/crypto-v2/meta")
+def crypto_v2_meta():
+    return {
+        "total_tickers": len(_crypto_v2_categories),
+        "last_fetch": data_crypto.last_fetch_time(),
+        "fetch_progress": data_crypto.fetch_progress(),
+        "compute_progress": crypto_v2_compute_progress(),
     }
 
 

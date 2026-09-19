@@ -2,12 +2,13 @@
 strategy("VCP Crypto", overlay=true, initial_capital=1500, default_qty_type=strategy.percent_of_equity, default_qty_value=66.66, calc_on_every_tick=false)
 
 // Mirrors backend/crypto_universe.py + backend/strategy_vcp.py's run() exactly -- both the entry/
-// exit logic AND the position-sizing formula, not just the former. Two validated buckets, each
-// its own config (see crypto_universe.py's LARGE_CAP_CONFIG/MEME_CONFIG):
-//   Large-cap (atr_mult=3.0, vol_mult=1.6, tp_target=8.0, max_bars=20, risk_pct=7.8): passed the
-//   backtest gate (>=20 trades, PF>=2.5, WR>=75%) on BTC-USD, ETH-USD, SOL-USD, BNB-USD, DOGE-USD.
-//   Meme (atr_mult=4.0, vol_mult=1.2, tp_target=10.0, max_bars=15, risk_pct=20.0): passed on
-//   FLOKI-USD, MEME-USD, TURBO-USD, WOJAK-USD.
+// exit logic AND the position-sizing formula, not just the former. Two buckets, each its own
+// config (see crypto_universe.py's LARGE_CAP_CONFIG/MEME_CONFIG, re-tuned 2026-09-19 via a pooled
+// backtest across the live discovered universe -- see that file's own comment for the full basis):
+//   Large-cap: atr_mult=3.0, vol_mult=1.6, be_trigger=10.0, trail_tier=18.0, tp_target=8.0,
+//   max_bars=15, risk_pct=7.8.
+//   Meme: atr_mult=6.0, vol_mult=1.2, be_trigger=10.0, trail_tier=18.0, tp_target=12.0,
+//   max_bars=12, risk_pct=20.0.
 // The Bucket input below switches both the entry-condition params AND risk_pct together, since
 // the app always applies a ticker's own bucket config to both -- do not mix "large-cap atr_mult
 // with meme risk_pct", that combination was never backtested and won't match live results.
@@ -45,19 +46,19 @@ bool in_date_range     = not use_date_filter or (time >= start_date and time <= 
 // with another's risk_pct etc. was never backtested (see header comment) -- select via the
 // Bucket dropdown above instead of editing these directly.
 int atr_len         = 22
-float atr_mult      = is_large_cap ? 3.0 : 4.0
+float atr_mult      = is_large_cap ? 3.0 : 6.0
 float vol_mult      = is_large_cap ? 1.6 : 1.2
 float risk_pct      = is_large_cap ? 7.8 : 20.0
 
 // Stage 4 - bucket-derived Multi-Tier Risk & Protection params
 float be_trigger    = 10.0
-float trail_tier    = 10.0
-float tp_target     = is_large_cap ? 8.0 : 10.0
+float trail_tier    = 18.0
+float tp_target     = is_large_cap ? 8.0 : 12.0
 string stop_style   = "Dynamic ATR"
 
 // Stage 5 - bucket-derived Inactivity Parameters
 bool use_time       = true
-int max_bars        = is_large_cap ? 20 : 15
+int max_bars        = is_large_cap ? 15 : 12
 
 // Visual-only: flags N candles after EVERY entry, independent of the actual
 // time stop above -- lets you eyeball where each trade would be on a fixed
