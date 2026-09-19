@@ -3,6 +3,7 @@
 
 import type { TickerPayload } from "../api/types";
 import type { CryptoTickerPayload } from "../api/crypto";
+import type { CryptoV2TickerPayload } from "../api/cryptoV2";
 
 const STRATEGY_FIELDS = ["vexh", "strategy_vcp", "strategy_vcpo"] as const;
 
@@ -49,6 +50,22 @@ export function sortCryptoTickers(rows: CryptoTickerPayload[]): CryptoTickerPayl
     if (pa !== pb) return pa ? -1 : 1;
     const da = a.strategy_vcp.open_position?.days_held ?? null;
     const db = b.strategy_vcp.open_position?.days_held ?? null;
+    if (da === null && db === null) return 0;
+    if (da === null) return 1;
+    if (db === null) return -1;
+    return da - db;
+  });
+}
+
+// Same 3-tier priority as sortCryptoTickers, reading v2's flatter shape (open_position and
+// signals_today sit directly on the row, not nested under a single strategy_vcp field).
+export function sortCryptoV2Tickers(rows: CryptoV2TickerPayload[]): CryptoV2TickerPayload[] {
+  return rows.slice().sort((a, b) => {
+    const pa = a.signals_today.length > 0 && !a.open_position;
+    const pb = b.signals_today.length > 0 && !b.open_position;
+    if (pa !== pb) return pa ? -1 : 1;
+    const da = a.open_position?.days_held ?? null;
+    const db = b.open_position?.days_held ?? null;
     if (da === null && db === null) return 0;
     if (da === null) return 1;
     if (db === null) return -1;

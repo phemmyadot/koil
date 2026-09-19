@@ -45,7 +45,10 @@ const TRADINGVIEW_EXCHANGE: Record<string, string> = {
   Coinbase: "COINBASE",
 };
 
-function toTradingViewUrl(yahooTicker: string, lastMarket: string | null): string {
+// Exported for CryptoV2Page.tsx's reuse -- v2's payload has no last_market field (its API route
+// doesn't attach discovery metadata the way v1's does), so it always calls this with null,
+// falling straight to the exchange-agnostic /symbols/ URL below.
+export function toTradingViewUrl(yahooTicker: string, lastMarket: string | null): string {
   const base = yahooTicker.replace(/-USD$/, "");
   const exchange = lastMarket ? TRADINGVIEW_EXCHANGE[lastMarket] : null;
   if (exchange) {
