@@ -163,8 +163,7 @@ bool sc1_range_break = close > last_swing_high[1]
 bool sc1_volume_expansion = volume_expansion
 bool sc1_relative_strength = rs_btc > 0
 bool breakout_detected = sc1_range_break and sc1_volume_expansion and sc1_relative_strength
-float breakout_score = (sc1_range_break ? w_range_break : 0.0) + (sc1_volume_expansion ? w_volume_expansion : 0.0) +
-     (sc1_relative_strength ? w_relative_strength : 0.0) + (atr_expansion ? w_volatility_expansion : 0.0)
+float breakout_score = (sc1_range_break ? w_range_break : 0.0) + (sc1_volume_expansion ? w_volume_expansion : 0.0) + (sc1_relative_strength ? w_relative_strength : 0.0) + (atr_expansion ? w_volatility_expansion : 0.0)
 
 // ==========================================
 // SETUP 2: MOMENTUM CONTINUATION (setups.momentum_continuation)
@@ -174,8 +173,7 @@ bool sc2_volume_expansion = volume_expansion
 bool sc2_structure_bos = bullish_bos
 bool sc2_relative_strength = rs_btc > 0
 bool momentum_detected = sc2_impulse and sc2_volume_expansion and sc2_structure_bos and sc2_relative_strength
-float momentum_score = (sc2_impulse ? w_impulse : 0.0) + (sc2_volume_expansion ? w_volume_expansion : 0.0) +
-     (sc2_structure_bos ? w_structure_bos : 0.0) + (sc2_relative_strength ? w_relative_strength : 0.0)
+float momentum_score = (sc2_impulse ? w_impulse : 0.0) + (sc2_volume_expansion ? w_volume_expansion : 0.0) + (sc2_structure_bos ? w_structure_bos : 0.0) + (sc2_relative_strength ? w_relative_strength : 0.0)
 
 // ==========================================
 // SETUP 3: LIQUIDITY SWEEP REVERSAL (setups.liquidity_sweep_reversal)
@@ -192,8 +190,7 @@ bool was_compressed = ta.highest(atr_compression[1] ? 1 : 0, breakout_lookback) 
 bool sc4_breaks_range = close > last_swing_high[1]
 bool sc4_volume_expansion = volume_expansion
 bool range_detected = was_compressed and sc4_breaks_range and sc4_volume_expansion
-float range_score = (was_compressed ? w_range_compression : 0.0) + (sc4_breaks_range ? w_breaks_range : 0.0) +
-     (sc4_volume_expansion ? w_volume_expansion : 0.0)
+float range_score = (was_compressed ? w_range_compression : 0.0) + (sc4_breaks_range ? w_breaks_range : 0.0) + (sc4_volume_expansion ? w_volume_expansion : 0.0)
 
 // ==========================================
 // ENTRY SELECTION -- same fixed priority as engine.py's _SETUP_PRIORITY when more than one
@@ -201,12 +198,21 @@ float range_score = (was_compressed ? w_range_compression : 0.0) + (sc4_breaks_r
 // range_breakout. Disclosed, not hidden -- see setups.py's ALL_SETUPS order.
 // ==========================================
 bool any_setup = breakout_detected or momentum_detected or sweep_detected or range_detected
-string triggered_setup = breakout_detected ? "Breakout" : momentum_detected ? "Momentum Continuation" :
-     sweep_detected ? "Liquidity Sweep Reversal" : range_detected ? "Range Breakout" : na
+string triggered_setup = breakout_detected ? "Breakout" : momentum_detected ? "Momentum Continuation" : sweep_detected ? "Liquidity Sweep Reversal" : range_detected ? "Range Breakout" : na
 
 // ==========================================
 // POSITION STATE + RISK-BASED SIZING (mirrors pines/vcp_crypto.pine's own pattern)
 // ==========================================
+// Computed unconditionally every bar, same as vcp_crypto.pine's own stop_distance/risk_qty --
+// this is what a signal firing on THIS bar would be sized with, independent of whether a
+// position happens to be open right now. Fixes a real bug caught via live TradingView testing:
+// the stop distance used to be computed only AFTER a position was already open, so risk_qty (and
+// therefore entry_signal) was permanently na while flat -- no trade could ever fire, on any
+// ticker, which is exactly the "no signal anywhere" symptom that surfaced this.
+float entry_raw_stop = last_swing_low - atr_value * stop_atr_buffer_mult
+float entry_stop_distance = na(last_swing_low) ? na : math.max(close - entry_raw_stop, atr_value * 0.5)
+float risk_qty = (not na(entry_stop_distance) and entry_stop_distance > 0) ? (strategy.equity * risk_pct / 100) / entry_stop_distance : na
+
 var float entry_price = na
 var float stop_price = na
 var string open_setup_type = na
@@ -220,8 +226,9 @@ if strategy.position_size > 0
     if na(entry_price)
         entry_price := strategy.opentrades.entry_price(0)
         // Structural stop (doc §28's "thesis invalidation"), not entry_price - ATR*mult like
-        // v1 -- last_swing_low and atr_value here are both read on the fill bar itself, matching
-        // vcp_crypto.pine's own established stop-basis timing (see file header).
+        // v1 -- re-derived here on the fill bar itself rather than reusing entry_stop_distance
+        // above (the signal bar's value), matching vcp_crypto.pine's own established stop-basis
+        // timing convention (see file header).
         float raw_stop = last_swing_low - atr_value * stop_atr_buffer_mult
         stop_distance := math.max(entry_price - raw_stop, atr_value * 0.5)
         stop_price := entry_price - stop_distance
@@ -234,7 +241,6 @@ else
     bars_in_trade := 0
     stop_distance := na
 
-float risk_qty = (not na(stop_distance) and stop_distance > 0) ? (strategy.equity * risk_pct / 100) / stop_distance : na
 bool entry_signal = any_setup and strategy.position_size == 0 and in_date_range and not na(risk_qty)
 if entry_signal
     strategy.entry("Long", strategy.long, qty=risk_qty, comment="Long")
@@ -282,4 +288,5 @@ plot(strategy.position_size > 0 ? stop_price : na, color=color.red, style=plot.s
 plot(strategy.position_size > 0 ? entry_price + tp1_r * stop_distance : na, color=color.green, style=plot.style_linebr, linestyle=plot.linestyle_dotted, linewidth=1, title="TP1 (1R)")
 plot(strategy.position_size > 0 ? entry_price + tp2_r * stop_distance : na, color=color.teal, style=plot.style_linebr, linestyle=plot.linestyle_dotted, linewidth=1, title="TP2 (2R)")
 plotshape(entry_signal, title="Setup", style=shape.triangleup, location=location.belowbar, color=color.blue, size=size.tiny)
-label.new(bar_index, low, text=entry_signal ? triggered_setup : "", style=label.style_label_up, color=color.new(color.blue, 80), textcolor=color.white, size=size.tiny) if entry_signal
+if entry_signal
+    label.new(bar_index, low, text=triggered_setup, style=label.style_label_up, color=color.new(color.blue, 80), textcolor=color.white, size=size.tiny)
