@@ -569,20 +569,28 @@ def _update_trade_marks_and_alerts() -> None:
     if not open_positions:
         return
 
+    # Equity and crypto positions share this loop, but each market keeps its own compute
+    # cache/lock and raw-bars module -- merge both into one ticker-keyed lookup up front (no
+    # collision risk: crypto tickers always carry the "-USD" suffix, equity ones never do) so
+    # the rest of this function doesn't need to branch per position. See _ticker_market.
     with _compute_lock:
         price_by_ticker = {p["ticker"]: (p["price"], p["date"]) for p in _computed}
         payload_by_ticker = {p["ticker"]: p for p in _computed}
+    with _crypto_compute_lock:
+        price_by_ticker.update({p["ticker"]: (p["price"], p["date"]) for p in _crypto_computed})
+        payload_by_ticker.update({p["ticker"]: p for p in _crypto_computed})
 
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     today = datetime.now(timezone.utc).date()
     for position in open_positions:
         current = price_by_ticker.get(position["ticker"])
         if current is None:
-            # Ticker never made it into _computed (e.g. too little history for any strategy to
-            # score it -- see /api/tickers/fetch-one) -- a traded ticker still needs its daily
-            # mark/TP-stop check every cycle regardless of compute status, so fall back to its
-            # raw bars rather than skipping it forever.
-            bars = data.get_bars(position["ticker"])
+            # Ticker never made it into _computed/_crypto_computed (e.g. too little history for
+            # any strategy to score it -- see /api/tickers/fetch-one) -- a traded ticker still
+            # needs its daily mark/TP-stop check every cycle regardless of compute status, so
+            # fall back to its raw bars (the right market's) rather than skipping it forever.
+            bars_module = data_crypto if _ticker_market(position["ticker"]) == "crypto" else data
+            bars = bars_module.get_bars(position["ticker"])
             if bars is None or bars.empty:
                 continue
             current = (round(float(bars.Close.iloc[-1]), 4), str(bars.index[-1].date()))
@@ -1746,7 +1754,8 @@ def _backfill_position_marks(position_id: int, ticker: str, from_date: str) -> N
     """A late-logged fill (fill_date in the past) has no daily marks for the gap between
     from_date and now, since the background loop only marks positions that already exist.
     Fill that gap once, from the ticker's already-cached bars -- no new fetch."""
-    bars = data.get_bars(ticker)
+    bars_module = data_crypto if _ticker_market(ticker) == "crypto" else data
+    bars = bars_module.get_bars(ticker)
     if bars is None or bars.empty:
         return
     today = datetime.now(timezone.utc).date().isoformat()
@@ -1764,13 +1773,18 @@ def _seed_todays_mark(position_id: int, ticker: str) -> None:
     Seed it immediately from the ticker's already-computed price/date (same source
     _update_trade_marks_and_alerts() uses), so the Trades page has data to show right away
     instead of an empty chart until the next cycle."""
-    with _compute_lock:
-        payload = next((p for p in _computed if p["ticker"] == ticker), None)
+    is_crypto = _ticker_market(ticker) == "crypto"
+    if is_crypto:
+        with _crypto_compute_lock:
+            payload = next((p for p in _crypto_computed if p["ticker"] == ticker), None)
+    else:
+        with _compute_lock:
+            payload = next((p for p in _computed if p["ticker"] == ticker), None)
     if payload is not None:
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         db.upsert_trade_daily_mark(position_id, payload["date"], payload["price"], now_iso)
         return
-    bars = data.get_bars(ticker)
+    bars = (data_crypto if is_crypto else data).get_bars(ticker)
     if bars is None or bars.empty:
         return
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1790,13 +1804,27 @@ def _position_with_state(position: dict) -> dict:
     _blended_live_option_value."""
     fills = db.list_fills(position["id"])
     state = replay_fills(fills)
-    with _compute_lock:
-        payload = next((p for p in _computed if p["ticker"] == position["ticker"]), None)
-    underlying_price = payload["price"] if payload else None
-    if underlying_price is None:
-        bars = data.get_bars(position["ticker"])
-        if bars is not None and not bars.empty:
-            underlying_price = round(float(bars.Close.iloc[-1]), 4)
+    # Equity and crypto positions share this same function (see _ticker_market), but each
+    # market keeps its own compute cache/lock and raw-bars module -- data.py/_computed never
+    # see a "-USD" ticker, and data_crypto.py/_crypto_computed never see an equity one, so the
+    # lookup has to branch on market or a crypto position's current_price/unrealized would
+    # always come back None.
+    if _ticker_market(position["ticker"]) == "crypto":
+        with _crypto_compute_lock:
+            payload = next((p for p in _crypto_computed if p["ticker"] == position["ticker"]), None)
+        underlying_price = payload["price"] if payload else None
+        if underlying_price is None:
+            bars = data_crypto.get_bars(position["ticker"])
+            if bars is not None and not bars.empty:
+                underlying_price = round(float(bars.Close.iloc[-1]), 4)
+    else:
+        with _compute_lock:
+            payload = next((p for p in _computed if p["ticker"] == position["ticker"]), None)
+        underlying_price = payload["price"] if payload else None
+        if underlying_price is None:
+            bars = data.get_bars(position["ticker"])
+            if bars is not None and not bars.empty:
+                underlying_price = round(float(bars.Close.iloc[-1]), 4)
     current_iv = None
     iv_at_entry = None
     if state["instrument"] == "option" and state["open_lots"] and underlying_price is not None:
@@ -2247,17 +2275,31 @@ def add_fill(position_id: int, body: dict):
     return _position_with_state(db.get_position(position_id))
 
 
+def _ticker_market(ticker: str) -> str:
+    """Equity vs crypto, from the ticker string alone -- same "-USD" suffix convention
+    data_crypto.py/crypto_universe.py already key off of, no separate column needed. Positions
+    carry no market of their own (like instrument, it's derived, not stored) since equity and
+    crypto trades share the same positions/fills tables -- this is just the filter the Crypto
+    Trades page (market=crypto) and the Equity Trades page (market=equity) key off of to keep
+    the two feeds separate, mirroring how type=spot/options already splits by instrument."""
+    return "crypto" if ticker.upper().endswith("-USD") else "equity"
+
+
 @app.get("/api/positions")
-def list_positions(status: str | None = None, type: str | None = None):
+def list_positions(status: str | None = None, type: str | None = None, market: str | None = None):
     if status not in (None, "open", "closed"):
         raise HTTPException(status_code=400, detail=f"invalid status: {status!r}")
     if type not in (None, "spot", "options"):
         raise HTTPException(status_code=400, detail=f"invalid type: {type!r}")
+    if market not in (None, "equity", "crypto"):
+        raise HTTPException(status_code=400, detail=f"invalid market: {market!r}")
     result = [_position_with_state(p) for p in db.list_positions(status)]
     if type == "spot":
         result = [p for p in result if p["instrument"] == "spot"]
     elif type == "options":
         result = [p for p in result if p["instrument"] == "option"]
+    if market is not None:
+        result = [p for p in result if _ticker_market(p["ticker"]) == market]
     return result
 
 
@@ -2279,22 +2321,27 @@ def _open_position_unrealized(p: dict, fills: list[dict]) -> float | None:
 
 
 @app.get("/api/positions/summary")
-def positions_summary(type: str | None = None):
+def positions_summary(type: str | None = None, market: str | None = None):
     """Win rate / avg return -- ticker-position-level only, not filterable by strategy, since a
     position can span fills from multiple strategies (see the design doc's grouping decision).
     'Simple math' per the design brief: pnl / cost basis, no Black-Scholes needed for the %
     itself, only for pricing an option's exit VALUE (handled inside replay_fills). type=spot or
     type=options filters positions to that instrument BEFORE any of the counting/summing below
     -- same computation either way, just over a smaller set; unrealized is the only place the
-    math itself differs (see _open_position_unrealized)."""
+    math itself differs (see _open_position_unrealized). market=equity/crypto filters the same
+    way, on top of (not instead of) the type filter -- see _ticker_market."""
     if type not in (None, "spot", "options"):
         raise HTTPException(status_code=400, detail=f"invalid type: {type!r}")
+    if market not in (None, "equity", "crypto"):
+        raise HTTPException(status_code=400, detail=f"invalid market: {market!r}")
 
     def matches_type(p: dict) -> bool:
-        if type == "spot":
-            return p["instrument"] == "spot"
-        if type == "options":
-            return p["instrument"] == "option"
+        if type == "spot" and p["instrument"] != "spot":
+            return False
+        if type == "options" and p["instrument"] != "option":
+            return False
+        if market is not None and _ticker_market(p["ticker"]) != market:
+            return False
         return True
 
     closed = [p for p in (_position_with_state(p) for p in db.list_positions("closed")) if matches_type(p)]
@@ -2332,7 +2379,7 @@ def positions_summary(type: str | None = None):
 
 
 @app.get("/api/positions/pnl-series")
-def positions_pnl_series(type: str | None = None):
+def positions_pnl_series(type: str | None = None, market: str | None = None):
     """Portfolio-wide daily cumulative realized/unrealized P&L -- ported from the frontend's
     former computePnlSeries()/replayAsOf() (frontend/src/lib/pnlSeries.ts) to a single backend
     call, so the Trades page no longer needs one marks + one fills request per position just to
@@ -2340,9 +2387,11 @@ def positions_pnl_series(type: str | None = None):
     own date); unrealized is mark-to-market against each position's own daily marks. type=spot
     or type=options filters the input positions before the loop below -- the loop itself
     already branches on instrument internally for pricing, so filtering the input is the only
-    change needed."""
+    change needed. market=equity/crypto filters the same way, on top of type (see _ticker_market)."""
     if type not in (None, "spot", "options"):
         raise HTTPException(status_code=400, detail=f"invalid type: {type!r}")
+    if market not in (None, "equity", "crypto"):
+        raise HTTPException(status_code=400, detail=f"invalid market: {market!r}")
     positions = db.list_positions(None)
     position_ids = [p["id"] for p in positions]
     fills_by_position = db.list_fills_bulk(position_ids)
@@ -2356,7 +2405,9 @@ def positions_pnl_series(type: str | None = None):
             p for p in positions
             if fills_by_position.get(p["id"]) and fills_by_position[p["id"]][0]["instrument"] == wanted
         ]
-        fills_by_position = {p["id"]: fills_by_position[p["id"]] for p in positions}
+    if market is not None:
+        positions = [p for p in positions if _ticker_market(p["ticker"]) == market]
+    fills_by_position = {p["id"]: fills_by_position.get(p["id"], []) for p in positions}
 
     marks_by_position = db.get_trade_daily_marks_bulk([p["id"] for p in positions])
 

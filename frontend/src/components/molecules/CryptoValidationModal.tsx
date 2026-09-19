@@ -4,13 +4,15 @@ import type { CryptoTickerPayload } from "../../api/crypto";
 export interface CryptoValidationModalProps {
   row: CryptoTickerPayload;
   onClose: () => void;
+  // Optional -- omitted wherever this modal is opened without a trade-taking flow behind it.
+  onTrade?: () => void;
 }
 
 // Cross-checking the app's backtest against a TradingView chart needs the data this strategy's
 // own last5_trades (days/tp_pct only) doesn't carry -- actual entry/exit dates+prices, and the
 // exact bar range the backtest ran over, so a mismatch (data source/history length/config) is
 // visible immediately instead of guessed at.
-export function CryptoValidationModal({ row, onClose }: CryptoValidationModalProps) {
+export function CryptoValidationModal({ row, onClose, onTrade }: CryptoValidationModalProps) {
   const s = row.strategy_vcp;
   return (
     <Modal title={`Validate — ${row.ticker}`} onClose={onClose} width={480}>
@@ -34,6 +36,14 @@ export function CryptoValidationModal({ row, onClose }: CryptoValidationModalPro
           value={`${t.entry_price} → ${t.exit_price} (${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct}%)`}
         />
       ))}
+      {onTrade && (
+        <>
+          <div className="modal-sep" />
+          <button type="button" className="trade-btn" onClick={onTrade}>
+            TRADE
+          </button>
+        </>
+      )}
     </Modal>
   );
 }

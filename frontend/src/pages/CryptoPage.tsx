@@ -1,15 +1,30 @@
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCryptoMeta, useCryptoSignals, useRefreshCryptoSignals } from "../hooks/useCrypto";
 import type { CryptoTickerPayload } from "../api/crypto";
+import { listPositions } from "../api/positions";
+import type { Position } from "../api/types";
 import { StrategyBadgeRow } from "../components/molecules/StrategyBadgeRow";
 import { CryptoValidationModal } from "../components/molecules/CryptoValidationModal";
+import { TradeConfirmModal } from "../components/molecules/TradeConfirmModal";
+import { AddFillModal } from "../components/molecules/AddFillModal";
 import { CryptoFilterBar, defaultCryptoFilterBarState, type CryptoFilterBarState } from "../components/organisms/CryptoFilterBar";
 import { Pagination } from "../components/organisms/TickerCardGrid";
+import { todayIsoDate } from "../lib/dates";
 import { sortCryptoTickers } from "../lib/sorting";
 import "../components/organisms/TickerCard.css";
 import "../components/organisms/TickerCardGrid.css";
 import "../pages/DashboardPage.css";
 import "./CryptoPage.css";
+
+// Trade/AddFill are looked up async (need the ticker's open-position status), so they get their
+// own bit of state rather than folding into a modal union -- mirrors DashboardPage's own
+// TradeFlowState/openTradeFlow for the equity side.
+interface CryptoTradeFlowState {
+  ticker: string;
+  signalDate: string;
+  currentPrice: number;
+}
 
 const PAGE_SIZE = 9;
 
@@ -95,10 +110,13 @@ export function CryptoPage() {
   const { data, isLoading } = useCryptoSignals();
   const { data: meta } = useCryptoMeta();
   const refresh = useRefreshCryptoSignals();
+  const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const [filterState, setFilterState] = useState<CryptoFilterBarState>(defaultCryptoFilterBarState);
   const [page, setPage] = useState(1);
   const [validateTicker, setValidateTicker] = useState<string | null>(null);
+  const [tradeFlow, setTradeFlow] = useState<CryptoTradeFlowState | null>(null);
+  const [existingPosition, setExistingPosition] = useState<Position | null>(null);
 
   const filteredRows = useMemo(() => {
     if (!data) return [];
@@ -149,6 +167,26 @@ export function CryptoPage() {
     } finally {
       setRefreshing(false);
     }
+  }
+
+  // Mirrors DashboardPage's own openTradeFlow -- the strategy's own open_position (a backtest
+  // replay, no real money behind it) is a completely separate thing from whether this ticker
+  // already has a REAL tracked position in the positions table, so that has to be checked here
+  // too rather than inferred from the signal payload.
+  async function openTradeFlow(ticker: string, currentPrice: number, signalDate: string) {
+    setValidateTicker(null);
+    try {
+      const openPositions = await listPositions("open", undefined, "crypto");
+      setExistingPosition(openPositions.find((p) => p.ticker === ticker) ?? null);
+    } catch {
+      setExistingPosition(null);
+    }
+    setTradeFlow({ ticker, signalDate, currentPrice });
+  }
+
+  function onTradeSubmitted() {
+    setTradeFlow(null);
+    queryClient.invalidateQueries({ queryKey: ["positions"] });
   }
 
   const metaText = data
@@ -206,8 +244,39 @@ export function CryptoPage() {
 
       {validateTicker && (() => {
         const row = data?.tickers.find((r) => r.ticker === validateTicker);
-        return row ? <CryptoValidationModal row={row} onClose={() => setValidateTicker(null)} /> : null;
+        if (!row) return null;
+        const op = row.strategy_vcp.open_position;
+        return (
+          <CryptoValidationModal
+            row={row}
+            onClose={() => setValidateTicker(null)}
+            onTrade={() => openTradeFlow(row.ticker, row.price, op ? op.entry_date : todayIsoDate())}
+          />
+        );
       })()}
+
+      {tradeFlow &&
+        (existingPosition ? (
+          <AddFillModal
+            position={existingPosition}
+            stratKey="strategy_vcp"
+            signalDate={tradeFlow.signalDate}
+            currentPrice={tradeFlow.currentPrice}
+            onClose={() => setTradeFlow(null)}
+            onSubmitted={onTradeSubmitted}
+          />
+        ) : (
+          <TradeConfirmModal
+            ticker={tradeFlow.ticker}
+            stratKey="strategy_vcp"
+            signalDate={tradeFlow.signalDate}
+            currentPrice={tradeFlow.currentPrice}
+            openPosition={data?.tickers.find((r) => r.ticker === tradeFlow.ticker)?.strategy_vcp.open_position ?? null}
+            avgMaeWinsPct={null}
+            onClose={() => setTradeFlow(null)}
+            onSubmitted={onTradeSubmitted}
+          />
+        ))}
     </div>
   );
 }

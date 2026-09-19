@@ -3,51 +3,25 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePositions, usePositionsSummary, usePnlSeries } from "../hooks/usePositions";
 import { useTickers } from "../hooks/useTickers";
 import { addFill, cancelPosition, listFills } from "../api/positions";
-import type { ExitReason, Fill, PositionsSummary } from "../api/types";
-import { StatBox } from "../components/atoms/StatBox";
+import type { ExitReason, Fill } from "../api/types";
 import { SpotPositionsTable } from "../components/organisms/SpotPositionsTable";
 import { OptionsPositionsTable } from "../components/organisms/OptionsPositionsTable";
 import { PnlChart } from "../components/organisms/PnlChart";
 import { TradesExportModal } from "../components/organisms/TradesExportModal";
-import { fmtMoney, fmtPct } from "../lib/format";
+import { PositionsSummaryRow } from "../components/molecules/PositionsSummaryRow";
 import { isClosedToday, todayIsoDate } from "../lib/dates";
 import { buildTradesExportMarkdown } from "../lib/tradesExport";
 import "./TradesPage.css";
 
-function SummaryRow({ label, summary }: { label: string; summary: PositionsSummary | undefined }) {
-  return (
-    <div className="trades-summary-grid">
-      <StatBox label={`${label} — Open`} value={summary?.open_count ?? 0} />
-      <StatBox label="Closed" value={summary?.closed_count ?? 0} />
-      <StatBox label="Win rate" value={summary?.win_rate_pct != null ? `${summary.win_rate_pct}%` : "—"} />
-      <StatBox
-        label="Avg return"
-        value={summary?.avg_return_pct != null ? fmtPct(summary.avg_return_pct) : "—"}
-        tone={summary?.avg_return_pct ?? undefined}
-      />
-      <StatBox
-        label="Total unrealized"
-        value={summary?.total_unrealized_pnl != null ? fmtMoney(summary.total_unrealized_pnl) : "—"}
-        tone={summary?.total_unrealized_pnl ?? undefined}
-      />
-      <StatBox
-        label="Total realized"
-        value={summary?.total_realized_pnl != null ? fmtMoney(summary.total_realized_pnl) : "—"}
-        tone={summary?.total_realized_pnl ?? undefined}
-      />
-    </div>
-  );
-}
-
 export function TradesPage() {
   // All spot/options combos fetched together on mount -- the tab bar below only toggles which
   // already-fetched summary/chart/table is visible, it never triggers a new request.
-  const { data: spotPositions } = usePositions(undefined, "spot");
-  const { data: optionsPositions } = usePositions(undefined, "options");
-  const { data: spotSummary } = usePositionsSummary("spot");
-  const { data: optionsSummary } = usePositionsSummary("options");
-  const { data: spotPnlSeries } = usePnlSeries("spot");
-  const { data: optionsPnlSeries } = usePnlSeries("options");
+  const { data: spotPositions } = usePositions(undefined, "spot", "equity");
+  const { data: optionsPositions } = usePositions(undefined, "options", "equity");
+  const { data: spotSummary } = usePositionsSummary("spot", "equity");
+  const { data: optionsSummary } = usePositionsSummary("options", "equity");
+  const { data: spotPnlSeries } = usePnlSeries("spot", "equity");
+  const { data: optionsPnlSeries } = usePnlSeries("options", "equity");
   const queryClient = useQueryClient();
 
   const [typeFilter, setTypeFilter] = useState<"spot" | "options">("spot");
@@ -180,7 +154,7 @@ export function TradesPage() {
         </button>
       </div>
 
-      <SummaryRow label={typeFilter === "spot" ? "Spot" : "Options"} summary={summary} />
+      <PositionsSummaryRow label={typeFilter === "spot" ? "Spot" : "Options"} summary={summary} />
 
       <h2>Daily P&amp;L</h2>
       <PnlChart series={pnlSeries ?? { dates: [], realized: [], unrealized: [] }} />

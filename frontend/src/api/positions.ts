@@ -19,23 +19,29 @@ export function addFill(positionId: number, body: AddFillBody): Promise<Position
 }
 
 export type PositionType = "spot" | "options";
+// Equity vs crypto -- positions carry no market field of their own (derived from the ticker's
+// "-USD" suffix on the backend, see app.py's _ticker_market), same relationship type has to
+// instrument. Orthogonal to type: the Crypto Trades page filters market=crypto with no type
+// filter (crypto is always spot in practice), the Equity Trades page filters market=equity
+// alongside its existing type=spot/options tabs.
+export type PositionMarket = "equity" | "crypto";
 
-function typeQueryParam(type?: PositionType): string {
-  return type ? `type=${type}` : "";
+function positionsQueryParams(type?: PositionType, market?: PositionMarket): string {
+  return [type ? `type=${type}` : "", market ? `market=${market}` : ""].filter(Boolean).join("&");
 }
 
-export function listPositions(status?: PositionStatus, type?: PositionType): Promise<Position[]> {
-  const params = [status ? `status=${status}` : "", typeQueryParam(type)].filter(Boolean).join("&");
+export function listPositions(status?: PositionStatus, type?: PositionType, market?: PositionMarket): Promise<Position[]> {
+  const params = [status ? `status=${status}` : "", positionsQueryParams(type, market)].filter(Boolean).join("&");
   return apiGet<Position[]>(`/api/positions${params ? `?${params}` : ""}`);
 }
 
-export function getPositionsSummary(type?: PositionType): Promise<PositionsSummary> {
-  const qs = typeQueryParam(type);
+export function getPositionsSummary(type?: PositionType, market?: PositionMarket): Promise<PositionsSummary> {
+  const qs = positionsQueryParams(type, market);
   return apiGet<PositionsSummary>(`/api/positions/summary${qs ? `?${qs}` : ""}`);
 }
 
-export function getPnlSeries(type?: PositionType): Promise<PnlSeriesResponse> {
-  const qs = typeQueryParam(type);
+export function getPnlSeries(type?: PositionType, market?: PositionMarket): Promise<PnlSeriesResponse> {
+  const qs = positionsQueryParams(type, market);
   return apiGet<PnlSeriesResponse>(`/api/positions/pnl-series${qs ? `?${qs}` : ""}`);
 }
 

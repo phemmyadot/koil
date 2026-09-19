@@ -30,7 +30,10 @@ const SECTIONS = [
     to: "/crypto",
     icon: "\u{1FA99}",
     isActive: (pathname: string) => pathname.startsWith("/crypto"),
-    items: [{ to: "/crypto", label: "Dashboard", icon: "\u{1FA99}" }],
+    items: [
+      { to: "/crypto", label: "Dashboard", icon: "\u{1FA99}" },
+      { to: "/crypto/trades", label: "Trades", icon: "\u{1F4CA}" },
+    ],
   },
 ];
 

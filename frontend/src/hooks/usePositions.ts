@@ -1,26 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api/positions";
-import type { PositionType } from "../api/positions";
+import type { PositionMarket, PositionType } from "../api/positions";
 import type { AddFillBody, CreatePositionBody, PositionStatus } from "../api/types";
 
-export function usePositions(status?: PositionStatus, type?: PositionType) {
+export function usePositions(status?: PositionStatus, type?: PositionType, market?: PositionMarket) {
   return useQuery({
-    queryKey: ["positions", status ?? "all", type ?? "all"],
-    queryFn: () => api.listPositions(status, type),
+    queryKey: ["positions", status ?? "all", type ?? "all", market ?? "all"],
+    queryFn: () => api.listPositions(status, type, market),
   });
 }
 
-export function usePositionsSummary(type?: PositionType) {
+export function usePositionsSummary(type?: PositionType, market?: PositionMarket) {
   return useQuery({
-    queryKey: ["positions", "summary", type ?? "all"],
-    queryFn: () => api.getPositionsSummary(type),
+    queryKey: ["positions", "summary", type ?? "all", market ?? "all"],
+    queryFn: () => api.getPositionsSummary(type, market),
   });
 }
 
-export function usePnlSeries(type?: PositionType) {
+export function usePnlSeries(type?: PositionType, market?: PositionMarket) {
   return useQuery({
-    queryKey: ["positions", "pnl-series", type ?? "all"],
-    queryFn: () => api.getPnlSeries(type),
+    queryKey: ["positions", "pnl-series", type ?? "all", market ?? "all"],
+    queryFn: () => api.getPnlSeries(type, market),
   });
 }
 

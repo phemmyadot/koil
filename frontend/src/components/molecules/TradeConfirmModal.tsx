@@ -172,7 +172,7 @@ export function TradeConfirmModal({
         {instrument === "spot" ? (
           <div className="opt-fields">
             <div className="form-row">
-              <label>Units (shares)</label>
+              <label>Units</label>
               <input type="number" step={1} value={units} onChange={(e) => setUnits(e.target.value)} />
             </div>
           </div>

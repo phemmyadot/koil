@@ -12,6 +12,9 @@ export interface SpotPositionsTableProps {
   positions: Position[];
   onExit: (positionId: number, lastFill: Fill, price: number, units: number, exitReason: ExitReason) => Promise<void>;
   onCancel: (positionId: number) => Promise<void>;
+  // Where a ticker link routes to -- "/trades" (equity) or "/crypto/trades" (this same table,
+  // reused as-is for the Crypto Trades page, see CryptoTradesPage.tsx).
+  basePath?: string;
 }
 
 // A completed exit fill belongs in the Closed table regardless of whether its parent position
@@ -19,7 +22,7 @@ export interface SpotPositionsTableProps {
 // row-level split, not a position-level one. Fetches fills for every position with at least one
 // exit fill (units_sold > 0 OR status closed, covering the "closed with a single full exit"
 // case where units_sold still equals units entered).
-function ClosedExitsTable({ positions }: { positions: Position[] }) {
+function ClosedExitsTable({ positions, basePath }: { positions: Position[]; basePath: string }) {
   const candidates = positions.filter((p) => p.status === "closed" || p.units_sold > 0);
   const fillsQueries = useQuery({
     queryKey: ["spot-closed-exits-fills", candidates.map((p) => p.id)],
@@ -67,7 +70,7 @@ function ClosedExitsTable({ positions }: { positions: Position[] }) {
             rows.map(({ p, row }) => (
               <tr key={row.fillId}>
                 <td>
-                  <Link className="tk-link" to={`/trades/${p.id}`}>
+                  <Link className="tk-link" to={`${basePath}/${p.id}`}>
                     {p.ticker}
                   </Link>
                 </td>
@@ -101,10 +104,12 @@ function PositionRow({
   p,
   onExit,
   onCancel,
+  basePath,
 }: {
   p: Position;
   onExit: SpotPositionsTableProps["onExit"];
   onCancel: SpotPositionsTableProps["onCancel"];
+  basePath: string;
 }) {
   const [exitOpen, setExitOpen] = useState(false);
   const [exitPrice, setExitPrice] = useState("");
@@ -162,7 +167,7 @@ function PositionRow({
     <>
       <tr>
         <td>
-          <Link className="tk-link" to={`/trades/${p.id}`}>
+          <Link className="tk-link" to={`${basePath}/${p.id}`}>
             {p.ticker}
           </Link>
         </td>
@@ -234,6 +239,7 @@ export function SpotPositionsTable({
   onExit,
   onCancel,
   showOpen = true,
+  basePath = "/trades",
 }: SpotPositionsTableProps & { showOpen?: boolean }) {
   const openRows = positions.filter((p) => p.units_remaining > 0);
 
@@ -264,7 +270,7 @@ export function SpotPositionsTable({
                   </td>
                 </tr>
               ) : (
-                openRows.map((p) => <PositionRow key={p.id} p={p} onExit={onExit} onCancel={onCancel} />)
+                openRows.map((p) => <PositionRow key={p.id} p={p} onExit={onExit} onCancel={onCancel} basePath={basePath} />)
               )}
             </tbody>
           </table>
@@ -272,7 +278,7 @@ export function SpotPositionsTable({
       )}
 
       <h2>Closed Exits</h2>
-      <ClosedExitsTable positions={positions} />
+      <ClosedExitsTable positions={positions} basePath={basePath} />
     </>
   );
 }

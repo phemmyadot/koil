@@ -10,6 +10,7 @@ import { FillsTable } from "../components/organisms/FillsTable";
 import { Pagination } from "../components/organisms/TickerCardGrid";
 import { StrategyCellLink } from "../components/molecules/StrategyCellLink";
 import { fmtMoney, fmtPct, fmtUnits, plClass } from "../lib/format";
+import { isCryptoTicker } from "../lib/market";
 import "./PositionDetailPage.css";
 
 const MARKS_PAGE_SIZE = 20;
@@ -86,6 +87,7 @@ export function PositionDetailPage() {
   // off, so it's still correct to use even after the position is fully closed (backend now
   // preserves it post-close instead of nulling it out -- see replay_fills). units sold = total
   // entered - units still remaining (0 for a closed position, whatever's left for an open one).
+  const tradesBackTo = isCryptoTicker(position.ticker) ? "/crypto/trades" : "/trades";
   const unitsEntered = fillsList.filter((f) => f.kind === "entry").reduce((sum, f) => sum + f.units, 0);
   const unitsSold = unitsEntered - position.units_remaining;
   const costBasisSold = position.avg_cost != null ? position.avg_cost * unitsSold : null;
@@ -105,13 +107,13 @@ export function PositionDetailPage() {
   async function handleCancelPosition() {
     if (!window.confirm("Cancel this position? This permanently deletes it and all its fills, and cannot be undone.")) return;
     await cancelPosition.mutateAsync();
-    navigate("/trades");
+    navigate(tradesBackTo);
   }
 
   async function handleDeleteFill(fillId: number) {
     if (!window.confirm("Delete this fill? This cannot be undone and will recompute the position's status/avg cost.")) return;
     const result = await deleteFill.mutateAsync(fillId);
-    if (result.position_deleted) navigate("/trades");
+    if (result.position_deleted) navigate(tradesBackTo);
   }
 
   return (
@@ -120,7 +122,7 @@ export function PositionDetailPage() {
         <h1>
           {position.ticker} <span className={`position-badge ${position.status}`}>{position.status.toUpperCase()}</span>
         </h1>
-        <Link className="back" to="/trades">
+        <Link className="back" to={tradesBackTo}>
           &larr; Back to Trades
         </Link>
       </header>
