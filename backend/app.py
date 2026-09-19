@@ -1314,9 +1314,25 @@ def meta():
         # Non-null only while compute_all() is actively running; never overlaps fetch_progress.
         "compute_progress": compute_progress(),
         "rate_limited_until": _rate_limited_until,
+    }
+
+
+@app.get("/api/flags")
+def flags():
+    """Deploy-time feature flags (env vars, read fresh each call so a restart picks up an
+    edited .env without a code change) -- kept separate from /api/meta on purpose: meta polls
+    on an active cadence (as fast as every 500ms while a fetch/compute is running, see
+    useMeta.ts) for progress data that actually changes, while flags never change without a
+    restart and every consumer (AppShell's nav, CryptoRoute) just needs a plain one-shot read."""
+    return {
         # Gates the Analyzer nav entry -- see
         # docs/superpowers/specs/2026-08-04-daily-trade-review-chatbot-design.md.
         "daily_review_enabled": os.environ.get("ENABLE_DAILY_REVIEW", "false").lower() == "true",
+        # Switches the Crypto section between today's tracker (strategy_crypto.py/
+        # crypto_universe.py, unchanged) and a placeholder for the future v2 rebuild (different
+        # data shape/strategy, its own tables -- not built yet). AppShell/CryptoRoute read this
+        # to decide which crypto pages/nav label to render.
+        "crypto_v2_enabled": os.environ.get("ENABLE_CRYPTO_V2", "false").lower() == "true",
     }
 
 

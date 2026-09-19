@@ -7,7 +7,13 @@ export interface MetaResponse {
   fetch_progress: { done: number; total: number } | null;
   compute_progress: { done: number; total: number } | null;
   rate_limited_until: number | null;
+}
+
+// Deploy-time feature flags (env vars) -- separate from MetaResponse since flags never change
+// without a restart, unlike meta's progress fields which useMeta() polls on an active cadence.
+export interface FlagsResponse {
   daily_review_enabled: boolean;
+  crypto_v2_enabled: boolean;
 }
 
 // backend/quality_filter.py's DEFAULT_FILTER.
