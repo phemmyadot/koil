@@ -88,11 +88,15 @@ def backtest(df: pd.DataFrame, computed: dict, config: dict) -> tuple[list[dict]
                 entry_price = o.iloc[i]
                 entry_atr = atr.iloc[i]
                 stop = swing_low_prior - entry_atr * risk_cfg["stop_atr_buffer_mult"]
-                # Floor the stop distance at half an ATR -- a swing low sitting right at (or
-                # above) the entry price would otherwise give a ~0 or negative stop distance,
-                # producing an absurd position size (doc has no explicit rule for this edge
-                # case; this mirrors strategy_vcp.py's own "stop_distance > 0" sizing guard).
-                stop_distance = max(entry_price - stop, entry_atr * 0.5)
+                # Floored at half an ATR -- a swing low sitting right at (or above) entry would
+                # otherwise give a ~0 or negative stop distance (mirrors strategy_vcp.py's own
+                # "stop_distance > 0" sizing guard) -- and CEILED at stop_atr_ceiling_mult*ATR,
+                # since an unbounded "last confirmed swing low" is frequently very wide on
+                # volatile tickers (see config.py's risk.stop_atr_ceiling_mult comment for the
+                # pooled-backtest evidence). Without the ceiling, R (the risk unit driving both
+                # position size and the tp1_r breakeven/protection trigger) can balloon to
+                # multiples of a sane ATR-based stop.
+                stop_distance = min(max(entry_price - stop, entry_atr * 0.5), entry_atr * risk_cfg["stop_atr_ceiling_mult"])
                 stop = entry_price - stop_distance
                 qty = (equity * risk_cfg["risk_pct"] / 100) / stop_distance if stop_distance > 0 else 0.0
                 position = {"entry_i": i, "entry_price": entry_price, "qty": qty, "stop": stop,

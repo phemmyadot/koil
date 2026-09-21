@@ -63,6 +63,8 @@ int rvol_period = 20
 float minimum_rvol = 2.0
 // PARITY: momentum.roc_period
 int roc_period = 10
+// PARITY: trend.ema_medium
+int ema_medium_period = 50
 // PARITY: relative_strength.lookback_days
 int rs_lookback_days = 10
 // PARITY: structure.swing_left
@@ -75,6 +77,8 @@ int breakout_lookback = 20
 int prior_week_days = 5
 // PARITY: risk.stop_atr_buffer_mult
 float stop_atr_buffer_mult = 0.25
+// PARITY: risk.stop_atr_ceiling_mult
+float stop_atr_ceiling_mult = 4.0
 // PARITY: risk.tp1_r
 float tp1_r = 1.0
 // PARITY: risk.tp2_r
@@ -103,6 +107,8 @@ float w_volatility_expansion = 1
 float w_impulse = 1
 // PARITY: scoring.range_compression
 float w_range_compression = 1
+// PARITY: scoring.established_trend
+float w_established_trend = 2
 
 // ==========================================
 // FEATURE ENGINE (backend/crypto_v2/features.py)
@@ -122,6 +128,8 @@ float rvol = volume / vol_avg
 bool volume_expansion = rvol >= minimum_rvol
 
 float roc = close / close[roc_period] - 1
+
+float ema_medium = ta.ema(close, ema_medium_period)
 
 float btc_close = request.security(btc_symbol, timeframe.period, close)
 float asset_return = close / close[rs_lookback_days] - 1
@@ -166,14 +174,19 @@ bool breakout_detected = sc1_range_break and sc1_volume_expansion and sc1_relati
 float breakout_score = (sc1_range_break ? w_range_break : 0.0) + (sc1_volume_expansion ? w_volume_expansion : 0.0) + (sc1_relative_strength ? w_relative_strength : 0.0) + (atr_expansion ? w_volatility_expansion : 0.0)
 
 // ==========================================
-// SETUP 2: MOMENTUM CONTINUATION (setups.momentum_continuation)
+// SETUP 2: MOMENTUM CONTINUATION (setups.momentum_continuation) -- computed/scored for display
+// parity with Python's _compute_all(), but NOT entry-triggering (see ENTRY SELECTION below and
+// setups.py's ALL_SETUPS docstring): a pooled backtest across the full discovered universe
+// (2026-09-21) found this setup's true standalone quality net-negative (PF 0.96, WR 46.9%) once
+// its structural condition was fixed off of an accidental near-duplicate of breakout's own
+// "close > last_swing_high[1]" trigger.
 // ==========================================
 bool sc2_impulse = roc > 0
 bool sc2_volume_expansion = volume_expansion
-bool sc2_structure_bos = bullish_bos
+bool sc2_established_trend = close > ema_medium
 bool sc2_relative_strength = rs_btc > 0
-bool momentum_detected = sc2_impulse and sc2_volume_expansion and sc2_structure_bos and sc2_relative_strength
-float momentum_score = (sc2_impulse ? w_impulse : 0.0) + (sc2_volume_expansion ? w_volume_expansion : 0.0) + (sc2_structure_bos ? w_structure_bos : 0.0) + (sc2_relative_strength ? w_relative_strength : 0.0)
+bool momentum_detected = sc2_impulse and sc2_volume_expansion and sc2_established_trend and sc2_relative_strength
+float momentum_score = (sc2_impulse ? w_impulse : 0.0) + (sc2_volume_expansion ? w_volume_expansion : 0.0) + (sc2_established_trend ? w_established_trend : 0.0) + (sc2_relative_strength ? w_relative_strength : 0.0)
 
 // ==========================================
 // SETUP 3: LIQUIDITY SWEEP REVERSAL (setups.liquidity_sweep_reversal)
@@ -193,12 +206,15 @@ bool range_detected = was_compressed and sc4_breaks_range and sc4_volume_expansi
 float range_score = (was_compressed ? w_range_compression : 0.0) + (sc4_breaks_range ? w_breaks_range : 0.0) + (sc4_volume_expansion ? w_volume_expansion : 0.0)
 
 // ==========================================
-// ENTRY SELECTION -- same fixed priority as engine.py's _SETUP_PRIORITY when more than one
-// setup fires the same bar: breakout > momentum_continuation > liquidity_sweep_reversal >
-// range_breakout. Disclosed, not hidden -- see setups.py's ALL_SETUPS order.
+// ENTRY SELECTION -- momentum_detected is deliberately excluded here (see SETUP 2's own comment
+// above): setups.py's ALL_SETUPS = ["range_breakout", "liquidity_sweep_reversal", "breakout"],
+// same fixed priority order used when more than one setup fires the same bar. Confirmed via a
+// pooled backtest that this priority order (vs. any other ordering among the three) doesn't
+// change which trades fire -- range_breakout is listed first only because it's the strongest
+// setup by a wide margin (PF 4.5+, WR ~78%), not because order is load-bearing here.
 // ==========================================
-bool any_setup = breakout_detected or momentum_detected or sweep_detected or range_detected
-string triggered_setup = breakout_detected ? "Breakout" : momentum_detected ? "Momentum Continuation" : sweep_detected ? "Liquidity Sweep Reversal" : range_detected ? "Range Breakout" : na
+bool any_setup = range_detected or sweep_detected or breakout_detected
+string triggered_setup = range_detected ? "Range Breakout" : sweep_detected ? "Liquidity Sweep Reversal" : breakout_detected ? "Breakout" : na
 
 // ==========================================
 // POSITION STATE + RISK-BASED SIZING (mirrors pines/vcp_crypto.pine's own pattern)
@@ -210,7 +226,11 @@ string triggered_setup = breakout_detected ? "Breakout" : momentum_detected ? "M
 // therefore entry_signal) was permanently na while flat -- no trade could ever fire, on any
 // ticker, which is exactly the "no signal anywhere" symptom that surfaced this.
 float entry_raw_stop = last_swing_low - atr_value * stop_atr_buffer_mult
-float entry_stop_distance = na(last_swing_low) ? na : math.max(close - entry_raw_stop, atr_value * 0.5)
+// Floored at half an ATR (see below) and CEILED at stop_atr_ceiling_mult*ATR -- an unbounded
+// "last confirmed swing low" stop is frequently very wide on volatile tickers (see
+// config.py's risk.stop_atr_ceiling_mult comment for the pooled-backtest evidence: median stop
+// was already 22% of price/3.1x ATR, tail up to 107%/20x ATR, before this cap).
+float entry_stop_distance = na(last_swing_low) ? na : math.min(math.max(close - entry_raw_stop, atr_value * 0.5), atr_value * stop_atr_ceiling_mult)
 float risk_qty = (not na(entry_stop_distance) and entry_stop_distance > 0) ? (strategy.equity * risk_pct / 100) / entry_stop_distance : na
 
 var float entry_price = na
@@ -230,7 +250,7 @@ if strategy.position_size > 0
         // above (the signal bar's value), matching vcp_crypto.pine's own established stop-basis
         // timing convention (see file header).
         float raw_stop = last_swing_low - atr_value * stop_atr_buffer_mult
-        stop_distance := math.max(entry_price - raw_stop, atr_value * 0.5)
+        stop_distance := math.min(math.max(entry_price - raw_stop, atr_value * 0.5), atr_value * stop_atr_ceiling_mult)
         stop_price := entry_price - stop_distance
 else
     entry_price := na
