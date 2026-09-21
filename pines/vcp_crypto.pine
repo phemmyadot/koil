@@ -2,26 +2,16 @@
 strategy("VCP Crypto", overlay=true, initial_capital=1500, default_qty_type=strategy.percent_of_equity, default_qty_value=66.66, calc_on_every_tick=false)
 
 // Mirrors backend/crypto_universe.py + backend/strategy_vcp.py's run() exactly -- both the entry/
-// exit logic AND the position-sizing formula, not just the former. Every Stage 1/4/5 param below
-// is now a plain input (Pine's input.*() defval must be a compile-time constant, so it can't be
-// switched automatically off another input the way a bucket dropdown could) -- set them by hand
-// per the two backtested presets (crypto_universe.py's LARGE_CAP_CONFIG/MEME_CONFIG, re-tuned
-// 2026-09-19 via a pooled backtest across the live discovered universe -- see that file's own
-// comment for the full basis) when validating a chart from that bucket:
-//   Large-cap (BTC/ETH/SOL/BNB/DOGE): atr_mult=3.0, vol_mult=1.6, be_trigger=10.0, trail_tier=18.0,
-//   tp_target=8.0, max_bars=15, risk_pct=7.8. [defaults below]
-//   Meme (FLOKI/MEME/TURBO/WOJAK): atr_mult=6.0, vol_mult=1.2, be_trigger=10.0, trail_tier=18.0,
-//   tp_target=12.0, max_bars=12, risk_pct=20.0.
-// The app always applies a ticker's own bucket config to every one of these together -- do not
-// mix "large-cap atr_mult with meme risk_pct" when hand-setting the inputs, that combination was
-// never backtested and won't match live results.
+// exit logic AND the position-sizing formula, not just the former. One config below (matching
+// crypto_universe.py's CONFIG), applied to whichever ticker is on screen -- there is no per-
+// bucket large-cap/meme preset to swap between; both buckets share this same config in the app
+// too (see crypto_universe.py's comment for the SEI-USD/FET-USD validation that established this).
 //
 // Position sizing: risk-based, identical formula to strategy_vcp.py's run() -- qty = (equity *
 // risk_pct / 100) / stop_distance, where stop_distance = atr_value * atr_mult. Every trade risks
 // the same % of equity regardless of the asset's volatility; dollar position size (not dollar
-// risk) is what varies trade to trade. risk_pct itself was tuned per bucket (crypto_universe.py)
-// so a $1500 account's median position lands near $500 given each bucket's typical ATR, not to
-// hit a fixed $500 on every single trade.
+// risk) is what varies trade to trade. risk_pct was tuned so a $1500 account's median position
+// lands near $500 given crypto's typical ATR, not to hit a fixed $500 on every single trade.
 
 // ==========================================
 // USER INPUTS & PARAMETERS (Strict Institutional Bounds)
@@ -38,8 +28,7 @@ int start_date        = input.time(timestamp("1 Jan 2021 00:00 +0000"), title="S
 int end_date           = input.time(timestamp("1 Jan 2030 00:00 +0000"), title="End Date", group=G_DATE)
 bool in_date_range     = not use_date_filter or (time >= start_date and time <= end_date)
 
-// Stage 1 - Adaptive Entry Settings (defaults are the Large-Cap preset -- see header comment for
-// the Meme preset to type in instead when validating a meme ticker's chart).
+// Stage 1 - Adaptive Entry Settings -- same config for every ticker (see header comment).
 int atr_len         = input.int(22, title="ATR Length", group=G_ENTRY, minval=1)
 float atr_mult      = input.float(6.9, title="ATR Stop Multiplier", group=G_ENTRY, minval=0.1, step=0.1)
 float vol_mult      = input.float(1.6, title="Volume Confirmation Multiplier", group=G_ENTRY, minval=0.1, step=0.1)

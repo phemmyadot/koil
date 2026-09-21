@@ -2,8 +2,7 @@
 fetch_candidates() screens via yfinance's own crypto screener (no CoinGecko, no cross-platform
 symbol mapping -- yf.screen() already returns yfinance-native tickers), then
 passes_technical_filters() checks each candidate's bars against a loose VCP regime match (see
-strategy_vcp.py, the only strategy the crypto side runs) using that bucket's own tuned config
-(LARGE_CAP_CONFIG/MEME_CONFIG below).
+strategy_vcp.py, the only strategy the crypto side runs) using the single shared CONFIG below.
 
 The two static lists (FALLBACK_LARGE_CAP_TICKERS/FALLBACK_MEME_TICKERS) were validated via an
 offline grid search (2021-2026 Yahoo daily bars) against a >=20 trades, PF>=2.5, WR>=75% gate on
@@ -18,45 +17,37 @@ import yfinance as yf
 
 import backend.build_universe as build_universe
 
+# Historical note: through 2026-09-21 this was split into LARGE_CAP_CONFIG/MEME_CONFIG (two
+# tuned presets, applied per ticker by top-20-market-cap rank). That split diverged from how
+# pines/vcp_crypto.pine is actually used on TradingView: the chart's inputs are a single set of
+# values typed in once, applied to whichever ticker is on screen -- not swapped per bucket. That
+# mismatch surfaced concretely 2026-09-21 validating SEI-USD/FET-USD: both are meme-bucket by
+# market-cap rank (not top 20), so the old split ran them through MEME_CONFIG (SEI-USD: 17
+# trades/70.6% WR/PF 1.17; FET-USD: 34 trades/76.5% WR/PF 2.34) while the TradingView chart -- left
+# on its default inputs, i.e. the old LARGE_CAP_CONFIG values -- gave completely different numbers
+# for both (SEI-USD 11/13, PF 5.478; FET-USD 18/24, PF 3.085). Re-running both tickers through the
+# old LARGE_CAP_CONFIG values in this same Python harness reproduced TradingView's trade count and
+# win rate exactly (SEI-USD 13 trades/84.6% WR/PF 4.89; FET-USD 24 trades/75.0% WR/PF 3.19 -- the
+# remaining few-percent PF gap is Yahoo- vs Coinbase-sourced bars, not a logic difference), so the
+# single-config model below is what the chart is actually validated against, not the bucket split.
 # risk_pct is scaled up from strategy_vcp.py's 1.0 default so that a $1500 account's ATR-based
-# stop distance produces a ~$500 median position, instead of the $20-100 positions 1.0 gives on
-# crypto's wider stops -- measured empirically per bucket (large-cap's tighter ATR needs ~8x,
-# meme's wider ATR needs ~20x to reach the same $500 target). Note meme's atr_mult below is wider
-# than the original ~20x calibration assumed, so its median backtest position now runs closer to
-# ~$330 than $500 -- this only affects the backtest engine's own $ figures (win rate/PF/entry-exit
-# timing are unaffected either way, see strategy_crypto.py's docstring); real trade sizing uses
-# the separate $500-fixed-notional model, not this risk_pct.
+# stop distance produces a ~$500 median position instead of the $20-100 positions 1.0 gives on
+# crypto's wider stops -- measured empirically (~8x); this only affects the backtest engine's own
+# $ figures (win rate/PF/entry-exit timing are unaffected either way, see strategy_crypto.py's
+# docstring), real trade sizing uses the separate $500-fixed-notional model, not this risk_pct.
 #
-# Re-tuned 2026-09-19 via a pooled backtest across the live discovered universe (218 tickers,
-# cached crypto_bars, ~2990 meme-bucket / ~390 large-cap-bucket trades since 2022): widening
-# atr_mult and trail_tier_pct (and shortening meme's max_bars) avoids premature stop-outs on
-# trades that go on to recover, which paid off more than the extra per-trade risk cost -- pooled
-# PF 1.45->1.50 and max aggregate drawdown -61% for meme, PF 1.72->1.78 and drawdown -13% for
-# large-cap, vs. the prior config on the same historical set. Held up in a pre/post-2025-06-01
-# split too (not just riding the earlier bull run): meme PF 1.07->1.15 and drawdown -51% in the
-# harder post-split half alone. vol_mult (the only param that affects entry timing, not just
-# exit/stop behavior) was deliberately left untouched in this pass, so every ticker's entry
-# signal/date is identical to before -- verified explicitly for INJ-USD's live open trade
-# (entered 2026-09-09 @ 6.403, still open, still profitable under the new config).
+# atr_mult/tp_target_pct re-tuned to 6.9/15.0 2026-09-21 (pines/vcp_crypto.pine commit edfa88f
+# "updated pine") per the SEI-USD/FET-USD validation above. NOTE: atr_mult is dual-purpose --
+# passes_technical_filters() below also uses this same value as the compression threshold for
+# discovery screening (atr <= atr_avg*atr_mult), so widening it to 6.9 loosens that filter too
+# (nearly anything qualifies as "compressed" at 6.9x its own 100-bar average), not just the stop
+# distance/position size it was tuned for.
 #
-# A wider atr_mult=6.9/tp_target_pct=15.0 was tried 2026-09-22, prompted by a strong single-
-# ticker TradingView read on SEI-USD (84.62% WR / PF 5.478 over 13 trades). Did NOT hold up once
-# checked against real data at scale, so it was NOT applied here:
-#   - SEI-USD alone, replicated in this exact Python harness (which reproduces the live app's
-#     current 17-trade/70.6% WR/PF 1.17 MEME_CONFIG numbers exactly): only 14 trades, 64.3% WR,
-#     PF 1.16 with the wider settings -- essentially flat, nothing like TradingView's read. Since
-#     the harness matches the app's current numbers exactly, the gap traces to a data-source
-#     difference (this app's Yahoo-sourced bars vs TradingView's native Coinbase feed) on a
-#     thinner/newer coin, not a strategy edge -- exactly the data-quality risk already flagged
-#     for thin tokens elsewhere in this file (see MEME_MARKET_CAP_FLOOR's comment).
-#   - Pooled across the full meme bucket (538 tickers, ~6.5k trades): PF 1.21->1.22 (flat),
-#     WR 64.7%->62.8% (down), fewer trades (6489->5977) -- no broad edge either.
-#   - Pooled across the large-cap bucket (20 tickers, ~420 trades): PF 1.76->1.36, WR 72.0%->
-#     65.2%, a real regression, not noise.
-LARGE_CAP_CONFIG = dict(atr_mult=3.0, be_trigger_pct=10.0, trail_tier_pct=18.0,
-                         tp_target_pct=8.0, vol_mult=1.6, max_bars=15, risk_pct=7.8)
-MEME_CONFIG = dict(atr_mult=6.0, be_trigger_pct=10.0, trail_tier_pct=18.0,
-                    tp_target_pct=12.0, vol_mult=1.2, max_bars=12, risk_pct=20.0)
+# The large_cap/meme ticker-list split (below, FALLBACK_*/fetch_candidates) still exists for
+# discovery/UI grouping, but both buckets now run this same CONFIG -- there is no longer a
+# per-bucket parameter difference.
+CONFIG = dict(atr_mult=6.9, be_trigger_pct=10.0, trail_tier_pct=18.0,
+              tp_target_pct=15.0, vol_mult=1.6, max_bars=15, risk_pct=7.8)
 
 FALLBACK_LARGE_CAP_TICKERS = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "DOGE-USD"]
 FALLBACK_MEME_TICKERS = ["FLOKI-USD", "MEME-USD", "TURBO-USD", "WOJAK-USD"]
@@ -181,9 +172,9 @@ def matches_vcp_setup(df: pd.DataFrame, atr_mult: float, mode: str = "or") -> bo
     """Loose VCP regime match for a crypto candidate, adapted from build_universe.py's
     _matches_vcp_family_setup (generic pandas, not equity-specific): ATR(22) compression vs its
     100-bar average OR price above EMA(50), not the exact same-day breakout trigger (fresh cross
-    above the prior 20-bar high with volume confirmation is rare on any given day). Uses this
-    bucket's own tuned atr_mult (LARGE_CAP_CONFIG/MEME_CONFIG's atr_mult) as the compression
-    threshold, since the two buckets' volatility regimes were tuned independently."""
+    above the prior 20-bar high with volume confirmation is rare on any given day). Uses the
+    shared CONFIG's atr_mult as the compression threshold, same value strategy_vcp.run() uses
+    for stop distance/position sizing."""
     c, h, l = df["Close"].dropna(), df["High"], df["Low"]
     if len(c) < 130:
         return False
@@ -201,7 +192,7 @@ def passes_technical_filters(df: pd.DataFrame, config: dict) -> bool:
     return matches_vcp_setup(df, atr_mult=config["atr_mult"])
 
 
-BUCKET_CONFIGS = {"large_cap": LARGE_CAP_CONFIG, "meme": MEME_CONFIG}
+BUCKET_CONFIGS = {"large_cap": CONFIG, "meme": CONFIG}
 FALLBACK_TICKERS = {"large_cap": FALLBACK_LARGE_CAP_TICKERS, "meme": FALLBACK_MEME_TICKERS}
 
 # Populated by app.py's crypto refresh cycle (discovery -> DB), read here for ALL_TICKERS/
@@ -220,8 +211,7 @@ def get_all_tickers() -> list[str]:
 
 
 def get_config_by_ticker() -> dict[str, dict]:
-    return {tk: LARGE_CAP_CONFIG for tk in _active_tickers["large_cap"]} | \
-           {tk: MEME_CONFIG for tk in _active_tickers["meme"]}
+    return {tk: CONFIG for tk in get_all_tickers()}
 
 
 # Backwards-compatible module-level views (read by strategy_crypto.py, app.py) -- functions

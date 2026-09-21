@@ -23,7 +23,10 @@ VOL_AVG_LEN = 50
 # Risk-based position sizing, matching vcp.pine's strategy() declaration and risk_pct default.
 INITIAL_CAPITAL = 1500.0
 RISK_PCT = 1.0
-# Matches vcp.pine's start_date default; data.py fetches a year earlier purely for indicator warm-up.
+# Matches vcp.pine's (equity) start_date default; data.py fetches a year earlier purely for
+# indicator warm-up. run()'s entry_start kwarg overrides this per caller -- strategy_crypto.py
+# passes its own value since pines/vcp_crypto.pine's start_date default is a year earlier
+# (1 Jan 2021, not 1 Jan 2022) and this module is shared between both strategies.
 ENTRY_START = pd.Timestamp("2022-01-01")
 
 
@@ -42,7 +45,8 @@ def compute_indicators(df: pd.DataFrame) -> dict:
 
 def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGER_PCT,
         trail_tier_pct=TRAIL_TIER_PCT, tp_target_pct=TP_TARGET_PCT, vol_mult=VOL_MULT,
-        max_bars=MAX_BARS, risk_pct=RISK_PCT, initial_capital=INITIAL_CAPITAL):
+        max_bars=MAX_BARS, risk_pct=RISK_PCT, initial_capital=INITIAL_CAPITAL,
+        entry_start=ENTRY_START):
     """Returns (trades, signal_today, in_position, tp_hit, open_position)."""
     c, h, l, o, v = df.Close, df.High, df.Low, df.Open, df.Volume
     atr, atr_avg, ema50, resistance, vol_avg = (ind["atr"], ind["atr_avg"], ind["ema50"],
@@ -84,7 +88,7 @@ def run(df: pd.DataFrame, ind: dict, atr_mult=ATR_MULT, be_trigger_pct=BE_TRIGGE
             continue
 
         if (position is None and breakout.iloc[i - 1] and not pd.isna(atr.iloc[i - 1])
-                and df.index[i - 1] >= ENTRY_START):
+                and df.index[i - 1] >= entry_start):
             entry_price = o.iloc[i]
             entry_atr = atr.iloc[i]
             stop_distance = entry_atr * atr_mult
