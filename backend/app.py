@@ -1110,7 +1110,12 @@ def _crypto_fire_state_alert(ticker: str, prior_state: str, new_state: str, now_
 def _crypto_active_tickers() -> list[str]:
     """Candidates that pass the VCP regime match (crypto_universe.passes_technical_filters),
     per bucket, using each bucket's own tuned config -- mirrors equity's compute_all() filter
-    step, just inlined here since crypto has no separate watchlist/positions to always-include."""
+    step, including its always_include-open-positions carve-out (open_positions there, here
+    filtered to the crypto market) so an active trade's strategy state -- and therefore its
+    state-transition alert -- keeps updating even after the ticker's technicals drift out of
+    the regime match, same as equity's watchlist/open-position tickers never dropping out of
+    _active_tickers()."""
+    always_include = {p["ticker"] for p in db.list_positions("open") if _ticker_market(p["ticker"]) == "crypto"}
     filtered = []
     for bucket, tickers in (("large_cap", crypto_universe._active_tickers["large_cap"]),
                              ("meme", crypto_universe._active_tickers["meme"])):
@@ -1118,6 +1123,9 @@ def _crypto_active_tickers() -> list[str]:
         for tk in tickers:
             bars = data_crypto.get_bars(tk)
             if bars is None or bars.empty:
+                continue
+            if tk in always_include:
+                filtered.append(tk)
                 continue
             try:
                 if crypto_universe.passes_technical_filters(bars, config):
@@ -1134,6 +1142,10 @@ def crypto_compute_all(force: bool = False) -> None:
         prior_by_ticker = {p["ticker"]: p for p in _crypto_computed}
         prior_source_fetch = dict(_crypto_computed_source_fetch)
         prior_errors = dict(_crypto_computed_errors)
+
+    # One DB read for the whole pass -- used below to gate state alerts on "matches the quality
+    # filter OR is an active real trade" (see quality_filter.py's passes_crypto_default_filter).
+    _open_crypto_position_tickers = {p["ticker"] for p in db.list_positions("open") if _ticker_market(p["ticker"]) == "crypto"}
 
     to_compute = []
     reused_payloads: dict[str, dict] = {}
@@ -1185,8 +1197,16 @@ def crypto_compute_all(force: bool = False) -> None:
                     print(f"app: crypto db.upsert_computed failed for {tk} ({e}).")
             if payload is not None:
                 prior_payload = prior_by_ticker.get(tk)
+                strat_payload = payload.get("strategy_vcp")
+                # Same quality-bar gate as equity's _passes_alert_quality_bar, OR an active real
+                # position in this ticker (db.list_positions, not just _crypto_active_tickers'
+                # always_include set, since a position can be open in a market the strategy
+                # payload itself no longer scores well) -- see quality_filter.py's docstring.
+                is_open_position = tk in _open_crypto_position_tickers
+                if not (quality_filter.passes_crypto_default_filter(strat_payload) or is_open_position):
+                    continue
                 prior_state = _strategy_entry_state((prior_payload or {}).get("strategy_vcp"))
-                new_state = _strategy_entry_state(payload.get("strategy_vcp"))
+                new_state = _strategy_entry_state(strat_payload)
                 if prior_state is not None and new_state is not None and new_state != prior_state:
                     try:
                         _crypto_fire_state_alert(tk, prior_state, new_state, _crypto_computed_asof)
