@@ -31,7 +31,7 @@ const SECTIONS = [
     icon: "\u{1FA99}",
     isActive: (pathname: string) => pathname.startsWith("/crypto"),
     items: [
-      { to: "/crypto", label: "Dashboard", icon: "\u{1FA99}" },
+      { to: "/crypto", label: "Scanner v1", icon: "\u{1FA99}" },
       { to: "/crypto/trades", label: "Trades", icon: "\u{1F4CA}" },
     ],
   },
@@ -43,11 +43,11 @@ const SECTIONS = [
 // daily_review_enabled rather than always present.
 const ANALYZER_NAV_ITEM = { to: "/analyzer", label: "Analyzer", icon: "\u{1F9E0}" };
 
-// Crypto v2 (ENABLE_CRYPTO_V2, see CryptoRoute.tsx) swaps the section's displayed label only --
-// its `to`/items stay the same two URLs either way, just rendering v1 or v2 underneath.
-function sectionLabel(section: (typeof SECTIONS)[number], cryptoV2Enabled: boolean | undefined): string {
-  return section.key === "crypto" && cryptoV2Enabled ? "Crypto v2" : section.label;
-}
+// Crypto v2 (ENABLE_CRYPTO_V2, see CryptoRoute.tsx) is shown alongside v1, not swapped in for
+// it -- both scanners are always-routable (router.tsx), this just gates whether the v2 sub-nav
+// entry itself appears, same conditional-append pattern as Analyzer above. Spliced in right
+// after Scanner v1, before Trades.
+const CRYPTO_V2_NAV_ITEM = { to: "/crypto/v2", label: "Scanner v2", icon: "\u{1FA99}" };
 
 export function AppShell() {
   const { data: flags } = useFlags();
@@ -56,7 +56,9 @@ export function AppShell() {
   const subItems =
     activeSection.key === "equity" && flags?.daily_review_enabled
       ? [...activeSection.items, ANALYZER_NAV_ITEM]
-      : activeSection.items;
+      : activeSection.key === "crypto" && flags?.crypto_v2_enabled
+        ? [activeSection.items[0], CRYPTO_V2_NAV_ITEM, ...activeSection.items.slice(1)]
+        : activeSection.items;
   const isHome = location.pathname === "/";
   return (
     <div className="app-shell">
@@ -72,7 +74,7 @@ export function AppShell() {
               to={section.to}
               className={() => (activeSection.key === section.key ? "active" : "")}
             >
-              {sectionLabel(section, flags?.crypto_v2_enabled)}
+              {section.label}
             </NavLink>
           ))}
         </nav>
@@ -106,7 +108,7 @@ export function AppShell() {
             <span className="app-bottomnav-icon" aria-hidden="true">
               {section.icon}
             </span>
-            <span>{sectionLabel(section, flags?.crypto_v2_enabled)}</span>
+            <span>{section.label}</span>
           </NavLink>
         ))}
       </nav>

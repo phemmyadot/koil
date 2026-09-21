@@ -5,7 +5,7 @@ import { TradesPage } from "./pages/TradesPage";
 import { PositionDetailPage } from "./pages/PositionDetailPage";
 import { WatchlistsPage } from "./pages/WatchlistsPage";
 import { AnalyzerPage } from "./pages/AnalyzerPage";
-import { CryptoDashboardRoute, CryptoTradesRoute } from "./pages/CryptoRoute";
+import { CryptoV1Route, CryptoV2Route, CryptoTradesRoute } from "./pages/CryptoRoute";
 
 // Route table per docs/superpowers/specs/2026-07-31-react-spa-rewrite-design.md's §Routing.
 // Modals (strategy detail, P/L calculator, trade confirm, notifications) are NOT routes --
@@ -23,7 +23,8 @@ export const router = createBrowserRouter([
       { path: "/trades/:positionId", element: <PositionDetailPage /> },
       { path: "/watchlists", element: <WatchlistsPage /> },
       { path: "/analyzer", element: <AnalyzerPage /> },
-      { path: "/crypto", element: <CryptoDashboardRoute /> },
+      { path: "/crypto", element: <CryptoV1Route /> },
+      { path: "/crypto/v2", element: <CryptoV2Route /> },
       { path: "/crypto/trades", element: <CryptoTradesRoute /> },
       { path: "/crypto/trades/:positionId", element: <PositionDetailPage /> },
       { path: "*", element: <Navigate to="/" replace /> },

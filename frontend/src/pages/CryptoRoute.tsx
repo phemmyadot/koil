@@ -1,15 +1,16 @@
-import { useFlags } from "../hooks/useFlags";
 import { CryptoPage } from "./CryptoPage";
 import { CryptoTradesPage } from "./CryptoTradesPage";
 import { CryptoV2Page } from "./CryptoV2Page";
 
-// /crypto renders v1 or v2 depending on ENABLE_CRYPTO_V2 (see /api/flags's crypto_v2_enabled) --
-// a switch, not two separate route trees, matching AppShell's own nav-label switch. Defaults to
-// v1 while flags are still loading, same latency/behavior daily_review_enabled's Analyzer nav
-// item already has.
-export function CryptoDashboardRoute() {
-  const { data: flags } = useFlags();
-  return flags?.crypto_v2_enabled ? <CryptoV2Page /> : <CryptoPage />;
+// /crypto (v1) and /crypto/v2 are both always routable, same defense-in-depth pattern as
+// /analyzer (router.tsx's own comment): the nav entry for v2 is what's feature-flag-gated
+// (AppShell, via /api/flags's crypto_v2_enabled), not the route itself.
+export function CryptoV1Route() {
+  return <CryptoPage />;
+}
+
+export function CryptoV2Route() {
+  return <CryptoV2Page />;
 }
 
 // /crypto/trades has no v1/v2 split -- positions/fills are already market-generic (market=crypto,
