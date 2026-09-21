@@ -40,6 +40,11 @@ bool in_date_range     = not use_date_filter or (time >= start_date and time <= 
 
 // Stage 1 - Adaptive Entry Settings (defaults are the Large-Cap preset -- see header comment for
 // the Meme preset to type in instead when validating a meme ticker's chart).
+// atr_mult=6.9/tp_target=15.0 were tried 2026-09-22 (prompted by a strong single-ticker
+// TradingView read on SEI-USD: 84.62% WR/PF 5.478 over 13 trades) but didn't hold up once
+// checked against real data at scale -- see crypto_universe.py's fetch_candidates()/
+// LARGE_CAP_CONFIG comments for the full pooled-backtest basis. Reverted to the validated
+// production values.
 int atr_len         = input.int(22, title="ATR Length", group=G_ENTRY, minval=1)
 float atr_mult      = input.float(3.0, title="ATR Stop Multiplier", group=G_ENTRY, minval=0.1, step=0.1)
 float vol_mult      = input.float(1.6, title="Volume Confirmation Multiplier", group=G_ENTRY, minval=0.1, step=0.1)

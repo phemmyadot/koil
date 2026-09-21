@@ -24,7 +24,7 @@ def discover() -> dict:
     apart) feeding all three discovery outputs, rather than each of classify/market-cap/volume
     triggering its own redundant fetch. Returns {"categories": {...}, "market_caps": {...},
     "quote_volumes": {...}}."""
-    quotes = [q for q in crypto_universe._fetch_all_pages() if not crypto_universe._is_excluded(q["symbol"])]
+    quotes = crypto_universe._fetch_candidate_quotes()
     market_caps = {q["symbol"]: q.get("marketCap") or 0.0 for q in quotes if q.get("marketCap")}
     quote_volumes = {q["symbol"]: (q.get("regularMarketVolume") or q.get("volume24Hr") or 0.0) for q in quotes}
 

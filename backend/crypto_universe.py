@@ -38,6 +38,21 @@ import backend.build_universe as build_universe
 # exit/stop behavior) was deliberately left untouched in this pass, so every ticker's entry
 # signal/date is identical to before -- verified explicitly for INJ-USD's live open trade
 # (entered 2026-09-09 @ 6.403, still open, still profitable under the new config).
+#
+# A wider atr_mult=6.9/tp_target_pct=15.0 was tried 2026-09-22, prompted by a strong single-
+# ticker TradingView read on SEI-USD (84.62% WR / PF 5.478 over 13 trades). Did NOT hold up once
+# checked against real data at scale, so it was NOT applied here:
+#   - SEI-USD alone, replicated in this exact Python harness (which reproduces the live app's
+#     current 17-trade/70.6% WR/PF 1.17 MEME_CONFIG numbers exactly): only 14 trades, 64.3% WR,
+#     PF 1.16 with the wider settings -- essentially flat, nothing like TradingView's read. Since
+#     the harness matches the app's current numbers exactly, the gap traces to a data-source
+#     difference (this app's Yahoo-sourced bars vs TradingView's native Coinbase feed) on a
+#     thinner/newer coin, not a strategy edge -- exactly the data-quality risk already flagged
+#     for thin tokens elsewhere in this file (see MEME_MARKET_CAP_FLOOR's comment).
+#   - Pooled across the full meme bucket (538 tickers, ~6.5k trades): PF 1.21->1.22 (flat),
+#     WR 64.7%->62.8% (down), fewer trades (6489->5977) -- no broad edge either.
+#   - Pooled across the large-cap bucket (20 tickers, ~420 trades): PF 1.76->1.36, WR 72.0%->
+#     65.2%, a real regression, not noise.
 LARGE_CAP_CONFIG = dict(atr_mult=3.0, be_trigger_pct=10.0, trail_tier_pct=18.0,
                          tp_target_pct=8.0, vol_mult=1.6, max_bars=15, risk_pct=7.8)
 MEME_CONFIG = dict(atr_mult=6.0, be_trigger_pct=10.0, trail_tier_pct=18.0,
@@ -128,34 +143,36 @@ def last_market_by_symbol() -> dict[str, str]:
     return dict(_last_market_by_symbol)
 
 
+def _fetch_candidate_quotes() -> list[dict]:
+    """Shared first stage for both fetch_candidates() below and crypto_v2/universe.py's
+    discover() -- one _fetch_all_pages() call, the exclusion filter, and the
+    _last_market_by_symbol side effect, so both discovery paths start from literally the same
+    raw candidate set. Split out 2026-09-22: v1 previously ranked its meme bucket by a 24h
+    volume-spike ratio that silently DROPPED any candidate missing averageDailyVolume3Month
+    (common on thinner/newer names) -- v2's discover() never applied that filter, which is why
+    its pool ended up meaningfully larger from the exact same screener call, and (per live
+    comparison) produced better setups. fetch_candidates() below now pools the same way v2
+    does: floor + market-cap sort, no volume-spike re-ranking."""
+    global _last_market_by_symbol
+    quotes = [q for q in _fetch_all_pages() if not _is_excluded(q["symbol"])]
+    _last_market_by_symbol = {q["symbol"]: q["lastMarket"] for q in quotes if q.get("lastMarket")}
+    return quotes
+
+
 def fetch_candidates(large_cap_count: int = DEFAULT_LARGE_CAP_COUNT) -> dict[str, list[str]]:
     """Screens yfinance's 'all_cryptocurrencies_us' predefined screener across 12 sort-order
     combinations (see _fetch_all_pages) and dedupes by symbol, since a single call is capped at
     Yahoo's 250-result limit for this screener. Returns yfinance-native tickers per bucket (no
     cross-platform mapping needed): top `large_cap_count` by market cap (after exclusions) is the
-    large-cap bucket. The meme bucket ranks its remainder (after a market-cap floor) by 24h
-    volume-spike ratio instead of market cap -- attention/momentum is the relevant signal for meme
-    relevance, not slow-moving cap rank."""
-    global _last_market_by_symbol
-    quotes = [q for q in _fetch_all_pages() if not _is_excluded(q["symbol"])]
-    _last_market_by_symbol = {q["symbol"]: q["lastMarket"] for q in quotes if q.get("lastMarket")}
-    quotes.sort(key=lambda q: q.get("marketCap") or 0, reverse=True)
-    symbols = [q["symbol"] for q in quotes]
+    large-cap bucket; meme is everyone else above MEME_MARKET_CAP_FLOOR, same market-cap-sorted
+    pool crypto_v2/universe.py's discover() classifies into its own 4 tiers (see
+    _fetch_candidate_quotes)."""
+    quotes = _fetch_candidate_quotes()
+    floored = [q for q in quotes if (q.get("marketCap") or 0) >= MEME_MARKET_CAP_FLOOR]
+    floored.sort(key=lambda q: q.get("marketCap") or 0, reverse=True)
+    symbols = [q["symbol"] for q in floored]
     large_cap = symbols[:large_cap_count]
-
-    large_cap_set = set(large_cap)
-    meme_pool = [q for q in quotes if q["symbol"] not in large_cap_set
-                 and (q.get("marketCap") or 0) >= MEME_MARKET_CAP_FLOOR]
-
-    spikes = []
-    for q in meme_pool:
-        current_vol = q.get("regularMarketVolume") or q.get("volume24Hr")
-        avg_vol = q.get("averageDailyVolume3Month")
-        if not current_vol or not avg_vol:  # can't rank without both -- skip rather than guess
-            continue
-        spikes.append((q["symbol"], current_vol / avg_vol))
-    spikes.sort(key=lambda pair: pair[1], reverse=True)
-    meme = [symbol for symbol, _ in spikes]
+    meme = symbols[large_cap_count:]
 
     return {"large_cap": large_cap, "meme": meme}
 
