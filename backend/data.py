@@ -161,18 +161,17 @@ def _fetch_one(ticker: str, force: bool) -> tuple[str, pd.DataFrame | None, str 
         return ticker, None, str(e) or type(e).__name__
 
 
-def warm_cache(tickers: list[str], force: bool = False) -> None:
+def warm_cache(tickers: list[str], force: bool = False, skip_recent_check: bool = False) -> None:
     """Bulk-fetch raw OHLCV. Blocking; run this off the request path (startup
     + background refresher) except for the manual Refresh button, which
     passes force=True and accepts the wait.
 
-    Whole-batch early exit (force=False only): if the entire universe was
-    already fetched within CHECK_INTERVAL, skip every single per-ticker
-    fetch attempt entirely -- no network calls at all, not even the "cheap"
-    gap-fetch round-trip. A gap-fetch on an unchanged ticker isn't free, it's
-    just cheap; doing it for ~1450 tickers every time this is called (every
-    2h background wake, PLUS once more on every process restart) adds up to
-    real, avoidable Yahoo traffic when nothing could possibly have changed
+    Whole-batch early exit (force=False and skip_recent_check=False only): if the entire
+    universe was already fetched within CHECK_INTERVAL, skip every single per-ticker fetch
+    attempt entirely -- no network calls at all, not even the "cheap" gap-fetch round-trip. A
+    gap-fetch on an unchanged ticker isn't free, it's just cheap; doing it for ~1450 tickers
+    every time this is called (every 2h background wake, PLUS once more on every process
+    restart) adds up to real, avoidable Yahoo traffic when nothing could possibly have changed
     since the last check. This is a single O(1) DB aggregate check
     (db.get_max_fetched_at), not a per-ticker loop -- distinct from the old
     per-ticker _cache_is_fresh() staleness check this replaced, which was
@@ -185,12 +184,22 @@ def warm_cache(tickers: list[str], force: bool = False) -> None:
     gets the full HISTORY_START window re-fetched, regardless of what's
     already stored or how recently it was fetched -- bypasses this early
     exit entirely, since "get everything as of right now" is the whole point
-    of a manual refresh."""
+    of a manual refresh.
+
+    skip_recent_check=True: bypasses just the whole-batch early exit above, while still doing
+    the normal cheap incremental gap-fetch per ticker (not force's full HISTORY_START
+    re-download). For the once-per-close-period fetch (see app.py's _on_startup): the last
+    routine intraday fetch is often well under CHECK_INTERVAL old by the time the market
+    closes (a 2h cadence against a 6.5h session routinely leaves under 2h between the last
+    intraday wake and the close), so without this the early exit above silently swallows the
+    one fetch whose entire purpose is to pick up the settled closing print -- the bars stay
+    pinned to whatever was live at the last intraday snapshot until the next CHECK_INTERVAL
+    boundary, possibly into the next session."""
     global _last_fetch_time, _fetch_progress
     to_fetch = tickers
     now = time.time()
 
-    if not force:
+    if not force and not skip_recent_check:
         max_fetched_at = db.get_max_fetched_at()
         if max_fetched_at is not None and now - max_fetched_at < CHECK_INTERVAL:
             print(f"data: whole universe already fetched {round(now - max_fetched_at)}s ago "

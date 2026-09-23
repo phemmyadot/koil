@@ -759,6 +759,14 @@ def get_last_bar_date(ticker: str) -> str | None:
     return row[0] if row else None
 
 
+def _hash_bar_rows(rows) -> str:
+    h = hashlib.sha256()
+    for row in rows:
+        h.update("|".join(str(v) for v in row).encode())
+        h.update(b"\n")
+    return h.hexdigest()
+
+
 def get_bars_checksum(ticker: str) -> str | None:
     """Hash of every stored bar for this ticker (date + OHLCV, in date order) -- the
     staleness key compute_all() reuses a cached payload against. A last-bar-only
@@ -773,11 +781,26 @@ def get_bars_checksum(ticker: str) -> str | None:
         ).fetchall()
     if not rows:
         return None
-    h = hashlib.sha256()
-    for row in rows:
-        h.update("|".join(str(v) for v in row).encode())
-        h.update(b"\n")
-    return h.hexdigest()
+    return _hash_bar_rows(rows)
+
+
+def checksum_from_bars(df: pd.DataFrame | None) -> str | None:
+    """Same hash as get_bars_checksum(), computed directly from an in-memory bars
+    DataFrame (DatetimeIndex + Open/High/Low/Close/Volume, upsert_bars's own shape)
+    instead of a fresh DB read. A caller that already has `df` in hand (e.g.
+    _compute_one) should use this, not get_bars_checksum(ticker) -- two separate reads
+    (bars from the in-memory cache, checksum from the DB) can straddle a concurrent
+    fetch that updates both between them, pairing a payload built from the OLD bars
+    with the NEW checksum, which then reads as "up to date" forever. Deriving the
+    checksum from the exact same `df` the payload was built from closes that window."""
+    if df is None or df.empty:
+        return None
+    rows = [
+        (idx.strftime("%Y-%m-%d"), float(row["Open"]), float(row["High"]), float(row["Low"]),
+         float(row["Close"]), int(row["Volume"]))
+        for idx, row in df.sort_index().iterrows()
+    ]
+    return _hash_bar_rows(rows)
 
 
 def get_fetched_at(ticker: str) -> float | None:
@@ -1641,11 +1664,21 @@ def crypto_get_bars_checksum(ticker: str) -> str | None:
         ).fetchall()
     if not rows:
         return None
-    h = hashlib.sha256()
-    for row in rows:
-        h.update("|".join(str(v) for v in row).encode())
-        h.update(b"\n")
-    return h.hexdigest()
+    return _hash_bar_rows(rows)
+
+
+def crypto_checksum_from_bars(df: pd.DataFrame | None) -> str | None:
+    """Crypto counterpart of checksum_from_bars() -- see its docstring for why a
+    checksum should be derived from the exact `df` a payload was built from, not a
+    separate DB read taken moments apart."""
+    if df is None or df.empty:
+        return None
+    rows = [
+        (idx.strftime("%Y-%m-%d"), float(row["Open"]), float(row["High"]), float(row["Low"]),
+         float(row["Close"]), int(row["Volume"]))
+        for idx, row in df.sort_index().iterrows()
+    ]
+    return _hash_bar_rows(rows)
 
 
 def crypto_load_all_bars() -> dict[str, pd.DataFrame]:

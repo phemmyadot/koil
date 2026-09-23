@@ -248,9 +248,11 @@ def _compute_one(ticker: str) -> tuple[str, dict | None, str | None, str | None]
     try:
         if bars.empty:
             raise ValueError("no data")
-        # Read from the DB here (not derived from the in-memory bars object) so the checksum
-        # matches exactly what db.get_bars_checksum() will compare against on the next pass.
-        checksum = db.get_bars_checksum(ticker)
+        # Derived from this exact `bars` snapshot, not a separate DB read -- two reads taken
+        # moments apart can straddle a concurrent fetch that updates both the in-memory cache
+        # and the DB in between them, pairing a payload built from OLD bars with the NEW
+        # checksum (which then looks "up to date" forever). See db.checksum_from_bars().
+        checksum = db.checksum_from_bars(bars)
         # VCP/VCPO need identical ATR/EMA/resistance -- compute once, share the dict (~17ms/ticker saved).
         # VEXH computes its own indicators (different set entirely), so it gets ind=None.
         try:
@@ -980,14 +982,17 @@ def _fire_mae_alert(position: dict, mae_pct: float | None, avg_mae_wins_pct: flo
     _fire_position_alert(position, "mae_" + level, round(mae_pct, 2), message, title, now_iso)
 
 
-def refresh_and_compute(force: bool = False) -> None:
+def refresh_and_compute(force: bool = False, skip_recent_check: bool = False) -> None:
     """The 3-step cycle (see backend/SCREENING_FETCH_REFACTOR.md): fetch candidate tickers and
     persist them, gap-fetch/full-fetch each one's price data, then run compute_all() (which
     itself runs the technical filter once up front and recomputes only checksum-changed
     tickers). force=True (manual Refresh) always runs the full cycle -- no fetch-time or
     compute-caught-up short-circuit -- since a hard refresh must not be a no-op just because
-    a prior pass already looked complete. Never runs two passes concurrently -- see
-    _refresh_pass_lock."""
+    a prior pass already looked complete. skip_recent_check=True (the once-per-close-period
+    pass -- see _on_startup) forwards to data.warm_cache() to bypass its "whole universe
+    already fetched recently" early exit without paying for force's full re-download; see
+    warm_cache()'s own docstring for why that pass specifically must not be skippable. Never
+    runs two passes concurrently -- see _refresh_pass_lock."""
     global _rate_limited_until
 
     if not _refresh_pass_lock.acquire(blocking=False):
@@ -1011,7 +1016,7 @@ def refresh_and_compute(force: bool = False) -> None:
         active = _active_tickers()
         fetch_time_before = data.last_fetch_time()
         fetch_start = time.time()
-        data.warm_cache(active, force=force)
+        data.warm_cache(active, force=force, skip_recent_check=skip_recent_check)
         fetch_seconds = time.time() - fetch_start
         fetch_time_after = data.last_fetch_time()
 
@@ -1078,7 +1083,8 @@ def _crypto_compute_one(ticker: str) -> tuple[str, dict | None, str | None, str 
     try:
         if bars.empty:
             raise ValueError("no data")
-        checksum = db.crypto_get_bars_checksum(ticker)
+        # See db.checksum_from_bars()'s docstring (same race, same fix, equity's _compute_one).
+        checksum = db.crypto_checksum_from_bars(bars)
         result = strategy_crypto.evaluate(ticker, bars)
         payload = {
             "ticker": ticker,
@@ -1501,7 +1507,11 @@ def _on_startup():
                 stale = last_close_fetch is None or datetime.fromisoformat(last_close_fetch) < boundary
                 if stale:
                     try:
-                        refresh_and_compute()
+                        # skip_recent_check=True: this pass's whole point is to pick up the
+                        # settled closing print, which a same-cadence intraday fetch minutes
+                        # earlier would otherwise make warm_cache() skip as "already fetched
+                        # recently" -- see warm_cache()'s docstring.
+                        refresh_and_compute(skip_recent_check=True)
                         db.set_last_close_fetch_at(now.isoformat())
                     except Exception as e:  # noqa: BLE001 - one bad pass must not permanently kill the refresh loop
                         print(f"app: background refresh loop close-fetch failed ({e}); will retry next cycle instead of stopping.")
@@ -1617,10 +1627,10 @@ def fetch_one_ticker(body: dict):
     if not ticker:
         raise HTTPException(status_code=400, detail="ticker is required")
     data.warm_cache([ticker], force=True)
-    _, payload, err, _ = _compute_one(ticker)
+    _, payload, err, checksum = _compute_one(ticker)
     if payload is not None:
         now = time.time()
-        db.upsert_computed(ticker, payload, payload["date"], now, None)
+        db.upsert_computed(ticker, payload, checksum, now, None)
         with _compute_lock:
             _computed[:] = [p for p in _computed if p["ticker"] != ticker] + [payload]
         return {"ticker": ticker, "price": payload["price"], "date": payload["date"], "found": True}
