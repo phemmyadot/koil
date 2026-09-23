@@ -417,6 +417,14 @@ def compute_all(force: bool = False) -> None:
                 new_source_fetch = {tk: fp for tk, payload, err, fp in results
                                      if payload is not None or err is not None}
                 _computed = list(reused_payloads.values()) + [p for _, p, _, _ in results if p is not None]
+                # is_new: ticker had neither a payload nor an error at the START of this pass
+                # (prior_by_ticker/prior_errors, captured before the reuse-vs-recompute split
+                # above) -- true for exactly the one pass right after it first shows up, false
+                # again from the next pass on, whether or not it happens to be reused that pass.
+                # Recomputed fresh every pass (not carried in the persisted payload) so a
+                # ticker's reused/unchanged path can't leave it stuck true forever.
+                _previously_known = set(prior_by_ticker) | set(prior_errors)
+                _computed = [{**p, "is_new": p["ticker"] not in _previously_known} for p in _computed]
                 _computed_errors = {**reused_errors, **{t: e for t, _, e, _ in results if e is not None}}
                 _computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
                 _computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1188,6 +1196,10 @@ def crypto_compute_all(force: bool = False) -> None:
     with _crypto_compute_lock:
         new_source_fetch = {tk: fp for tk, payload, err, fp in results if payload is not None or err is not None}
         _crypto_computed = list(reused_payloads.values()) + [p for _, p, _, _ in results if p is not None]
+        # is_new -- see equity compute_all()'s identical comment for why this is recomputed
+        # fresh every pass rather than carried inside the persisted payload.
+        _previously_known = set(prior_by_ticker) | set(prior_errors)
+        _crypto_computed = [{**p, "is_new": p["ticker"] not in _previously_known} for p in _crypto_computed]
         _crypto_computed_errors = {**reused_errors, **{t: e for t, _, e, _ in results if e is not None}}
         _crypto_computed_source_fetch = {**reused_source_fetch, **new_source_fetch}
         _crypto_computed_asof = datetime.now(timezone.utc).isoformat(timespec="seconds")

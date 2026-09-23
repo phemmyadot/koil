@@ -45,6 +45,8 @@ export interface CryptoTickerPayload {
   // Which API actually supplied this ticker's stored OHLCV bars -- "coinbase" or "yfinance"
   // (fallback for tickers Coinbase doesn't list; unverified against a real exchange).
   price_source: string | null;
+  // See TickerPayload.is_new (api/types.ts) -- same one-pass-only "just added" semantics.
+  is_new?: boolean;
 }
 
 export interface CryptoSignalsResponse {

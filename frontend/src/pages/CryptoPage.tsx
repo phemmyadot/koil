@@ -76,6 +76,11 @@ function CryptoCard({ row, onValidate }: { row: CryptoTickerPayload; onValidate:
           {row.ticker}
         </a>
         <span className="price num">${row.price}</span>
+        {row.is_new && (
+          <span className="newbadge" title="just added to the universe -- first snapshot since it appeared">
+            NEW
+          </span>
+        )}
       </div>
       {row.last_market && <div className="crypto-source">Source: {row.last_market}</div>}
       {row.price_source === "yfinance" && (

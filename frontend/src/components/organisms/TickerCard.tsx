@@ -65,6 +65,11 @@ export function TickerCard({ row, scoreStrategy, selected, onToggleSelect, onOpe
           {row.ticker}
         </a>
         <span className="price num">${row.price.toFixed(2)}</span>
+        {row.is_new && (
+          <span className="newbadge" title="just added to the universe -- first snapshot since it appeared">
+            NEW
+          </span>
+        )}
         {cardScore != null && (
           <span
             className="qscore"

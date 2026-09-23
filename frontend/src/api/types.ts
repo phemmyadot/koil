@@ -84,6 +84,11 @@ export interface TickerPayload {
   prebreak: PrebreakResult | null;
   setup_score: Partial<Record<StrategyKey, number | null>>;
   _schema_version: number;
+  // True for exactly the one /api/tickers snapshot right after this ticker first appears in the
+  // universe (compute_all() recomputes it fresh every pass, not carried in the stored payload) --
+  // absent (not just false) on a payload served right after a backend restart, before the first
+  // post-restart compute pass has run.
+  is_new?: boolean;
 }
 
 export interface TickersResponse {
